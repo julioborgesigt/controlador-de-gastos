@@ -42,7 +42,6 @@ CREATE TABLE IF NOT EXISTS cards (
   sort_order INTEGER NOT NULL,
   created_at TEXT NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_name ON cards (name COLLATE NOCASE);
 CREATE TABLE IF NOT EXISTS income_extras (
   id TEXT PRIMARY KEY,
   kind TEXT NOT NULL,
