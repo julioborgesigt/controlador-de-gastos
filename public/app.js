@@ -19,6 +19,8 @@ const state = {
   showEmpty: false,
   cardFocus: null,
   sheet: null,
+  accountMenu: false,
+  confirm: null,
 };
 
 const views = [
@@ -37,7 +39,15 @@ async function boot() {
     state.needsSetup = session.needsSetup;
     state.authed = session.authenticated;
     if (session.needsSetup) state.authView = "register";
-    if (state.authed) await loadMonth(state.monthId);
+    if (state.authed) {
+      try {
+        const spaces = await request("/api/spaces");
+        state.spaces = spaces.spaces || [];
+      } catch {
+        state.spaces = [];
+      }
+      await loadMonth(state.monthId);
+    }
   } catch (error) {
     state.error = messageOf(error);
   } finally {
@@ -102,7 +112,8 @@ function render() {
   }
   root.append(shell());
   if (state.sheet) root.append(sheet());
-  if (state.sheet) lockPage(keepPlace ? lockedScroll : 0);
+  if (state.confirm) root.append(confirmDialog());
+  if (state.sheet || state.confirm) lockPage(keepPlace ? lockedScroll : 0);
   else unlockPage(keepPlace ? lockedScroll : 0);
   state.viewKey = viewKey;
   queueMicrotask(centerMonthChip);
@@ -566,15 +577,15 @@ function screen(child) {
 
 function shell() {
   const data = state.data;
+  const viewingOther = data?.access?.own === false;
   return el("div", { class: "shell" }, [
     el("header", { class: "top" }, [
       el("div", { class: "top-row" }, [
-        el("p", { class: "eyebrow" }, state.data?.access?.own === false ? state.data.access.label : "Meus gastos"),
-        el("div", { class: "top-actions" }, [
-          state.spaces.length > 1 ? el("button", { class: "linkish", type: "button", onclick: () => { state.choosing = true; render(); } }, "Acesso") : "",
-          state.data?.access?.permission === "own" ? el("button", { class: "linkish", type: "button", onclick: openShares }, "Compartilhar") : "",
-          el("button", { class: "linkish", type: "button", onclick: openPassword }, "Senha"),
+        el("div", { class: "brand-block" }, [
+          el("p", { class: "brand" }, viewingOther ? data.access.label : "Gastos"),
+          el("p", { class: "brand-sub" }, viewingOther ? "Dados compartilhados" : accountCpf()),
         ]),
+        accountButton(),
       ]),
     ]),
     el("div", { class: "months" }, data.months.map(monthChip)),
@@ -667,14 +678,148 @@ function summary(data) {
       : "Casa, Pix e boletos deste mês"),
     jump("extras", "Gastos extras", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
     editable() && totals.remainingCents > 0
-      ? el("button", { class: "primary", type: "button", onclick: () => settle("pay-remaining") }, "Quitar o que falta")
-      : editable()
-        ? el("button", { class: "secondary", type: "button", onclick: () => settle("reopen") }, "Reabrir mês")
+      ? el("button", { class: "primary", type: "button", onclick: () => askConfirm("settle") }, "Quitar o que falta")
+      : editable() && month.settled
+        ? el("button", { class: "secondary", type: "button", onclick: () => askConfirm("reopen") }, "Reabrir mês")
         : "",
-    editable() ? el("button", { class: "secondary", type: "button", onclick: copyPrevious }, "Trazer lançamentos do mês anterior") : "",
-    editable() ? el("p", { class: "muted" }, "Quitar marca como pagos a fatura, o Pix e os extras. Um gasto fixo marcado na fatura continua na casa, sem ser cobrado outra vez.") : "",
-    el("button", { class: "linkish", type: "button", onclick: logout }, "Sair"),
+    editable() ? el("button", { class: "secondary", type: "button", onclick: () => askConfirm("copy") }, "Trazer lançamentos do mês anterior") : "",
   ]);
+}
+
+function accountCpf() {
+  return state.spaces.find((space) => space.permission === "own")?.detail || "";
+}
+
+function accountButton() {
+  return el("div", { class: "account" }, [
+    state.accountMenu ? menuBackdrop() : "",
+    el("button", {
+      class: `profile${state.accountMenu ? " open" : ""}`,
+      type: "button",
+      "aria-label": "Conta",
+      "aria-expanded": state.accountMenu ? "true" : "false",
+      onclick: (event) => {
+        event.stopPropagation();
+        state.accountMenu = !state.accountMenu;
+        render();
+      },
+    }, personGlyph()),
+    state.accountMenu ? accountMenu() : "",
+  ]);
+}
+
+function accountMenu() {
+  const cpf = accountCpf();
+  return el("div", { class: "menu", role: "menu" }, [
+    el("div", { class: "menu-head" }, [
+      el("strong", {}, "Sua conta"),
+      cpf ? el("small", {}, cpf) : "",
+    ]),
+    state.spaces.length > 1 ? menuItem("Trocar acesso", () => { state.accountMenu = false; state.choosing = true; render(); }) : "",
+    state.data?.access?.permission === "own" ? menuItem("Compartilhar dados", () => { state.accountMenu = false; openShares(); }) : "",
+    menuItem("Alterar senha", () => { state.accountMenu = false; openPassword(); }),
+    menuItem("Cadastrar digital", () => { state.accountMenu = false; openPasskeys(); }),
+    menuItem("Sair", logout, "danger"),
+  ]);
+}
+
+function menuItem(label, onclick, extra = "") {
+  return el("button", { class: `menu-item${extra ? ` ${extra}` : ""}`, type: "button", role: "menuitem", onclick }, label);
+}
+
+function menuBackdrop() {
+  return el("button", {
+    class: "menu-backdrop",
+    type: "button",
+    "aria-label": "Fechar menu",
+    onclick: () => {
+      state.accountMenu = false;
+      render();
+    },
+  });
+}
+
+function personGlyph() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "20");
+  svg.setAttribute("height", "20");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const head = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+  head.setAttribute("cx", "12");
+  head.setAttribute("cy", "8");
+  head.setAttribute("r", "3.2");
+  const body = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  body.setAttribute("d", "M5.5 19.2c1.2-3 3.4-4.4 6.5-4.4s5.3 1.4 6.5 4.4");
+  svg.append(head, body);
+  return svg;
+}
+
+function askConfirm(kind) {
+  state.accountMenu = false;
+  state.error = "";
+  state.confirm = kind;
+  render();
+}
+
+function confirmCopy() {
+  const month = state.data?.month?.label || "este mês";
+  if (state.confirm === "settle") {
+    return {
+      title: "Quitar o que falta",
+      body: `Marca como pagos a fatura, o Pix e os extras ainda em aberto em ${month}. Um gasto fixo que já está na fatura continua na casa e não é cobrado outra vez. Se não restar valor a pagar, o mês fica quitado.`,
+      action: "Quitar",
+    };
+  }
+  if (state.confirm === "reopen") {
+    return {
+      title: "Reabrir mês",
+      body: `Desmarca os pagamentos de ${month}. A fatura, o Pix e os extras voltam a ficar em aberto.`,
+      action: "Reabrir",
+    };
+  }
+  return {
+    title: "Trazer lançamentos",
+    body: `Copia para ${month} os gastos fixos e as parcelas que ainda continuam no mês anterior. O que já existe aqui, com o mesmo nome e o mesmo tipo, não é duplicado. Os novos lançamentos entram em aberto.`,
+    action: "Trazer",
+  };
+}
+
+function confirmDialog() {
+  const copy = confirmCopy();
+  const overlay = el("div", {
+    class: "overlay center",
+    role: "presentation",
+    onclick: (event) => {
+      if (event.target === overlay) {
+        state.confirm = null;
+        render();
+      }
+    },
+  }, [
+    el("div", { class: "dialog", role: "alertdialog", "aria-modal": "true", "aria-labelledby": "confirm-title" }, [
+      el("h2", { id: "confirm-title" }, copy.title),
+      el("p", {}, copy.body),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: () => { state.confirm = null; render(); } }, "Cancelar"),
+        el("button", { class: "primary", type: "button", onclick: runConfirm }, copy.action),
+      ]),
+    ]),
+  ]);
+  return overlay;
+}
+
+async function runConfirm() {
+  const kind = state.confirm;
+  state.confirm = null;
+  if (kind === "copy") await copyPrevious();
+  else if (kind === "settle") await settle("pay-remaining");
+  else if (kind === "reopen") await settle("reopen");
+  else render();
 }
 
 function jump(view, title, amount, detail) {
@@ -1304,6 +1449,14 @@ function openEditIncomeExtra(extra) {
 }
 
 async function openPassword() {
+  state.accountMenu = false;
+  state.error = "";
+  state.sheet = { mode: "password", current: "", next: "", confirmation: "" };
+  render();
+}
+
+async function openPasskeys() {
+  state.accountMenu = false;
   state.error = "";
   setWorking(true, "Abrindo...");
   try {
@@ -1315,7 +1468,7 @@ async function openPassword() {
   } finally {
     setWorking(false);
   }
-  state.sheet = { mode: "password", current: "", next: "", confirmation: "" };
+  state.sheet = { mode: "passkey" };
   render();
 }
 
@@ -1327,7 +1480,7 @@ function sheet() {
   if (state.notice) panel.append(el("p", { class: "note" }, state.notice));
   if (draft.mode === "share") {
     panel.append(
-      el("h2", {}, "Compartilhar"),
+      el("h2", {}, "Compartilhar dados"),
       el("p", { class: "muted" }, "Informe o CPF de quem já tem conta. A pessoa escolhe, no login ou em Acesso, se abre os próprios gastos ou os seus."),
       field("CPF", "cpf", draft.cpf, "text", "000.000.000-00"),
       el("div", { class: "field" }, [
@@ -1396,13 +1549,13 @@ function sheet() {
         el("button", { class: "primary", type: "submit" }, draft.id ? "Salvar" : "Adicionar"),
       ]),
     );
-  } else if (draft.mode === "password") {
+  } else if (draft.mode === "passkey") {
     panel.append(
-      el("h2", {}, "Digital deste celular"),
-      el("p", { class: "muted" }, "Use a digital já cadastrada no Android para abrir o app neste aparelho. A senha continua valendo."),
+      el("h2", {}, "Cadastrar digital"),
+      el("p", { class: "muted" }, "Usa a digital já cadastrada neste celular para entrar. A senha continua valendo."),
       window.PublicKeyCredential
         ? el("button", { class: "secondary", type: "button", onclick: registerPasskey }, "Cadastrar digital")
-        : el("p", { class: "note" }, "Este navegador não oferece chave de acesso com digital."),
+        : el("p", { class: "note" }, "Este navegador não oferece entrada com digital."),
       el("div", { class: "list" }, (state.passkeys || []).map((passkey) => el("article", { class: "item" }, [
         el("div", { class: "item-copy" }, [
           el("strong", {}, "Digital"),
@@ -1410,7 +1563,14 @@ function sheet() {
         ]),
         el("button", { class: "linkish danger", type: "button", onclick: () => removePasskey(passkey.id) }, "Remover"),
       ]))),
-      el("h2", { class: "subhead" }, "Trocar senha"),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Fechar"),
+      ]),
+    );
+  } else if (draft.mode === "password") {
+    panel.append(
+      el("h2", {}, "Alterar senha"),
+      el("p", { class: "muted" }, "Trocar a senha remove as digitais cadastradas. Dá para cadastrar de novo neste celular."),
       field("Senha atual", "current", "", "password"),
       field("Nova senha", "next", "", "password"),
       field("Confirmar nova senha", "confirmation", "", "password"),
@@ -1567,6 +1727,7 @@ async function saveSheet(event) {
   const draft = state.sheet;
   state.error = "";
   try {
+    if (draft.mode === "passkey") return;
     if (draft.mode === "share") {
       setWorking(true, "Salvando...");
       const data = await request("/api/shares", { method: "POST", body: { cpf: draft.cpf, permission: draft.permission } });
@@ -1759,6 +1920,9 @@ async function settle(mode) {
 }
 
 async function logout() {
+  state.accountMenu = false;
+  state.confirm = null;
+  state.sheet = null;
   await request("/api/logout", { method: "POST", body: {} });
   state.authed = false;
   state.authView = "login";
@@ -1770,6 +1934,7 @@ async function logout() {
 
 function closeSheet() {
   state.sheet = null;
+  state.accountMenu = false;
   state.error = "";
   render();
 }
