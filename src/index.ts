@@ -28,12 +28,14 @@ import {
   type Section,
 } from "./domain.ts";
 import {
+  accessTo,
   applyBaseIncome,
   copyFromPreviousMonth,
   countUsers,
   createCard,
   createUser,
   deletePasskey,
+  deleteShare,
   deleteUserPasskeys,
   ensureReady,
   findUserByCpf,
@@ -43,12 +45,16 @@ import {
   getSetting,
   insertCardPurchase,
   listCards,
+  listOutgoingShares,
   listPasskeys,
+  listSpaces,
   monthPayload,
   setMonthIncome,
   setSetting,
+  shareWithCpf,
   unlockMonthIncome,
   updatePassword,
+  updateSharePermission,
 } from "./db.ts";
 
 const COOKIE = "gastos_session";
@@ -201,129 +207,200 @@ app.delete("/api/passkeys/:id", async (c) => {
   return c.json({ passkeys: publicPasskeys(await listPasskeys(c.env.DB, user.id)) });
 });
 
+app.get("/api/spaces", async (c) => {
+  const scope = await requireScope(c);
+  if (!scope) return c.json({ error: AUTH_ERROR }, 401);
+  return c.json({ spaces: await listSpaces(c.env.DB, scope.actorId), currentOwnerId: scope.ownerId });
+});
+
+app.post("/api/scope", async (c) => {
+  const scope = await requireScope(c);
+  if (!scope) return c.json({ error: AUTH_ERROR }, 401);
+  const body = await readJson(c);
+  if (typeof body.ownerId !== "string") return c.json({ error: "Escolha qual acesso abrir." }, 400);
+  const access = await accessTo(c.env.DB, scope.actorId, body.ownerId);
+  if (!access) return c.json({ error: "Esse compartilhamento não está disponível." }, 403);
+  await c.env.DB.prepare("UPDATE sessions SET scope_owner_id = ? WHERE id = ?").bind(body.ownerId, scope.sessionId).run();
+  return c.json({ ok: true, spaces: await listSpaces(c.env.DB, scope.actorId), currentOwnerId: body.ownerId });
+});
+
+app.get("/api/shares", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  if (writer.scope.permission !== "own") return c.json({ error: "Só dá para compartilhar os seus próprios gastos." }, 403);
+  return c.json({ shares: await listOutgoingShares(c.env.DB, writer.scope.ownerId) });
+});
+
+app.post("/api/shares", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  if (writer.scope.permission !== "own") return c.json({ error: "Só dá para compartilhar os seus próprios gastos." }, 403);
+  const body = await readJson(c);
+  const cpf = parseCpf(body.cpf);
+  if (!cpf.ok) return c.json({ error: cpf.error }, 400);
+  const permission = body.permission === "edit" ? "edit" : body.permission === "view" ? "view" : null;
+  if (!permission) return c.json({ error: "Escolha se a pessoa pode ver ou também editar." }, 400);
+  const saved = await shareWithCpf(c.env.DB, writer.scope.ownerId, cpf.cpf, permission);
+  if (!saved.ok) return c.json({ error: saved.error }, 404);
+  return c.json({ shares: await listOutgoingShares(c.env.DB, writer.scope.ownerId) }, 201);
+});
+
+app.patch("/api/shares/:id", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  if (writer.scope.permission !== "own") return c.json({ error: "Só dá para compartilhar os seus próprios gastos." }, 403);
+  const body = await readJson(c);
+  const permission = body.permission === "edit" ? "edit" : body.permission === "view" ? "view" : null;
+  if (!permission) return c.json({ error: "Escolha se a pessoa pode ver ou também editar." }, 400);
+  const updated = await updateSharePermission(c.env.DB, writer.scope.ownerId, c.req.param("id"), permission);
+  if (!updated) return c.json({ error: "Compartilhamento não encontrado." }, 404);
+  return c.json({ shares: await listOutgoingShares(c.env.DB, writer.scope.ownerId) });
+});
+
+app.delete("/api/shares/:id", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  if (writer.scope.permission !== "own") return c.json({ error: "Só dá para compartilhar os seus próprios gastos." }, 403);
+  const removed = await deleteShare(c.env.DB, writer.scope.ownerId, c.req.param("id"));
+  if (!removed) return c.json({ error: "Compartilhamento não encontrado." }, 404);
+  return c.json({ shares: await listOutgoingShares(c.env.DB, writer.scope.ownerId) });
+});
+
 app.get("/api/months/:id", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
-  const payload = await monthPayload(c.env.DB, c.req.param("id"));
+  const scope = await requireScope(c);
+  if (!scope) return c.json({ error: AUTH_ERROR }, 401);
+  const payload = await monthPayload(c.env.DB, scope.ownerId, c.req.param("id"));
   if (!payload) return c.json({ error: "Mês não encontrado." }, 404);
-  return c.json(payload);
+  return c.json(withAccess(payload, scope));
 });
 
 app.patch("/api/months/:id", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
   const monthId = c.req.param("id");
-  const month = await getMonth(c.env.DB, monthId);
+  const month = await getMonth(c.env.DB, writer.scope.ownerId, monthId);
   if (!month) return c.json({ error: "Mês não encontrado." }, 404);
   const body = await readJson(c);
   if (!isCents(body.incomeCents) || body.incomeCents < 0) return c.json({ error: "Informe a receita em centavos." }, 400);
-  await setMonthIncome(c.env.DB, monthId, body.incomeCents);
-  return c.json(await monthPayload(c.env.DB, monthId));
+  await setMonthIncome(c.env.DB, writer.scope.ownerId, monthId, body.incomeCents);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, monthId), writer.scope));
 });
 
 app.post("/api/months/:id/use-base-income", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
   const monthId = c.req.param("id");
-  if (!(await getMonth(c.env.DB, monthId))) return c.json({ error: "Mês não encontrado." }, 404);
-  await unlockMonthIncome(c.env.DB, monthId);
-  return c.json(await monthPayload(c.env.DB, monthId));
+  if (!(await getMonth(c.env.DB, writer.scope.ownerId, monthId))) return c.json({ error: "Mês não encontrado." }, 404);
+  await unlockMonthIncome(c.env.DB, writer.scope.ownerId, monthId);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, monthId), writer.scope));
 });
 
 app.post("/api/income/base", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
   const body = await readJson(c);
   if (!isCents(body.amountCents) || body.amountCents < 0) return c.json({ error: "Informe a receita base." }, 400);
-  const scope = body.scope === "all" ? "all" : "unlocked";
-  await applyBaseIncome(c.env.DB, body.amountCents, scope);
+  const incomeScope = body.scope === "all" ? "all" : "unlocked";
+  await applyBaseIncome(c.env.DB, writer.scope.ownerId, body.amountCents, incomeScope);
   const monthId = typeof body.monthId === "string" ? body.monthId : "2026-11";
-  return c.json(await monthPayload(c.env.DB, monthId));
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, monthId), writer.scope));
 });
 
 app.post("/api/income/extras", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
   const body = await readJson(c);
   const kind = body.kind;
   if (kind !== "ir" && kind !== "thirteenth" && kind !== "vacation" && kind !== "other") {
     return c.json({ error: "Escolha o tipo da receita extra." }, 400);
   }
   if (!isCents(body.amountCents) || body.amountCents <= 0) return c.json({ error: "Informe o valor da receita extra." }, 400);
-  if (typeof body.monthId !== "string" || !(await getMonth(c.env.DB, body.monthId))) {
+  if (typeof body.monthId !== "string" || !(await getMonth(c.env.DB, writer.scope.ownerId, body.monthId))) {
     return c.json({ error: "Escolha o mês previsto." }, 400);
   }
   const name = incomeExtraName(kind, body.name);
   if (!name) return c.json({ error: "Dê um nome para essa receita." }, 400);
   await c.env.DB.prepare(
-    "INSERT INTO income_extras (id, kind, name, amount_cents, month_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    "INSERT INTO income_extras (id, owner_id, kind, name, amount_cents, month_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
   )
-    .bind(crypto.randomUUID(), kind, name, body.amountCents, body.monthId, new Date().toISOString())
+    .bind(crypto.randomUUID(), writer.scope.ownerId, kind, name, body.amountCents, body.monthId, new Date().toISOString())
     .run();
-  return c.json(await monthPayload(c.env.DB, body.monthId), 201);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.monthId), writer.scope), 201);
 });
 
 app.delete("/api/income/extras/:id", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
-  const current = await c.env.DB.prepare("SELECT month_id FROM income_extras WHERE id = ?")
-    .bind(c.req.param("id"))
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const current = await c.env.DB.prepare("SELECT month_id FROM income_extras WHERE id = ? AND owner_id = ?")
+    .bind(c.req.param("id"), writer.scope.ownerId)
     .first<{ month_id: string }>();
   if (!current) return c.json({ error: "Receita extra não encontrada." }, 404);
-  await c.env.DB.prepare("DELETE FROM income_extras WHERE id = ?").bind(c.req.param("id")).run();
-  return c.json(await monthPayload(c.env.DB, current.month_id));
+  await c.env.DB.prepare("DELETE FROM income_extras WHERE id = ? AND owner_id = ?").bind(c.req.param("id"), writer.scope.ownerId).run();
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.month_id), writer.scope));
 });
 
 app.post("/api/months/:id/copy", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
   const monthId = c.req.param("id");
-  if (!(await getMonth(c.env.DB, monthId))) return c.json({ error: "Mês não encontrado." }, 404);
-  const copied = await copyFromPreviousMonth(c.env.DB, monthId);
-  const payload = await monthPayload(c.env.DB, monthId);
-  return c.json({ copied, ...payload });
+  if (!(await getMonth(c.env.DB, writer.scope.ownerId, monthId))) return c.json({ error: "Mês não encontrado." }, 404);
+  const copied = await copyFromPreviousMonth(c.env.DB, writer.scope.ownerId, monthId);
+  const payload = await monthPayload(c.env.DB, writer.scope.ownerId, monthId);
+  return c.json({ copied, ...withAccess(payload, writer.scope) });
 });
 
 app.post("/api/months/:id/settle", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
   const monthId = c.req.param("id");
-  const month = await getMonth(c.env.DB, monthId);
+  const month = await getMonth(c.env.DB, writer.scope.ownerId, monthId);
   if (!month) return c.json({ error: "Mês não encontrado." }, 404);
   const body = await readJson(c);
   if (body.mode === "pay-remaining") {
     await c.env.DB.prepare(
       `UPDATE expenses
        SET paid = 1
-       WHERE month_id = ?
+       WHERE owner_id = ?
+         AND month_id = ?
          AND amount_cents != 0
          AND NOT (section = 'fixed' AND (on_card = 1 OR payment = 'card'))`,
     )
-      .bind(monthId)
+      .bind(writer.scope.ownerId, monthId)
       .run();
   } else if (body.mode === "reopen") {
-    await c.env.DB.prepare("UPDATE expenses SET paid = 0 WHERE month_id = ?").bind(monthId).run();
-    await c.env.DB.prepare("UPDATE months SET settled = 0 WHERE id = ?").bind(monthId).run();
+    await c.env.DB.prepare("UPDATE expenses SET paid = 0 WHERE owner_id = ? AND month_id = ?").bind(writer.scope.ownerId, monthId).run();
+    await c.env.DB.prepare("UPDATE months SET settled = 0 WHERE owner_id = ? AND id = ?").bind(writer.scope.ownerId, monthId).run();
   } else {
     return c.json({ error: "Ação de baixa desconhecida." }, 400);
   }
-  return c.json(await monthPayload(c.env.DB, monthId));
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, monthId), writer.scope));
 });
 
 app.post("/api/cards", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
   const body = await readJson(c);
   const parsed = parseCardName(body.name);
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-  const created = await createCard(c.env.DB, parsed.name);
+  const created = await createCard(c.env.DB, writer.scope.ownerId, parsed.name);
   if (!created.ok) return c.json({ error: created.error }, 409);
-  return c.json({ cards: await listCards(c.env.DB) }, 201);
+  return c.json({ cards: await listCards(c.env.DB, writer.scope.ownerId) }, 201);
 });
 
 app.post("/api/expenses", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
   const body = await readJson(c);
-  const parsed = await expenseWithCard(c.env.DB, body);
+  const parsed = await expenseWithCard(c.env.DB, writer.scope.ownerId, body);
   if (!parsed.ok) return c.json({ error: parsed.error }, parsed.status);
-  if (!isMonthId(body.monthId) || !(await getMonth(c.env.DB, body.monthId))) {
+  if (!isMonthId(body.monthId) || !(await getMonth(c.env.DB, writer.scope.ownerId, body.monthId))) {
     return c.json({ error: "Mês não encontrado." }, 404);
   }
   const plan = readInstallmentPlan(body.installmentPlan);
   if (plan) {
     if (!plan.ok) return c.json({ error: plan.error }, 400);
     const created = await insertCardPurchase(c.env.DB, {
+      ownerId: writer.scope.ownerId,
       startMonthId: body.monthId,
       name: parsed.value.name,
       section: parsed.value.section === "fixed" ? "card" : parsed.value.section,
@@ -336,19 +413,20 @@ app.post("/api/expenses", async (c) => {
       mode: plan.mode,
     });
     if (!created.ok) return c.json({ error: created.error }, 400);
-    return c.json(await monthPayload(c.env.DB, body.monthId), 201);
+    return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.monthId), writer.scope), 201);
   }
-  const sort = await c.env.DB.prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM expenses WHERE month_id = ?")
-    .bind(body.monthId)
+  const sort = await c.env.DB.prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM expenses WHERE owner_id = ? AND month_id = ?")
+    .bind(writer.scope.ownerId, body.monthId)
     .first<{ next: number }>();
   const id = crypto.randomUUID();
   await c.env.DB.prepare(
     `INSERT INTO expenses
-      (id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?)`,
+      (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?)`,
   )
     .bind(
       id,
+      writer.scope.ownerId,
       body.monthId,
       parsed.value.name,
       parsed.value.section,
@@ -363,15 +441,16 @@ app.post("/api/expenses", async (c) => {
       new Date().toISOString(),
     )
     .run();
-  return c.json(await monthPayload(c.env.DB, body.monthId), 201);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.monthId), writer.scope), 201);
 });
 
 app.patch("/api/expenses/:id", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
-  const current = await getExpense(c.env.DB, c.req.param("id"));
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const current = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
   if (!current) return c.json({ error: "Gasto não encontrado." }, 404);
   const body = await readJson(c);
-  const parsed = await expenseWithCard(c.env.DB, {
+  const parsed = await expenseWithCard(c.env.DB, writer.scope.ownerId, {
     name: body.name ?? current.name,
     amountCents: body.amountCents ?? current.amountCents,
     section: body.section ?? current.section,
@@ -401,15 +480,16 @@ app.patch("/api/expenses/:id", async (c) => {
       current.id,
     )
     .run();
-  return c.json(await monthPayload(c.env.DB, current.monthId));
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
 });
 
 app.delete("/api/expenses/:id", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
-  const current = await getExpense(c.env.DB, c.req.param("id"));
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const current = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
   if (!current) return c.json({ error: "Gasto não encontrado." }, 404);
-  await c.env.DB.prepare("DELETE FROM expenses WHERE id = ?").bind(current.id).run();
-  return c.json(await monthPayload(c.env.DB, current.monthId));
+  await c.env.DB.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(writer.scope.ownerId, current.id).run();
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
 });
 
 app.all("*", async (c) => {
@@ -444,11 +524,12 @@ type ExpenseDraft = {
 
 async function expenseWithCard(
   db: D1Database,
+  ownerId: string,
   body: JsonBody,
 ): Promise<{ ok: true; value: ExpenseDraft } | { ok: false; error: string; status: 400 }> {
   const parsed = parseExpenseBody(body);
   if (!parsed.ok) return { ok: false, error: parsed.error, status: 400 };
-  const linked = resolveCardLabel(await listCards(db), parsed.value.cardLabel, cardLinkRequired(parsed.value));
+  const linked = resolveCardLabel(await listCards(db, ownerId), parsed.value.cardLabel, cardLinkRequired(parsed.value));
   if (!linked.ok) return { ok: false, error: linked.error, status: 400 };
   return { ok: true, value: { ...parsed.value, cardLabel: linked.cardLabel } };
 }
@@ -603,12 +684,53 @@ async function requireAuth(c: AppContext): Promise<boolean> {
 
 async function startSession(c: AppContext, userId: string): Promise<void> {
   const token = randomToken();
-  await c.env.DB.prepare("INSERT INTO sessions (id, expires_at, user_id) VALUES (?, ?, ?)").bind(
+  await c.env.DB.prepare("INSERT INTO sessions (id, expires_at, user_id, scope_owner_id) VALUES (?, ?, ?, ?)").bind(
     await sha256(token),
     sessionExpiry(),
     userId,
+    userId,
   ).run();
   setCookie(c, COOKIE, token, sessionCookieOptions(c.req.url));
+}
+
+type Scope = {
+  actorId: string;
+  ownerId: string;
+  permission: "own" | "view" | "edit";
+  label: string;
+  sessionId: string;
+};
+
+async function requireScope(c: AppContext): Promise<Scope | null> {
+  const token = getCookie(c, COOKIE);
+  if (!token) return null;
+  const sessionId = await sha256(token);
+  const row = await c.env.DB.prepare("SELECT expires_at, user_id, scope_owner_id FROM sessions WHERE id = ?").bind(sessionId).first<{
+    expires_at: string;
+    user_id: string | null;
+    scope_owner_id: string | null;
+  }>();
+  if (!row?.user_id || Date.parse(row.expires_at) <= Date.now()) return null;
+  let ownerId = row.scope_owner_id || row.user_id;
+  let access = await accessTo(c.env.DB, row.user_id, ownerId);
+  if (!access) {
+    ownerId = row.user_id;
+    access = await accessTo(c.env.DB, row.user_id, ownerId);
+    await c.env.DB.prepare("UPDATE sessions SET scope_owner_id = ? WHERE id = ?").bind(ownerId, sessionId).run();
+  }
+  if (!access) return null;
+  return { actorId: row.user_id, ownerId, permission: access.permission, label: access.label, sessionId };
+}
+
+async function requireWriter(c: AppContext): Promise<{ ok: true; scope: Scope } | { ok: false; status: 401 | 403; error: string }> {
+  const scope = await requireScope(c);
+  if (!scope) return { ok: false, status: 401, error: AUTH_ERROR };
+  if (scope.permission === "view") return { ok: false, status: 403, error: "Este compartilhamento permite só visualizar." };
+  return { ok: true, scope };
+}
+
+function withAccess<T>(payload: T, scope: Scope): T & { access: { permission: Scope["permission"]; label: string; own: boolean } } {
+  return { ...payload, access: { permission: scope.permission, label: scope.label, own: scope.permission === "own" } };
 }
 
 type JsonBody = Record<string, unknown> & {
@@ -633,6 +755,8 @@ type JsonBody = Record<string, unknown> & {
   scope?: unknown;
   kind?: unknown;
   paid?: unknown;
+  ownerId?: unknown;
+  permission?: unknown;
 };
 
 async function readJson(c: { req: { json: () => Promise<unknown> } }): Promise<JsonBody> {

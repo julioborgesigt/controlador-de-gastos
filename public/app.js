@@ -7,6 +7,9 @@ const state = {
   authView: "login",
   auth: { cpf: "", email: "", password: "", confirmation: "" },
   passkeys: [],
+  choosing: false,
+  spaces: [],
+  shares: [],
   monthId: sessionStorage.getItem("monthId") || "",
   view: "resumo",
   data: null,
@@ -84,6 +87,11 @@ function render() {
   }
   if (!state.authed) {
     root.append(authScreen());
+    state.viewKey = viewKey;
+    return;
+  }
+  if (state.choosing) {
+    root.append(accessScreen());
     state.viewKey = viewKey;
     return;
   }
@@ -206,7 +214,7 @@ async function submitAuth(event) {
     state.needsSetup = false;
     state.auth.password = "";
     state.auth.confirmation = "";
-    await loadMonth(state.monthId);
+    await enterApp();
   } catch (error) {
     state.error = messageOf(error);
   } finally {
@@ -225,7 +233,7 @@ async function loginWithPasskey() {
     await request("/api/passkeys/login", { method: "POST", body: credentialToJSON(credential) });
     state.authed = true;
     state.needsSetup = false;
-    await loadMonth(state.monthId);
+    await enterApp();
   } catch (error) {
     state.error = passkeyMessage(error);
   } finally {
@@ -351,6 +359,131 @@ function bufferToBase64Url(buffer) {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
+async function enterApp() {
+  const data = await request("/api/spaces");
+  state.spaces = data.spaces || [];
+  if (state.spaces.length > 1) {
+    state.choosing = true;
+    state.data = null;
+    return;
+  }
+  state.choosing = false;
+  await loadMonth(state.monthId);
+}
+
+async function chooseSpace(ownerId) {
+  state.error = "";
+  setWorking(true, "Abrindo...");
+  try {
+    const data = await request("/api/scope", { method: "POST", body: { ownerId } });
+    state.spaces = data.spaces || state.spaces;
+    state.choosing = false;
+    state.sheet = null;
+    await loadMonth(state.monthId);
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
+}
+
+function accessScreen() {
+  return el("main", { class: "screen auth" }, [
+    el("section", { class: "lock-card hero" }, [
+      el("div", { class: "mark" }, "R$"),
+      el("h1", {}, "Qual acesso?"),
+      el("p", { class: "lede" }, "Escolha os seus gastos ou um orçamento que compartilharam com você."),
+      state.data ? el("button", { class: "linkish", type: "button", onclick: () => { state.choosing = false; render(); } }, "Voltar") : "",
+      state.error ? el("p", { class: "error" }, state.error) : "",
+      el("div", { class: "list" }, state.spaces.map(spaceButton)),
+    ]),
+  ]);
+}
+
+function spaceButton(space) {
+  const permission = space.permission === "edit" ? "Pode editar" : space.permission === "view" ? "Só visualizar" : "Seu orçamento";
+  return el("button", { class: "jump", type: "button", onclick: () => chooseSpace(space.ownerId) }, [
+    el("div", { class: "row-between" }, [el("span", {}, space.label), el("strong", {}, permission)]),
+    space.detail ? el("small", {}, space.detail) : "",
+  ]);
+}
+
+function editable() {
+  return state.data?.access?.permission !== "view";
+}
+
+async function openShares() {
+  if (!editable() || state.data?.access?.own === false) {
+    state.error = "Só dá para compartilhar os seus próprios gastos.";
+    render();
+    return;
+  }
+  state.error = "";
+  setWorking(true, "Abrindo...");
+  try {
+    const data = await request("/api/shares");
+    state.shares = data.shares || [];
+    state.sheet = { mode: "share", cpf: "", permission: "view" };
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
+}
+
+async function saveShare(event) {
+  event.preventDefault();
+  const draft = state.sheet;
+  state.error = "";
+  setWorking(true, "Salvando...");
+  try {
+    const data = await request("/api/shares", { method: "POST", body: { cpf: draft.cpf, permission: draft.permission } });
+    state.shares = data.shares || [];
+    state.sheet.cpf = "";
+    state.notice = "Compartilhamento salvo.";
+    const spaces = await request("/api/spaces");
+    state.spaces = spaces.spaces || state.spaces;
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
+}
+
+async function setSharePermission(share, permission) {
+  state.error = "";
+  setWorking(true, "Salvando...");
+  try {
+    const data = await request(`/api/shares/${share.id}`, { method: "PATCH", body: { permission } });
+    state.shares = data.shares || [];
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
+}
+
+async function removeShare(share) {
+  if (!window.confirm(`Parar de compartilhar com ${share.cpf}?`)) return;
+  state.error = "";
+  setWorking(true, "Removendo...");
+  try {
+    const data = await request(`/api/shares/${share.id}`, { method: "DELETE" });
+    state.shares = data.shares || [];
+    const spaces = await request("/api/spaces");
+    state.spaces = spaces.spaces || state.spaces;
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
+}
+
 function screen(child) {
   return el("main", { class: "screen" }, [child]);
 }
@@ -360,14 +493,23 @@ function shell() {
   return el("div", { class: "shell" }, [
     el("header", { class: "top" }, [
       el("div", { class: "top-row" }, [
-        el("p", { class: "eyebrow" }, "Orçamento familiar"),
-        el("button", { class: "linkish", type: "button", onclick: openPassword }, "Senha"),
+        el("p", { class: "eyebrow" }, state.data?.access?.own === false ? state.data.access.label : "Meus gastos"),
+        el("div", { class: "top-actions" }, [
+          state.spaces.length > 1 ? el("button", { class: "linkish", type: "button", onclick: () => { state.choosing = true; render(); } }, "Acesso") : "",
+          state.data?.access?.permission === "own" ? el("button", { class: "linkish", type: "button", onclick: openShares }, "Compartilhar") : "",
+          el("button", { class: "linkish", type: "button", onclick: openPassword }, "Senha"),
+        ]),
       ]),
     ]),
     el("div", { class: "months" }, data.months.map(monthChip)),
     el("main", { class: "content" }, [
       state.error && !state.sheet ? el("p", { class: "error" }, state.error) : "",
-      state.notice ? el("p", { class: "note" }, state.notice) : "",
+      state.notice && !state.sheet ? el("p", { class: "note" }, state.notice) : "",
+      data.access?.permission === "view"
+        ? el("p", { class: "note" }, `Você está vendo os gastos de ${data.access.label}. Dá para consultar, sem alterar.`)
+        : data.access && data.access.own === false
+          ? el("p", { class: "note" }, `Você está nos gastos de ${data.access.label} e pode alterar.`)
+          : "",
       viewBody(data),
     ]),
     el("nav", { class: "nav" }, views.map(([id, label]) => el("button", {
@@ -448,11 +590,13 @@ function summary(data) {
       ? `${money(totals.fixedOnCardCents)} já entram na fatura e não somam de novo`
       : "Casa, Pix e boletos deste mês"),
     jump("extras", "Gastos extras", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
-    totals.remainingCents > 0
+    editable() && totals.remainingCents > 0
       ? el("button", { class: "primary", type: "button", onclick: () => settle("pay-remaining") }, "Quitar o que falta")
-      : el("button", { class: "secondary", type: "button", onclick: () => settle("reopen") }, "Reabrir mês"),
-    el("button", { class: "secondary", type: "button", onclick: copyPrevious }, "Trazer lançamentos do mês anterior"),
-    el("p", { class: "muted" }, "Quitar marca como pagos a fatura, o Pix e os extras. Um gasto fixo marcado na fatura continua na casa, sem ser cobrado outra vez."),
+      : editable()
+        ? el("button", { class: "secondary", type: "button", onclick: () => settle("reopen") }, "Reabrir mês")
+        : "",
+    editable() ? el("button", { class: "secondary", type: "button", onclick: copyPrevious }, "Trazer lançamentos do mês anterior") : "",
+    editable() ? el("p", { class: "muted" }, "Quitar marca como pagos a fatura, o Pix e os extras. Um gasto fixo marcado na fatura continua na casa, sem ser cobrado outra vez.") : "",
     el("button", { class: "linkish", type: "button", onclick: logout }, "Sair"),
   ]);
 }
@@ -480,10 +624,10 @@ function cardsHome(data) {
       el("p", { class: "muted" }, blurb("card", data.totals)),
     ]),
     el("p", { class: "note" }, "Toque num cartão para ver o detalhamento. Dá para editar ou excluir cada gasto."),
-    el("div", { class: "stack-actions" }, [
+    editable() ? el("div", { class: "stack-actions" }, [
       el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto Cartão"),
       el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
-    ]),
+    ]) : "",
   ];
   if (!cards.length) children.push(el("p", { class: "muted" }, "Nenhum cartão ainda."));
   for (const card of cards) {
@@ -530,13 +674,13 @@ function cardDetail(data) {
         ? "Gastos vinculados a este cartão. O que veio da casa já está na fatura e não soma de novo."
         : "Estes gastos ainda não têm um cartão cadastrado."),
     ]),
-    el("div", { class: "stack-actions" }, [
+    editable() ? el("div", { class: "stack-actions" }, [
       el("button", {
         class: "primary",
         type: "button",
         onclick: () => openCardExpense(card ? card.name : ""),
       }, "+ Gasto Cartão"),
-    ]),
+    ]) : "",
   ];
   const groups = [
     ["Fatura prevista", visible.filter((expense) => expense.section === "card")],
@@ -546,7 +690,7 @@ function cardDetail(data) {
   for (const [title, rows] of groups) {
     if (!rows.length) continue;
     children.push(el("p", { class: "eyebrow group" }, title));
-    children.push(el("div", { class: "list" }, rows.map((expense) => expenseRow(expense, "card", { manage: true, cardExpense: true }))));
+    children.push(el("div", { class: "list" }, rows.map((expense) => expenseRow(expense, "card", { manage: editable(), cardExpense: editable() }))));
   }
   if (!visible.length) {
     children.push(el("p", { class: "muted" }, card ? "Nenhum gasto neste cartão neste mês." : "Nada sem cartão neste mês."));
@@ -641,11 +785,13 @@ function sectionList(data, section) {
   if (section === "extra") {
     children.push(el("p", { class: "note" }, "Dê um nome ao gasto extra e diga se ele saiu no Pix, débito, dinheiro ou cartão."));
   }
-  children.push(el("button", {
-    class: "primary add-top",
-    type: "button",
-    onclick: () => openCreate(section, "pix"),
-  }, section === "fixed" ? "Adicionar gasto fixo" : "Adicionar gasto"));
+  if (editable()) {
+    children.push(el("button", {
+      class: "primary add-top",
+      type: "button",
+      onclick: () => openCreate(section, "pix"),
+    }, section === "fixed" ? "Adicionar gasto fixo" : "Adicionar gasto"));
+  }
   children.push(el("div", { class: "list" }, visible.map((expense) => expenseRow(expense, section))));
   if (!visible.length) {
     children.push(el("p", { class: "muted" }, section === "extra" ? "Nenhum extra neste mês." : "Nada com valor neste mês."));
@@ -672,7 +818,7 @@ function incomeView(data) {
       el("h2", {}, money(data.month.incomeCents)),
       el("p", { class: "muted" }, `${data.month.label}: ${money(data.month.baseIncomeCents)} de base${data.month.extraIncomeCents ? ` + ${money(data.month.extraIncomeCents)} extras` : ""}.`),
     ]),
-    el("div", { class: "panel" }, [
+    editable() ? el("div", { class: "panel" }, [
       el("label", { for: "base-income" }, "Receita base"),
       el("input", {
         id: "base-income",
@@ -686,25 +832,30 @@ function incomeView(data) {
         el("button", { class: "secondary", type: "button", onclick: () => saveBase("unlocked") }, "Replicar nos meses livres"),
         el("button", { class: "primary", type: "button", onclick: () => saveBase("all") }, "Replicar em todos os meses"),
       ]),
-    ]),
+    ]) : "",
     el("h2", { class: "subhead" }, "Mês a mês"),
     el("div", { class: "list" }, data.months.map((month) => el("article", { class: "item" }, [
-      el("button", { type: "button", class: "item-main", onclick: () => editMonthIncome(month) }, [
-        el("strong", {}, month.label),
-        el("small", {}, month.incomeLocked ? "Editado à parte" : "Segue a base"),
-      ]),
+      editable()
+        ? el("button", { type: "button", class: "item-main", onclick: () => editMonthIncome(month) }, [
+          el("strong", {}, month.label),
+          el("small", {}, month.incomeLocked ? "Editado à parte" : "Segue a base"),
+        ])
+        : el("div", { class: "item-copy" }, [
+          el("strong", {}, month.label),
+          el("small", {}, month.incomeLocked ? "Editado à parte" : "Segue a base"),
+        ]),
       el("span", { class: "amount" }, money(monthIncomeTotal(data, month))),
     ]))),
     el("h2", { class: "subhead" }, "Extras do ano"),
     el("p", { class: "note" }, "Imposto de renda, décimo terceiro, férias e outros entram só no mês previsto, somados à receita daquele mês."),
-    el("button", { class: "primary add-top", type: "button", onclick: openIncomeExtra }, "Adicionar receita extra"),
+    editable() ? el("button", { class: "primary add-top", type: "button", onclick: openIncomeExtra }, "Adicionar receita extra") : "",
     el("div", { class: "list" }, extras.map((extra) => el("article", { class: "item" }, [
       el("div", { class: "item-copy" }, [
         el("strong", {}, extra.name),
         el("small", {}, monthName(extra.monthId)),
       ]),
       el("span", { class: "amount" }, money(extra.amountCents)),
-      el("button", { class: "quiet", type: "button", onclick: () => removeIncomeExtra(extra) }, "Excluir"),
+      editable() ? el("button", { class: "quiet", type: "button", onclick: () => removeIncomeExtra(extra) }, "Excluir") : "",
     ]))),
   ]);
 }
@@ -845,7 +996,7 @@ function expenseRow(expense, section, options = {}) {
   if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Cartão ${expense.cardLabel}` : "Cartão");
   if (expense.installment) meta.push(expense.installment);
   if (expense.paid) meta.push("Pago");
-  const check = onInvoice
+  const check = !editable() || onInvoice
     ? el("span", { class: "check spacer", "aria-hidden": "true" }, "")
     : el("button", {
       type: "button",
@@ -853,14 +1004,16 @@ function expenseRow(expense, section, options = {}) {
       "aria-label": expense.paid ? "Marcar como não pago" : "Marcar como pago",
       onclick: () => patchExpense(expense, { paid: !expense.paid }),
     }, expense.paid ? "✓" : "");
-  const invoiceToggle = section === "fixed"
+  const invoiceToggle = editable() && section === "fixed"
     ? el("button", {
       type: "button",
       class: `toggle${onInvoice ? " on" : ""}`,
       onclick: () => toggleInvoice(expense),
     }, onInvoice ? "Na fatura" : "Marcar na fatura")
     : "";
-  const edit = () => openEdit(expense, { cardExpense: lockedCard });
+  const edit = () => {
+    if (editable()) openEdit(expense, { cardExpense: lockedCard });
+  };
   return el("article", { class: `item${onInvoice && section === "card" ? " aside" : ""}` }, [
     check,
     el("div", { class: "item-copy" }, [
@@ -1017,7 +1170,35 @@ function sheet() {
   panel.addEventListener("submit", saveSheet);
   if (state.error) panel.append(el("p", { class: "error" }, state.error));
   if (state.notice) panel.append(el("p", { class: "note" }, state.notice));
-  if (draft.mode === "month-income") {
+  if (draft.mode === "share") {
+    panel.append(
+      el("h2", {}, "Compartilhar"),
+      el("p", { class: "muted" }, "Informe o CPF de quem já tem conta. A pessoa escolhe, no login ou em Acesso, se abre os próprios gastos ou os seus."),
+      field("CPF", "cpf", draft.cpf, "text", "000.000.000-00"),
+      el("div", { class: "field" }, [
+        el("label", {}, "Permissão"),
+        segmented("permission", [["view", "Só ver"], ["edit", "Ver e editar"]], draft.permission),
+      ]),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Fechar"),
+        el("button", { class: "primary", type: "submit" }, "Compartilhar"),
+      ]),
+      el("div", { class: "list" }, (state.shares || []).map((share) => el("article", { class: "item" }, [
+        el("div", { class: "item-copy" }, [
+          el("strong", {}, share.cpf),
+          el("small", {}, `${share.email} · ${share.permission === "edit" ? "Pode editar" : "Só visualizar"}`),
+        ]),
+        el("div", { class: "item-actions" }, [
+          el("button", {
+            class: "linkish",
+            type: "button",
+            onclick: () => setSharePermission(share, share.permission === "edit" ? "view" : "edit"),
+          }, share.permission === "edit" ? "Só ver" : "Permitir editar"),
+          el("button", { class: "linkish danger", type: "button", onclick: () => removeShare(share) }, "Remover"),
+        ]),
+      ]))),
+    );
+  } else if (draft.mode === "month-income") {
     panel.append(
       el("h2", {}, draft.label),
       field("Receita base deste mês", "amount", draft.amount, "decimal"),
@@ -1204,6 +1385,16 @@ async function saveSheet(event) {
   const draft = state.sheet;
   state.error = "";
   try {
+    if (draft.mode === "share") {
+      setWorking(true, "Salvando...");
+      const data = await request("/api/shares", { method: "POST", body: { cpf: draft.cpf, permission: draft.permission } });
+      state.shares = data.shares || [];
+      draft.cpf = "";
+      state.notice = "Compartilhamento salvo.";
+      const spaces = await request("/api/spaces");
+      state.spaces = spaces.spaces || state.spaces;
+      return;
+    }
     if (draft.mode === "month-income") {
       const incomeCents = parseMoney(draft.amount);
       if (incomeCents === null) throw new Error("Informe a receita. Exemplo: 9800,00");

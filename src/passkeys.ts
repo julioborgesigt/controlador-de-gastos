@@ -36,7 +36,7 @@ export async function registrationOptions(db: D1Database, user: { id: string; em
   const options = await generateRegistrationOptions({
     rpName: RP_NAME,
     rpID,
-    userID: new TextEncoder().encode(user.id),
+    userID: Uint8Array.from(new TextEncoder().encode(user.id)),
     userName: user.email,
     userDisplayName: user.email,
     attestationType: "none",
