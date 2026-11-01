@@ -15,13 +15,17 @@ import {
 } from "./auth.ts";
 import { countsTowardPayment, normalizeExpense, parseInstallment, type Payment, type Section } from "./domain.ts";
 import {
+  applyBaseIncome,
   copyFromPreviousMonth,
   ensureReady,
   getExpense,
   getMonth,
   getSetting,
+  insertCardPurchase,
   monthPayload,
+  setMonthIncome,
   setSetting,
+  unlockMonthIncome,
 } from "./db.ts";
 
 const COOKIE = "gastos_session";
@@ -136,9 +140,58 @@ app.patch("/api/months/:id", async (c) => {
   const month = await getMonth(c.env.DB, monthId);
   if (!month) return c.json({ error: "Mês não encontrado." }, 404);
   const body = await readJson(c);
-  if (!isCents(body.incomeCents)) return c.json({ error: "Informe a receita em centavos." }, 400);
-  await c.env.DB.prepare("UPDATE months SET income_cents = ? WHERE id = ?").bind(body.incomeCents, monthId).run();
+  if (!isCents(body.incomeCents) || body.incomeCents < 0) return c.json({ error: "Informe a receita em centavos." }, 400);
+  await setMonthIncome(c.env.DB, monthId, body.incomeCents);
   return c.json(await monthPayload(c.env.DB, monthId));
+});
+
+app.post("/api/months/:id/use-base-income", async (c) => {
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  const monthId = c.req.param("id");
+  if (!(await getMonth(c.env.DB, monthId))) return c.json({ error: "Mês não encontrado." }, 404);
+  await unlockMonthIncome(c.env.DB, monthId);
+  return c.json(await monthPayload(c.env.DB, monthId));
+});
+
+app.post("/api/income/base", async (c) => {
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  const body = await readJson(c);
+  if (!isCents(body.amountCents) || body.amountCents < 0) return c.json({ error: "Informe a receita base." }, 400);
+  const scope = body.scope === "all" ? "all" : "unlocked";
+  await applyBaseIncome(c.env.DB, body.amountCents, scope);
+  const monthId = typeof body.monthId === "string" ? body.monthId : "2026-11";
+  return c.json(await monthPayload(c.env.DB, monthId));
+});
+
+app.post("/api/income/extras", async (c) => {
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  const body = await readJson(c);
+  const kind = body.kind;
+  if (kind !== "ir" && kind !== "thirteenth" && kind !== "vacation" && kind !== "other") {
+    return c.json({ error: "Escolha o tipo da receita extra." }, 400);
+  }
+  if (!isCents(body.amountCents) || body.amountCents <= 0) return c.json({ error: "Informe o valor da receita extra." }, 400);
+  if (typeof body.monthId !== "string" || !(await getMonth(c.env.DB, body.monthId))) {
+    return c.json({ error: "Escolha o mês previsto." }, 400);
+  }
+  const name = incomeExtraName(kind, body.name);
+  if (!name) return c.json({ error: "Dê um nome para essa receita." }, 400);
+  await c.env.DB.prepare(
+    "INSERT INTO income_extras (id, kind, name, amount_cents, month_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+  )
+    .bind(crypto.randomUUID(), kind, name, body.amountCents, body.monthId, new Date().toISOString())
+    .run();
+  return c.json(await monthPayload(c.env.DB, body.monthId), 201);
+});
+
+app.delete("/api/income/extras/:id", async (c) => {
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  const current = await c.env.DB.prepare("SELECT month_id FROM income_extras WHERE id = ?")
+    .bind(c.req.param("id"))
+    .first<{ month_id: string }>();
+  if (!current) return c.json({ error: "Receita extra não encontrada." }, 404);
+  await c.env.DB.prepare("DELETE FROM income_extras WHERE id = ?").bind(c.req.param("id")).run();
+  return c.json(await monthPayload(c.env.DB, current.month_id));
 });
 
 app.post("/api/months/:id/copy", async (c) => {
@@ -182,6 +235,24 @@ app.post("/api/expenses", async (c) => {
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   if (!isMonthId(body.monthId) || !(await getMonth(c.env.DB, body.monthId))) {
     return c.json({ error: "Mês não encontrado." }, 404);
+  }
+  const plan = readInstallmentPlan(body.installmentPlan);
+  if (plan) {
+    if (!plan.ok) return c.json({ error: plan.error }, 400);
+    const created = await insertCardPurchase(c.env.DB, {
+      startMonthId: body.monthId,
+      name: parsed.value.name,
+      section: parsed.value.section === "fixed" ? "card" : parsed.value.section,
+      payment: "card",
+      cardLabel: parsed.value.cardLabel,
+      note: parsed.value.note,
+      totalCount: plan.totalCount,
+      paidCount: plan.paidCount,
+      amountCents: parsed.value.amountCents,
+      mode: plan.mode,
+    });
+    if (!created.ok) return c.json({ error: created.error }, 400);
+    return c.json(await monthPayload(c.env.DB, body.monthId), 201);
   }
   const sort = await c.env.DB.prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM expenses WHERE month_id = ?")
     .bind(body.monthId)
@@ -322,6 +393,25 @@ function isSection(value: unknown): value is Section {
   return value === "card" || value === "fixed" || value === "extra";
 }
 
+function incomeExtraName(kind: "ir" | "thirteenth" | "vacation" | "other", name: unknown): string {
+  if (kind === "ir") return "Imposto de renda";
+  if (kind === "thirteenth") return "Décimo terceiro";
+  if (kind === "vacation") return "Férias";
+  return typeof name === "string" ? name.trim().slice(0, 80) : "";
+}
+
+function readInstallmentPlan(value: unknown): { ok: true; totalCount: number; paidCount: number; mode: "installment" | "total" } | { ok: false; error: string } | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const plan = value as { totalCount?: unknown; paidCount?: unknown; amountMode?: unknown };
+  if (typeof plan.totalCount !== "number" || typeof plan.paidCount !== "number") {
+    return { ok: false, error: "Informe a quantidade de parcelas e quantas já foram pagas." };
+  }
+  if (plan.amountMode !== "installment" && plan.amountMode !== "total") {
+    return { ok: false, error: "Diga se o valor é da parcela ou do total." };
+  }
+  return { ok: true, totalCount: plan.totalCount, paidCount: plan.paidCount, mode: plan.amountMode };
+}
+
 function isPayment(value: unknown): value is Payment {
   return value === "pix" || value === "card" || value === "debit" || value === "cash";
 }
@@ -387,6 +477,9 @@ type JsonBody = Record<string, unknown> & {
   cardLabel?: unknown;
   note?: unknown;
   installment?: unknown;
+  installmentPlan?: unknown;
+  scope?: unknown;
+  kind?: unknown;
   paid?: unknown;
 };
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { clearFailures, isValidPin, lockedMessage, nextFailure } from "../src/auth.ts";
-import { carryForward, computeTotals, isFixedOnCard, normalizeExpense, type Expense } from "../src/domain.ts";
+import { carryForward, computeTotals, isFixedOnCard, normalizeExpense, planCardPurchase, type Expense } from "../src/domain.ts";
 import seedJson from "../src/seed-data.json" with { type: "json" };
 
 type Seed = {
@@ -173,6 +173,32 @@ test("parcela do cartão avança no mês seguinte e o gasto fixo lançado pelo u
   const fixed: Expense = { ...card, section: "fixed", installment: null, source: "user", payment: "pix" };
   assert.equal(carryForward(fixed)?.section, "fixed");
   assert.equal(carryForward({ ...fixed, source: "sheet" }), null);
+});
+
+test("compra no cartão reparte o total e começa depois das parcelas já pagas", () => {
+  const plan = planCardPurchase({
+    startMonthId: "2026-12",
+    totalCount: 10,
+    paidCount: 3,
+    amountCents: 100001,
+    mode: "total",
+  });
+  assert.equal(plan.ok, true);
+  if (!plan.ok) return;
+  assert.equal(plan.plan.schedule.length, 7);
+  assert.equal(plan.plan.schedule[0]?.installment, "4/10");
+  assert.equal(plan.plan.schedule[0]?.monthId, "2026-12");
+  assert.equal(plan.plan.schedule[0]?.amountCents, 10000);
+  assert.equal(plan.plan.schedule[6]?.installment, "10/10");
+  assert.equal(plan.plan.schedule[6]?.monthId, "2027-06");
+  assert.equal(plan.plan.schedule[6]?.amountCents, 10001);
+  assert.equal(planCardPurchase({
+    startMonthId: "2026-12",
+    totalCount: 4,
+    paidCount: 4,
+    amountCents: 1000,
+    mode: "installment",
+  }).ok, false);
 });
 
 test("PIN aceita só dígitos e bloqueia depois de oito erros", () => {

@@ -19,6 +19,7 @@ const views = [
   ["cartoes", "Cartões"],
   ["casa", "Casa"],
   ["extras", "Extras"],
+  ["receita", "Receita"],
 ];
 
 boot();
@@ -188,6 +189,7 @@ async function changeMonth(monthId) {
 
 function viewBody(data) {
   if (state.view === "resumo") return summary(data);
+  if (state.view === "receita") return incomeView(data);
   if (state.view === "cartoes") return sectionList(data, "card");
   if (state.view === "casa") return sectionList(data, "fixed");
   return sectionList(data, "extra");
@@ -204,9 +206,10 @@ function summary(data) {
       month.settled ? el("p", { class: "badge paid" }, "Mês quitado") : "",
     ]),
     el("div", { class: "grid" }, [
-      el("button", { class: "metric", type: "button", onclick: editIncome }, [
+      el("button", { class: "metric", type: "button", onclick: () => { state.view = "receita"; render(); } }, [
         el("small", {}, "Receita"),
         el("strong", {}, money(month.incomeCents)),
+        month.extraIncomeCents ? el("small", {}, `inclui ${money(month.extraIncomeCents)} extras`) : "",
       ]),
       el("div", { class: "metric" }, [
         el("small", {}, "Saldo previsto"),
@@ -261,8 +264,13 @@ function sectionList(data, section) {
     children.push(el("p", { class: "note" }, "Marque “Na fatura” quando o gasto fixo foi para o cartão. Ele continua neste total da casa e aparece como já contabilizado, sem entrar de novo no que falta pagar."));
   }
   if (section === "extra") {
-    children.push(el("p", { class: "note" }, "Dê um nome ao gasto extra e diga se ele saiu no Pix ou entrou no cartão. No cartão, ele aumenta a fatura. No Pix, entra à parte."));
+    children.push(el("p", { class: "note" }, "Dê um nome ao gasto extra e diga se ele saiu no Pix, débito, dinheiro ou cartão."));
   }
+  children.push(el("button", {
+    class: "primary add-top",
+    type: "button",
+    onclick: () => openCreate(section === "card" ? "extra" : section, section === "card" ? "card" : "pix"),
+  }, section === "fixed" ? "Adicionar gasto fixo" : "Adicionar gasto"));
   if (section === "card") {
     const groups = [
       ["Fatura prevista", visible.filter((expense) => expense.section === "card")],
@@ -290,12 +298,151 @@ function sectionList(data, section) {
       },
     }, `Mostrar ${hidden} ${hidden === 1 ? "linha sem valor" : "linhas sem valor"}`));
   }
-  children.push(el("button", {
-    class: "primary",
-    type: "button",
-    onclick: () => openCreate(section === "card" ? "extra" : section, section === "card" ? "card" : "pix"),
-  }, section === "fixed" ? "Adicionar gasto fixo" : "Adicionar gasto"));
   return el("section", {}, children);
+}
+
+function incomeView(data) {
+  const base = data.baseIncomeCents === null ? "" : centsToInput(data.baseIncomeCents);
+  const extras = data.incomeExtras || [];
+  return el("section", {}, [
+    el("div", { class: "section-head" }, [
+      el("p", { class: "eyebrow" }, "Receita"),
+      el("h2", {}, money(data.month.incomeCents)),
+      el("p", { class: "muted" }, `${data.month.label}: ${money(data.month.baseIncomeCents)} de base${data.month.extraIncomeCents ? ` + ${money(data.month.extraIncomeCents)} extras` : ""}.`),
+    ]),
+    el("div", { class: "panel" }, [
+      el("label", { for: "base-income" }, "Receita base"),
+      el("input", {
+        id: "base-income",
+        inputmode: "decimal",
+        value: base,
+        placeholder: "8000,00",
+        oninput: (event) => { state.baseIncome = event.target.value; },
+      }),
+      el("p", { class: "muted" }, "A base entra nos meses que ainda não foram editados à parte. Você pode aplicar em todos se quiser substituir o valor da planilha."),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: () => saveBase("unlocked") }, "Replicar nos meses livres"),
+        el("button", { class: "primary", type: "button", onclick: () => saveBase("all") }, "Replicar em todos os meses"),
+      ]),
+    ]),
+    el("h2", { class: "subhead" }, "Mês a mês"),
+    el("div", { class: "list" }, data.months.map((month) => el("article", { class: "item" }, [
+      el("button", { type: "button", class: "item-main", onclick: () => editMonthIncome(month) }, [
+        el("strong", {}, month.label),
+        el("small", {}, month.incomeLocked ? "Editado à parte" : "Segue a base"),
+      ]),
+      el("span", { class: "amount" }, money(monthIncomeTotal(data, month))),
+    ]))),
+    el("h2", { class: "subhead" }, "Extras do ano"),
+    el("p", { class: "note" }, "Imposto de renda, décimo terceiro, férias e outros entram só no mês previsto, somados à receita daquele mês."),
+    el("button", { class: "primary add-top", type: "button", onclick: openIncomeExtra }, "Adicionar receita extra"),
+    el("div", { class: "list" }, extras.map((extra) => el("article", { class: "item" }, [
+      el("div", { class: "item-copy" }, [
+        el("strong", {}, extra.name),
+        el("small", {}, monthName(extra.monthId)),
+      ]),
+      el("span", { class: "amount" }, money(extra.amountCents)),
+      el("button", { class: "quiet", type: "button", onclick: () => removeIncomeExtra(extra) }, "Excluir"),
+    ]))),
+  ]);
+}
+
+function monthIncomeTotal(data, month) {
+  const extras = (data.incomeExtras || []).filter((extra) => extra.monthId === month.id).reduce((sum, extra) => sum + extra.amountCents, 0);
+  return month.incomeCents + extras;
+}
+
+function monthName(monthId) {
+  const month = state.data.months.find((item) => item.id === monthId);
+  return month ? month.label : monthId;
+}
+
+function amountLabel(draft) {
+  if (draft.mode === "create" && (draft.section === "card" || draft.payment === "card")) {
+    return draft.amountMode === "total" ? "Valor total da compra" : "Valor da parcela";
+  }
+  return "Valor";
+}
+
+function cardPurchaseFields(draft) {
+  if (draft.mode !== "create" || (draft.section !== "card" && draft.payment !== "card")) return "";
+  return el("div", {}, [
+    field("Quantidade de parcelas", "installmentCount", draft.installmentCount || "1", "numeric"),
+    field("Parcelas já pagas", "installmentsPaid", draft.installmentsPaid || "0", "numeric"),
+    el("div", { class: "field" }, [
+      el("label", {}, "O valor informado é"),
+      segmented("amountMode", [["installment", "Da parcela"], ["total", "Da compra toda"]], draft.amountMode || "installment"),
+    ]),
+    el("p", { class: "muted", id: "installment-preview" }, installmentPreview(draft)),
+  ]);
+}
+
+function installmentPreview(draft) {
+  const total = Number(draft.installmentCount);
+  const paid = Number(draft.installmentsPaid);
+  const amount = parseMoney(draft.amount || "");
+  if (!Number.isInteger(total) || total < 1 || !Number.isInteger(paid) || paid < 0 || paid >= total || amount === null || amount <= 0) {
+    return "A parcela deste mês é a primeira que ainda falta pagar. As seguintes entram nos próximos meses.";
+  }
+  const per = draft.amountMode === "total" ? Math.floor(amount / total) : amount;
+  const remaining = total - paid;
+  return `${remaining} ${remaining === 1 ? "parcela" : "parcelas"} de ${money(per)} a partir deste mês (${paid + 1}/${total}).`;
+}
+
+function monthSelect(selected) {
+  const select = el("select", { id: "extra-month" }, state.data.months.map((month) => {
+    const option = el("option", { value: month.id }, month.label);
+    if (month.id === selected) option.selected = true;
+    return option;
+  }));
+  select.addEventListener("change", () => {
+    state.sheet.monthId = select.value;
+  });
+  return el("div", { class: "field" }, [el("label", { for: "extra-month" }, "Mês previsto"), select]);
+}
+
+async function saveBase(scope) {
+  const input = document.querySelector("#base-income");
+  const amountCents = parseMoney(input ? input.value : "");
+  if (amountCents === null) {
+    state.error = "Informe a receita base. Exemplo: 8000,00";
+    render();
+    return;
+  }
+  state.error = "";
+  try {
+    state.data = await request("/api/income/base", { method: "POST", body: { amountCents, scope, monthId: state.monthId } });
+    state.baseIncome = "";
+    state.notice = scope === "all"
+      ? "Receita base aplicada em todos os meses."
+      : "Receita base aplicada nos meses que ainda seguem a base.";
+  } catch (error) {
+    state.error = messageOf(error);
+  }
+  render();
+}
+
+async function useBaseIncome(monthId) {
+  state.error = "";
+  try {
+    await request(`/api/months/${monthId}/use-base-income`, { method: "POST", body: {} });
+    await loadMonth(state.monthId);
+    state.sheet = null;
+    state.notice = "Este mês voltou a usar a receita base.";
+  } catch (error) {
+    state.error = messageOf(error);
+  }
+  render();
+}
+
+async function removeIncomeExtra(extra) {
+  state.error = "";
+  try {
+    state.data = await request(`/api/income/extras/${extra.id}`, { method: "DELETE" });
+  } catch (error) {
+    state.error = messageOf(error);
+  }
+  render();
 }
 
 function belongs(expense, section) {
@@ -372,6 +519,9 @@ function openCreate(section, payment) {
     cardLabel: section === "card" || payment === "card" ? "Nubank" : "",
     note: "",
     installment: "",
+    installmentCount: "1",
+    installmentsPaid: "0",
+    amountMode: "installment",
     paid: false,
     source: "user",
   };
@@ -398,10 +548,23 @@ function openEdit(expense) {
   render();
 }
 
-function editIncome() {
+function editMonthIncome(month) {
   state.sheet = {
-    mode: "income",
-    amount: centsToInput(state.data.month.incomeCents),
+    mode: "month-income",
+    monthId: month.id,
+    label: month.label,
+    amount: centsToInput(month.incomeCents),
+  };
+  render();
+}
+
+function openIncomeExtra() {
+  state.sheet = {
+    mode: "income-extra",
+    kind: "ir",
+    name: "",
+    amount: "",
+    monthId: state.monthId,
   };
   render();
 }
@@ -416,13 +579,35 @@ function sheet() {
   const draft = state.sheet;
   const panel = el("form", { class: "sheet" }, [el("div", { class: "handle" })]);
   panel.addEventListener("submit", saveSheet);
-  if (draft.mode === "income") {
+  if (draft.mode === "month-income") {
     panel.append(
-      el("h2", {}, "Receita do mês"),
-      field("Valor recebido", "amount", draft.amount, "decimal"),
+      el("h2", {}, draft.label),
+      field("Receita base deste mês", "amount", draft.amount, "decimal"),
+      el("p", { class: "muted" }, "Este mês deixa de seguir a receita base. Os extras previstos continuam somados."),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
         el("button", { class: "primary", type: "submit" }, "Salvar"),
+      ]),
+      el("button", { class: "quiet", type: "button", onclick: () => useBaseIncome(draft.monthId) }, "Voltar a usar a base"),
+    );
+  } else if (draft.mode === "income-extra") {
+    panel.append(
+      el("h2", {}, "Receita extra"),
+      el("div", { class: "field" }, [
+        el("label", {}, "Tipo"),
+        segmented("kind", [
+          ["ir", "Imposto de renda"],
+          ["thirteenth", "Décimo terceiro"],
+          ["vacation", "Férias"],
+          ["other", "Outro"],
+        ], draft.kind),
+      ]),
+      draft.kind === "other" ? field("Nome", "name", draft.name, "text", "Bônus, PLR...") : "",
+      field("Valor", "amount", draft.amount, "decimal"),
+      monthSelect(draft.monthId),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
+        el("button", { class: "primary", type: "submit" }, "Adicionar"),
       ]),
     );
   } else if (draft.mode === "pin") {
@@ -439,7 +624,7 @@ function sheet() {
     panel.append(
       el("h2", {}, draft.mode === "create" ? "Novo gasto" : "Editar gasto"),
       field("Nome", "name", draft.name, "text"),
-      field("Valor", "amount", draft.amount, "decimal"),
+      field(amountLabel(draft), "amount", draft.amount, "decimal"),
       el("div", { class: "field" }, [
         el("label", {}, "Tipo"),
         segmented("section", [
@@ -467,7 +652,8 @@ function sheet() {
             segmented("payment", [["pix", "Pix"], ["debit", "Débito"], ["cash", "Dinheiro"], ["card", "Cartão"]], draft.payment),
           ])
           : "",
-      draft.section === "card" || draft.section === "extra"
+      cardPurchaseFields(draft),
+      draft.mode === "edit" && (draft.section === "card" || draft.section === "extra")
         ? field("Parcela", "installment", draft.installment, "text", "3/10, se houver")
         : "",
       draft.section === "card" || draft.payment === "card" || draft.onCard
@@ -499,6 +685,8 @@ function field(labelText, key, value, mode, placeholder = "") {
   });
   input.addEventListener("input", () => {
     state.sheet[key] = input.value;
+    const preview = document.querySelector("#installment-preview");
+    if (preview && state.sheet) preview.textContent = installmentPreview(state.sheet);
   });
   return el("div", { class: "field" }, [el("label", { for: key }, labelText), input]);
 }
@@ -529,16 +717,30 @@ async function saveSheet(event) {
   state.busy = true;
   state.error = "";
   try {
-    if (draft.mode === "income") {
+    if (draft.mode === "month-income") {
       const incomeCents = parseMoney(draft.amount);
       if (incomeCents === null) throw new Error("Informe a receita. Exemplo: 9800,00");
-      state.data = await request(`/api/months/${state.monthId}`, { method: "PATCH", body: { incomeCents } });
+      await request(`/api/months/${draft.monthId}`, { method: "PATCH", body: { incomeCents } });
+      await loadMonth(state.monthId);
+    } else if (draft.mode === "income-extra") {
+      const amountCents = parseMoney(draft.amount || "");
+      if (amountCents === null || amountCents <= 0) throw new Error("Informe o valor da receita extra.");
+      state.data = await request("/api/income/extras", {
+        method: "POST",
+        body: { kind: draft.kind, name: draft.name, amountCents, monthId: draft.monthId },
+      });
     } else if (draft.mode === "pin") {
       await request("/api/pin", { method: "POST", body: { currentPin: draft.current, nextPin: draft.next } });
     } else {
       const amountCents = parseMoney(draft.amount || "0");
       if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
       if (amountCents === null) throw new Error("Informe o valor. Exemplo: 75,90");
+      const onCardPurchase = draft.mode === "create" && (draft.section === "card" || draft.payment === "card");
+      const totalCount = Number(draft.installmentCount);
+      const paidCount = Number(draft.installmentsPaid);
+      if (onCardPurchase && (!Number.isInteger(totalCount) || !Number.isInteger(paidCount))) {
+        throw new Error("Informe as parcelas em números inteiros.");
+      }
       const body = {
         name: draft.name,
         amountCents,
@@ -547,9 +749,14 @@ async function saveSheet(event) {
         onCard: draft.section === "fixed" && draft.onCard,
         cardLabel: draft.cardLabel,
         note: draft.note,
-        installment: draft.installment,
+        installment: onCardPurchase ? null : draft.installment,
         paid: draft.paid,
+        installmentPlan: onCardPurchase ? { totalCount, paidCount, amountMode: draft.amountMode || "installment" } : undefined,
       };
+      if (onCardPurchase) {
+        const remaining = totalCount - paidCount;
+        state.notice = remaining > 1 ? `Lancei ${remaining} parcelas a partir deste mês.` : "";
+      }
       if (draft.mode === "create") {
         state.data = await request("/api/expenses", { method: "POST", body: { ...body, monthId: state.monthId } });
       } else {
@@ -702,6 +909,7 @@ function glyph(name) {
     cartoes: "M3 7h18v10H3zM3 11h18",
     casa: "M4 11l8-7 8 7v8H4z",
     extras: "M12 5v14M5 12h14",
+    receita: "M12 3v18M8 7h6a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h7",
   };
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
   svg.setAttribute("viewBox", "0 0 24 24");
@@ -723,7 +931,7 @@ function el(tag, attrs = {}, children = []) {
   for (const [key, value] of Object.entries(attrs)) {
     if (value === null || value === undefined || value === false) continue;
     if (key === "class") node.className = value;
-    else if (key === "onclick") node.addEventListener("click", value);
+    else if (key === "onclick" || (key.startsWith("on") && typeof value === "function")) node.addEventListener(key.slice(2), value);
     else if (key === "for") node.htmlFor = value;
     else if (key === "value") node.value = value;
     else node.setAttribute(key, value === true ? "" : String(value));
