@@ -50,6 +50,13 @@ button { cursor: pointer; }
   padding: calc(28px + var(--safe-top)) 20px calc(28px + var(--safe-bottom));
 }
 
+.screen.auth {
+  justify-content: flex-start;
+  overflow: auto;
+}
+
+.auth-switch { margin: 8px 0 0; text-align: center; }
+
 .mark {
   width: 54px;
   height: 54px;
