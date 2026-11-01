@@ -77,29 +77,105 @@ function currentMonthId() {
 }
 
 function render() {
-  const scrollY = window.scrollY;
+  const lockedScroll = document.body.classList.contains("sheet-open")
+    ? Number(document.body.dataset.scrollLock || 0)
+    : window.scrollY;
   const viewKey = `${state.authed}:${state.monthId}:${state.view}:${state.cardFocus || ""}`;
   const keepPlace = state.viewKey === viewKey;
   root.replaceChildren();
   if (state.booting) {
     root.append(screen(el("p", { class: "lede" }, "Abrindo o mês...")));
+    if (document.body.classList.contains("sheet-open")) unlockPage(0);
     return;
   }
   if (!state.authed) {
     root.append(authScreen());
     state.viewKey = viewKey;
+    if (document.body.classList.contains("sheet-open")) unlockPage(0);
     return;
   }
   if (state.choosing) {
     root.append(accessScreen());
     state.viewKey = viewKey;
+    if (document.body.classList.contains("sheet-open")) unlockPage(0);
     return;
   }
   root.append(shell());
   if (state.sheet) root.append(sheet());
-  window.scrollTo(0, keepPlace ? scrollY : 0);
+  if (state.sheet) lockPage(keepPlace ? lockedScroll : 0);
+  else unlockPage(keepPlace ? lockedScroll : 0);
   state.viewKey = viewKey;
   queueMicrotask(centerMonthChip);
+}
+
+let sheetGuardBound = false;
+let sheetTouchY = 0;
+
+function lockPage(scrollY) {
+  document.body.dataset.scrollLock = String(scrollY);
+  document.body.style.top = `-${scrollY}px`;
+  document.documentElement.classList.add("sheet-open");
+  document.body.classList.add("sheet-open");
+  if (sheetGuardBound) return;
+  document.addEventListener("touchstart", rememberSheetTouch, { passive: true });
+  document.addEventListener("touchmove", blockBackgroundScroll, { passive: false });
+  document.addEventListener("wheel", blockBackgroundWheel, { passive: false });
+  document.addEventListener("keydown", blockBackgroundKeys);
+  sheetGuardBound = true;
+}
+
+function unlockPage(scrollY = Number(document.body.dataset.scrollLock || 0)) {
+  if (!document.body.classList.contains("sheet-open")) {
+    window.scrollTo(0, scrollY);
+    return;
+  }
+  document.documentElement.classList.remove("sheet-open");
+  document.body.classList.remove("sheet-open");
+  document.body.style.top = "";
+  delete document.body.dataset.scrollLock;
+  if (sheetGuardBound) {
+    document.removeEventListener("touchstart", rememberSheetTouch);
+    document.removeEventListener("touchmove", blockBackgroundScroll);
+    document.removeEventListener("wheel", blockBackgroundWheel);
+    document.removeEventListener("keydown", blockBackgroundKeys);
+    sheetGuardBound = false;
+  }
+  window.scrollTo(0, scrollY);
+}
+
+function rememberSheetTouch(event) {
+  sheetTouchY = event.touches[0]?.clientY ?? 0;
+}
+
+function blockBackgroundScroll(event) {
+  if (!document.body.classList.contains("sheet-open")) return;
+  const sheet = event.target.closest?.(".sheet");
+  const y = event.touches[0]?.clientY ?? sheetTouchY;
+  const dy = y - sheetTouchY;
+  sheetTouchY = y;
+  if (!sheet || !sheetCanScroll(sheet, dy)) event.preventDefault();
+}
+
+function blockBackgroundWheel(event) {
+  if (!document.body.classList.contains("sheet-open")) return;
+  const sheet = event.target.closest?.(".sheet");
+  if (!sheet || !sheetCanScroll(sheet, -event.deltaY)) event.preventDefault();
+}
+
+function blockBackgroundKeys(event) {
+  if (!document.body.classList.contains("sheet-open")) return;
+  if (!["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) return;
+  if (event.target.closest?.("input, textarea, select")) return;
+  const sheet = event.target.closest?.(".sheet");
+  const dy = event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" ? 1 : -1;
+  if (!sheet || !sheetCanScroll(sheet, dy)) event.preventDefault();
+}
+
+function sheetCanScroll(sheet, dy) {
+  if (sheet.scrollHeight - sheet.clientHeight <= 1) return false;
+  if (dy > 0 && sheet.scrollTop <= 0) return false;
+  if (dy < 0 && sheet.scrollTop + sheet.clientHeight >= sheet.scrollHeight - 1) return false;
+  return true;
 }
 
 function centerMonthChip() {

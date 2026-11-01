@@ -397,22 +397,45 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .nav svg { display: block; margin: 0 auto 2px; }
 
+html.sheet-open,
+body.sheet-open {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+body.sheet-open {
+  position: fixed;
+  left: 0;
+  right: 0;
+  width: 100%;
+  touch-action: none;
+}
+
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(36, 28, 22, 0.38);
+  background: rgba(36, 28, 22, 0.42);
+  backdrop-filter: blur(22px);
+  -webkit-backdrop-filter: blur(22px);
   display: flex;
   align-items: flex-end;
   justify-content: center;
   z-index: 5;
+  overscroll-behavior: none;
+  touch-action: none;
 }
 
 .sheet {
+  position: relative;
+  z-index: 1;
   width: min(520px, 100%);
   max-height: min(92dvh, 760px);
   overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
   border-radius: 28px 28px 0 0;
   padding: 12px 18px calc(18px + var(--safe-bottom));
+  box-shadow: 0 -18px 48px rgba(36, 28, 22, 0.22);
 }
 
 .handle {
