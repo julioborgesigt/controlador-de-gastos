@@ -70,6 +70,9 @@ function currentMonthId() {
 }
 
 function render() {
+  const scrollY = window.scrollY;
+  const viewKey = `${state.authed}:${state.monthId}:${state.view}:${state.cardFocus || ""}`;
+  const keepPlace = state.viewKey === viewKey;
   root.replaceChildren();
   if (state.booting) {
     root.append(screen(el("p", { class: "lede" }, "Abrindo o mês...")));
@@ -77,18 +80,42 @@ function render() {
   }
   if (!state.authed) {
     root.append(lockScreen());
+    state.viewKey = viewKey;
     return;
   }
   root.append(shell());
   if (state.sheet) root.append(sheet());
-  const viewKey = `${state.authed}:${state.monthId}:${state.view}:${state.cardFocus || ""}`;
-  if (state.viewKey !== viewKey) {
-    state.viewKey = viewKey;
-    window.scrollTo(0, 0);
+  window.scrollTo(0, keepPlace ? scrollY : 0);
+  state.viewKey = viewKey;
+  queueMicrotask(centerMonthChip);
+}
+
+function centerMonthChip() {
+  const chip = document.querySelector(".chip.active");
+  const scroller = chip?.parentElement;
+  if (!chip || !scroller) return;
+  const left = chip.offsetLeft - (scroller.clientWidth - chip.offsetWidth) / 2;
+  scroller.scrollTo({ left: Math.max(0, left) });
+}
+
+function setWorking(active, label = "Salvando...") {
+  state.busy = active;
+  document.body.classList.toggle("is-working", active);
+  document.body.setAttribute("aria-busy", active ? "true" : "false");
+  const current = document.querySelector("#working");
+  if (!active) {
+    current?.remove();
+    return;
   }
-  queueMicrotask(() => {
-    document.querySelector(".chip.active")?.scrollIntoView({ inline: "center", block: "nearest" });
-  });
+  if (current) {
+    const text = current.querySelector(".working-label");
+    if (text) text.textContent = label;
+    return;
+  }
+  document.body.append(el("div", { id: "working", class: "working", role: "status" }, [
+    el("span", { class: "spinner", "aria-hidden": "true" }, ""),
+    el("span", { class: "working-label" }, label),
+  ]));
 }
 
 function lockScreen() {
@@ -112,7 +139,7 @@ function lockScreen() {
   form.addEventListener("submit", async (event) => {
     event.preventDefault();
     state.error = "";
-    state.busy = true;
+    setWorking(true, "Entrando...");
     try {
       await request(state.needsSetup ? "/api/setup" : "/api/login", { method: "POST", body: { pin: pin.value } });
       state.authed = true;
@@ -121,7 +148,7 @@ function lockScreen() {
     } catch (error) {
       state.error = messageOf(error);
     } finally {
-      state.busy = false;
+      setWorking(false);
       render();
     }
   });
@@ -177,14 +204,14 @@ function monthChip(month) {
 
 async function changeMonth(monthId) {
   state.error = "";
-  state.busy = true;
+  setWorking(true, "Abrindo o mês...");
   try {
     await loadMonth(monthId);
     state.showEmpty = false;
   } catch (error) {
     state.error = messageOf(error);
   } finally {
-    state.busy = false;
+    setWorking(false);
     render();
   }
 }
@@ -257,6 +284,10 @@ function cardsHome(data) {
       el("p", { class: "muted" }, blurb("card", data.totals)),
     ]),
     el("p", { class: "note" }, "Toque num cartão para ver o detalhamento. Dá para editar ou excluir cada gasto."),
+    el("div", { class: "stack-actions" }, [
+      el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto Cartão"),
+      el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
+    ]),
   ];
   if (!cards.length) children.push(el("p", { class: "muted" }, "Nenhum cartão ainda."));
   for (const card of cards) {
@@ -269,10 +300,6 @@ function cardsHome(data) {
       .reduce((sum, expense) => sum + expense.amountCents, 0);
     children.push(cardJump("Sem cartão", amount, loose, () => openCard("unassigned")));
   }
-  children.push(el("div", { class: "stack-actions" }, [
-    el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto Cartão"),
-    el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
-  ]));
   return el("section", {}, children);
 }
 
@@ -307,6 +334,13 @@ function cardDetail(data) {
         ? "Gastos vinculados a este cartão. O que veio da casa já está na fatura e não soma de novo."
         : "Estes gastos ainda não têm um cartão cadastrado."),
     ]),
+    el("div", { class: "stack-actions" }, [
+      el("button", {
+        class: "primary",
+        type: "button",
+        onclick: () => openCardExpense(card ? card.name : ""),
+      }, "+ Gasto Cartão"),
+    ]),
   ];
   const groups = [
     ["Fatura prevista", visible.filter((expense) => expense.section === "card")],
@@ -331,13 +365,6 @@ function cardDetail(data) {
       },
     }, `Mostrar ${hidden} ${hidden === 1 ? "linha sem valor" : "linhas sem valor"}`));
   }
-  children.push(el("div", { class: "stack-actions" }, [
-    el("button", {
-      class: "primary",
-      type: "button",
-      onclick: () => openCardExpense(card ? card.name : ""),
-    }, "+ Gasto Cartão"),
-  ]));
   return el("section", {}, children);
 }
 
@@ -549,6 +576,7 @@ async function saveBase(scope) {
     return;
   }
   state.error = "";
+  setWorking(true, "Salvando...");
   try {
     state.data = await request("/api/income/base", { method: "POST", body: { amountCents, scope, monthId: state.monthId } });
     state.baseIncome = "";
@@ -557,12 +585,15 @@ async function saveBase(scope) {
       : "Receita base aplicada nos meses que ainda seguem a base.";
   } catch (error) {
     state.error = messageOf(error);
+  } finally {
+    setWorking(false);
   }
   render();
 }
 
 async function useBaseIncome(monthId) {
   state.error = "";
+  setWorking(true, "Salvando...");
   try {
     await request(`/api/months/${monthId}/use-base-income`, { method: "POST", body: {} });
     await loadMonth(state.monthId);
@@ -570,16 +601,21 @@ async function useBaseIncome(monthId) {
     state.notice = "Este mês voltou a usar a receita base.";
   } catch (error) {
     state.error = messageOf(error);
+  } finally {
+    setWorking(false);
   }
   render();
 }
 
 async function removeIncomeExtra(extra) {
   state.error = "";
+  setWorking(true, "Excluindo...");
   try {
     state.data = await request(`/api/income/extras/${extra.id}`, { method: "DELETE" });
   } catch (error) {
     state.error = messageOf(error);
+  } finally {
+    setWorking(false);
   }
   render();
 }
@@ -944,25 +980,28 @@ function segmented(key, options, current) {
 async function saveSheet(event) {
   event.preventDefault();
   const draft = state.sheet;
-  state.busy = true;
   state.error = "";
   try {
     if (draft.mode === "month-income") {
       const incomeCents = parseMoney(draft.amount);
       if (incomeCents === null) throw new Error("Informe a receita. Exemplo: 9800,00");
+      setWorking(true, "Salvando...");
       await request(`/api/months/${draft.monthId}`, { method: "PATCH", body: { incomeCents } });
       await loadMonth(state.monthId);
     } else if (draft.mode === "income-extra") {
       const amountCents = parseMoney(draft.amount || "");
       if (amountCents === null || amountCents <= 0) throw new Error("Informe o valor da receita extra.");
+      setWorking(true, "Salvando...");
       state.data = await request("/api/income/extras", {
         method: "POST",
         body: { kind: draft.kind, name: draft.name, amountCents, monthId: draft.monthId },
       });
     } else if (draft.mode === "pin") {
+      setWorking(true, "Salvando...");
       await request("/api/pin", { method: "POST", body: { currentPin: draft.current, nextPin: draft.next } });
     } else if (draft.mode === "card") {
       if (!draft.name.trim()) throw new Error("Dê um nome ao cartão.");
+      setWorking(true, "Salvando...");
       const data = await request("/api/cards", { method: "POST", body: { name: draft.name } });
       state.data.cards = data.cards;
     } else {
@@ -985,6 +1024,7 @@ async function saveSheet(event) {
       if (onCardPurchase && (!Number.isInteger(totalCount) || !Number.isInteger(paidCount))) {
         throw new Error("Informe as parcelas em números inteiros.");
       }
+      setWorking(true, "Salvando...");
       const body = {
         name: draft.name,
         amountCents,
@@ -1011,13 +1051,14 @@ async function saveSheet(event) {
   } catch (error) {
     state.error = messageOf(error);
   } finally {
-    state.busy = false;
+    setWorking(false);
     render();
   }
 }
 
 async function patchExpense(expense, patch) {
   state.error = "";
+  setWorking(true, "Salvando...");
   try {
     state.data = await request(`/api/expenses/${expense.id}`, {
       method: "PATCH",
@@ -1036,21 +1077,23 @@ async function patchExpense(expense, patch) {
     });
   } catch (error) {
     state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
   }
-  render();
 }
 
 async function deleteExpense(expense) {
   if (!window.confirm(`Excluir “${expense.name}” deste mês?`)) return;
-  state.busy = true;
   state.error = "";
+  setWorking(true, "Excluindo...");
   try {
     state.data = await request(`/api/expenses/${expense.id}`, { method: "DELETE" });
     if (state.sheet?.id === expense.id) state.sheet = null;
   } catch (error) {
     state.error = messageOf(error);
   } finally {
-    state.busy = false;
+    setWorking(false);
     render();
   }
 }
@@ -1061,6 +1104,7 @@ async function removeExpense() {
 
 async function copyPrevious() {
   state.error = "";
+  setWorking(true, "Trazendo lançamentos...");
   try {
     const data = await request(`/api/months/${state.monthId}/copy`, { method: "POST", body: {} });
     state.data = data;
@@ -1069,16 +1113,21 @@ async function copyPrevious() {
       : "Não havia lançamento novo para trazer. A planilha de cada mês já está carregada.";
   } catch (error) {
     state.error = messageOf(error);
+  } finally {
+    setWorking(false);
   }
   render();
 }
 
 async function settle(mode) {
   state.error = "";
+  setWorking(true, "Atualizando...");
   try {
     state.data = await request(`/api/months/${state.monthId}/settle`, { method: "POST", body: { mode } });
   } catch (error) {
     state.error = messageOf(error);
+  } finally {
+    setWorking(false);
   }
   render();
 }
