@@ -11,6 +11,7 @@ const state = {
   notice: "",
   busy: false,
   showEmpty: false,
+  cardFocus: null,
   sheet: null,
 };
 
@@ -80,7 +81,7 @@ function render() {
   }
   root.append(shell());
   if (state.sheet) root.append(sheet());
-  const viewKey = `${state.authed}:${state.monthId}:${state.view}`;
+  const viewKey = `${state.authed}:${state.monthId}:${state.view}:${state.cardFocus || ""}`;
   if (state.viewKey !== viewKey) {
     state.viewKey = viewKey;
     window.scrollTo(0, 0);
@@ -142,7 +143,7 @@ function shell() {
     ]),
     el("div", { class: "months" }, data.months.map(monthChip)),
     el("main", { class: "content" }, [
-      state.error ? el("p", { class: "error" }, state.error) : "",
+      state.error && !state.sheet ? el("p", { class: "error" }, state.error) : "",
       state.notice ? el("p", { class: "note" }, state.notice) : "",
       viewBody(data),
     ]),
@@ -151,6 +152,7 @@ function shell() {
       class: state.view === id ? "active" : "",
       onclick: () => {
         state.view = id;
+        state.cardFocus = null;
         state.showEmpty = false;
         state.error = "";
         state.notice = "";
@@ -190,7 +192,7 @@ async function changeMonth(monthId) {
 function viewBody(data) {
   if (state.view === "resumo") return summary(data);
   if (state.view === "receita") return incomeView(data);
-  if (state.view === "cartoes") return sectionList(data, "card");
+  if (state.view === "cartoes") return state.cardFocus ? cardDetail(data) : cardsHome(data);
   if (state.view === "casa") return sectionList(data, "fixed");
   return sectionList(data, "extra");
 }
@@ -246,6 +248,156 @@ function jump(view, title, amount, detail) {
   ]);
 }
 
+function cardsHome(data) {
+  const cards = data.cards || [];
+  const children = [
+    el("div", { class: "section-head" }, [
+      el("p", { class: "eyebrow" }, data.month.label),
+      el("h2", {}, money(data.totals.faturaCents)),
+      el("p", { class: "muted" }, blurb("card", data.totals)),
+    ]),
+    el("p", { class: "note" }, "Toque num cartão para ver o detalhamento. Dá para editar ou excluir cada gasto."),
+  ];
+  if (!cards.length) children.push(el("p", { class: "muted" }, "Nenhum cartão ainda."));
+  for (const card of cards) {
+    children.push(cardJump(card.name, cardInvoiceCents(data.expenses, card.name), expensesForCardName(data.expenses, card.name), () => openCard(card.id)));
+  }
+  const loose = unassignedCardExpenses(data.expenses, cards);
+  if (loose.some(shownExpense)) {
+    const amount = loose
+      .filter((expense) => !fixedOnCard(expense))
+      .reduce((sum, expense) => sum + expense.amountCents, 0);
+    children.push(cardJump("Sem cartão", amount, loose, () => openCard("unassigned")));
+  }
+  children.push(el("div", { class: "stack-actions" }, [
+    el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto Cartão"),
+    el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
+  ]));
+  return el("section", {}, children);
+}
+
+function cardDetail(data) {
+  const cards = data.cards || [];
+  const card = state.cardFocus === "unassigned" ? null : cards.find((item) => item.id === state.cardFocus);
+  if (state.cardFocus !== "unassigned" && !card) {
+    state.cardFocus = null;
+    return cardsHome(data);
+  }
+  const all = card ? expensesForCardName(data.expenses, card.name) : unassignedCardExpenses(data.expenses, cards);
+  const visible = all.filter(shownExpense);
+  const hidden = all.length - visible.length;
+  const total = card
+    ? cardInvoiceCents(data.expenses, card.name)
+    : all.filter((expense) => !fixedOnCard(expense)).reduce((sum, expense) => sum + expense.amountCents, 0);
+  const children = [
+    el("button", {
+      class: "linkish back",
+      type: "button",
+      onclick: () => {
+        state.cardFocus = null;
+        state.showEmpty = false;
+        render();
+      },
+    }, "Todos os cartões"),
+    el("div", { class: "section-head" }, [
+      el("p", { class: "eyebrow" }, data.month.label),
+      el("h2", {}, card ? card.name : "Sem cartão"),
+      el("p", { class: "money inline" }, money(total)),
+      el("p", { class: "muted" }, card
+        ? "Gastos vinculados a este cartão. O que veio da casa já está na fatura e não soma de novo."
+        : "Estes gastos ainda não têm um cartão cadastrado."),
+    ]),
+  ];
+  const groups = [
+    ["Fatura prevista", visible.filter((expense) => expense.section === "card")],
+    ["Gastos do cartão", visible.filter((expense) => expense.section === "extra")],
+    ["Da casa, já na fatura", visible.filter((expense) => expense.section === "fixed")],
+  ];
+  for (const [title, rows] of groups) {
+    if (!rows.length) continue;
+    children.push(el("p", { class: "eyebrow group" }, title));
+    children.push(el("div", { class: "list" }, rows.map((expense) => expenseRow(expense, "card", { manage: true, cardExpense: true }))));
+  }
+  if (!visible.length) {
+    children.push(el("p", { class: "muted" }, card ? "Nenhum gasto neste cartão neste mês." : "Nada sem cartão neste mês."));
+  }
+  if (hidden > 0) {
+    children.push(el("button", {
+      class: "linkish",
+      type: "button",
+      onclick: () => {
+        state.showEmpty = true;
+        render();
+      },
+    }, `Mostrar ${hidden} ${hidden === 1 ? "linha sem valor" : "linhas sem valor"}`));
+  }
+  children.push(el("div", { class: "stack-actions" }, [
+    el("button", {
+      class: "primary",
+      type: "button",
+      onclick: () => openCardExpense(card ? card.name : ""),
+    }, "+ Gasto Cartão"),
+  ]));
+  return el("section", {}, children);
+}
+
+function cardJump(name, amount, expenses, onclick) {
+  const count = expenses.filter(shownExpense).length;
+  return el("button", { class: "jump", type: "button", onclick }, [
+    el("div", { class: "row-between" }, [el("span", {}, name), el("strong", {}, money(amount))]),
+    el("small", {}, count === 0 ? "Nenhum gasto neste mês" : `${count} ${count === 1 ? "gasto" : "gastos"}`),
+  ]);
+}
+
+function openCard(cardId) {
+  state.cardFocus = cardId;
+  state.showEmpty = false;
+  state.error = "";
+  render();
+}
+
+function shownExpense(expense) {
+  return state.showEmpty || expense.amountCents !== 0 || expense.source === "user";
+}
+
+function fixedOnCard(expense) {
+  return expense.section === "fixed" && (expense.onCard || expense.payment === "card");
+}
+
+function expenseBelongsToCard(expense) {
+  return expense.section === "card" || (expense.section === "extra" && expense.payment === "card") || fixedOnCard(expense);
+}
+
+function cardKey(value) {
+  const trimmed = String(value || "").trim().slice(0, 40);
+  return trimmed ? trimmed.toLocaleLowerCase("pt-BR") : "";
+}
+
+function expensesForCardName(expenses, cardName) {
+  const key = cardKey(cardName);
+  if (!key) return [];
+  return expenses.filter((expense) => expenseBelongsToCard(expense) && cardKey(expense.cardLabel) === key);
+}
+
+function cardInvoiceCents(expenses, cardName) {
+  return expensesForCardName(expenses, cardName)
+    .filter((expense) => !fixedOnCard(expense))
+    .reduce((sum, expense) => sum + expense.amountCents, 0);
+}
+
+function unassignedCardExpenses(expenses, cards) {
+  const keys = new Set(cards.map((card) => cardKey(card.name)).filter(Boolean));
+  return expenses.filter((expense) => {
+    if (!expenseBelongsToCard(expense)) return false;
+    const key = cardKey(expense.cardLabel);
+    return !key || !keys.has(key);
+  });
+}
+
+function firstCardName() {
+  return state.data?.cards?.[0]?.name || "";
+}
+
 function sectionList(data, section) {
   const totals = data.totals;
   const all = data.expenses.filter((expense) => belongs(expense, section));
@@ -269,22 +421,9 @@ function sectionList(data, section) {
   children.push(el("button", {
     class: "primary add-top",
     type: "button",
-    onclick: () => openCreate(section === "card" ? "extra" : section, section === "card" ? "card" : "pix"),
+    onclick: () => openCreate(section, "pix"),
   }, section === "fixed" ? "Adicionar gasto fixo" : "Adicionar gasto"));
-  if (section === "card") {
-    const groups = [
-      ["Fatura prevista", visible.filter((expense) => expense.section === "card")],
-      ["Extras no cartão", visible.filter((expense) => expense.section === "extra")],
-      ["Da casa, já na fatura", visible.filter((expense) => expense.section === "fixed")],
-    ];
-    for (const [title, rows] of groups) {
-      if (!rows.length) continue;
-      children.push(el("p", { class: "eyebrow group" }, title));
-      children.push(el("div", { class: "list" }, rows.map((expense) => expenseRow(expense, section))));
-    }
-  } else {
-    children.push(el("div", { class: "list" }, visible.map((expense) => expenseRow(expense, section))));
-  }
+  children.push(el("div", { class: "list" }, visible.map((expense) => expenseRow(expense, section))));
   if (!visible.length) {
     children.push(el("p", { class: "muted" }, section === "extra" ? "Nenhum extra neste mês." : "Nada com valor neste mês."));
   }
@@ -464,13 +603,14 @@ function blurb(section, totals) {
   return "Estes gastos não estavam na projeção e valem só para este mês.";
 }
 
-function expenseRow(expense, section) {
+function expenseRow(expense, section, options = {}) {
   const onInvoice = expense.section === "fixed" && expense.onCard;
+  const lockedCard = Boolean(options.cardExpense) && expense.section !== "fixed";
   const meta = [];
-  if (expense.section === "extra" && section === "card") meta.push("Extra");
+  if (expense.section === "extra" && section === "card" && !options.manage) meta.push("Extra");
   if (onInvoice && section === "card") meta.push("Gasto fixo, já incluído");
   if (expense.payment !== "card" || onInvoice) meta.push(paymentLabel(expense.payment));
-  if (expense.payment === "card" && !onInvoice) meta.push(expense.cardLabel ? `Cartão ${expense.cardLabel}` : "Cartão");
+  if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Cartão ${expense.cardLabel}` : "Cartão");
   if (expense.installment) meta.push(expense.installment);
   if (expense.paid) meta.push("Pago");
   const check = onInvoice
@@ -485,21 +625,24 @@ function expenseRow(expense, section) {
     ? el("button", {
       type: "button",
       class: `toggle${onInvoice ? " on" : ""}`,
-      onclick: () => patchExpense(expense, {
-        onCard: !expense.onCard,
-        payment: expense.onCard ? "pix" : "card",
-        cardLabel: expense.onCard ? null : (expense.cardLabel || "Nubank"),
-      }),
+      onclick: () => toggleInvoice(expense),
     }, onInvoice ? "Na fatura" : "Marcar na fatura")
     : "";
+  const edit = () => openEdit(expense, { cardExpense: lockedCard });
   return el("article", { class: `item${onInvoice && section === "card" ? " aside" : ""}` }, [
     check,
     el("div", { class: "item-copy" }, [
-      el("button", { type: "button", class: "item-main", onclick: () => openEdit(expense) }, [
+      el("button", { type: "button", class: "item-main", onclick: edit }, [
         el("strong", {}, expense.name),
         el("small", {}, meta.filter(Boolean).join(" · ")),
       ]),
       invoiceToggle,
+      options.manage
+        ? el("div", { class: "item-actions" }, [
+          el("button", { type: "button", class: "linkish", onclick: edit }, "Editar"),
+          el("button", { type: "button", class: "linkish danger", onclick: () => deleteExpense(expense) }, "Excluir"),
+        ])
+        : "",
       onInvoice && section === "card" ? el("span", { class: "badge" }, "Já contabilizado, não soma de novo") : "",
       expense.section === "extra" && expense.payment !== "card" ? el("span", { class: "badge pix" }, paymentLabel(expense.payment)) : "",
     ]),
@@ -510,13 +653,14 @@ function expenseRow(expense, section) {
 function openCreate(section, payment) {
   state.sheet = {
     mode: "create",
+    cardExpense: false,
     id: "",
     name: "",
     amount: "",
     section,
     payment,
     onCard: false,
-    cardLabel: section === "card" || payment === "card" ? "Nubank" : "",
+    cardLabel: payment === "card" ? firstCardName() : "",
     note: "",
     installment: "",
     installmentCount: "1",
@@ -529,9 +673,45 @@ function openCreate(section, payment) {
   render();
 }
 
-function openEdit(expense) {
+function openCardExpense(cardName = "") {
+  const cards = state.data?.cards ?? [];
+  if (!cards.length) {
+    state.error = "Adicione um cartão antes de lançar o gasto.";
+    openCreateCard();
+    return;
+  }
+  const selected = cards.some((card) => card.name === cardName) ? cardName : (cards.length === 1 ? cards[0].name : "");
+  state.sheet = {
+    mode: "create",
+    cardExpense: true,
+    id: "",
+    name: "",
+    amount: "",
+    section: "extra",
+    payment: "card",
+    onCard: false,
+    cardLabel: selected,
+    note: "",
+    installment: "",
+    installmentCount: "1",
+    installmentsPaid: "0",
+    amountMode: "installment",
+    paid: false,
+    source: "user",
+  };
+  state.error = "";
+  render();
+}
+
+function openCreateCard() {
+  state.sheet = { mode: "card", name: "" };
+  render();
+}
+
+function openEdit(expense, options = {}) {
   state.sheet = {
     mode: "edit",
+    cardExpense: Boolean(options.cardExpense),
     id: expense.id,
     name: expense.name,
     amount: centsToInput(expense.amountCents),
@@ -546,6 +726,20 @@ function openEdit(expense) {
   };
   state.error = "";
   render();
+}
+
+function toggleInvoice(expense) {
+  if (!expense.onCard) {
+    const cardLabel = expense.cardLabel || firstCardName();
+    if (!cardLabel) {
+      state.error = "Adicione um cartão antes de marcar o gasto na fatura.";
+      render();
+      return;
+    }
+    patchExpense(expense, { onCard: true, payment: "card", cardLabel });
+    return;
+  }
+  patchExpense(expense, { onCard: false, payment: "pix", cardLabel: null });
 }
 
 function editMonthIncome(month) {
@@ -579,6 +773,7 @@ function sheet() {
   const draft = state.sheet;
   const panel = el("form", { class: "sheet" }, [el("div", { class: "handle" })]);
   panel.addEventListener("submit", saveSheet);
+  if (state.error) panel.append(el("p", { class: "error" }, state.error));
   if (draft.mode === "month-income") {
     panel.append(
       el("h2", {}, draft.label),
@@ -620,45 +815,61 @@ function sheet() {
         el("button", { class: "primary", type: "submit" }, "Trocar"),
       ]),
     );
-  } else {
+  } else if (draft.mode === "card") {
     panel.append(
-      el("h2", {}, draft.mode === "create" ? "Novo gasto" : "Editar gasto"),
+      el("h2", {}, "Novo cartão"),
+      field("Nome", "name", draft.name, "text", "Nubank, Neon ou outro"),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
+        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : "Salvar"),
+      ]),
+    );
+  } else {
+    const needsCard = draft.cardExpense || draft.section === "card" || draft.payment === "card" || draft.onCard;
+    panel.append(
+      el("h2", {}, draft.cardExpense && draft.mode === "create" ? "Gasto no cartão" : draft.mode === "create" ? "Novo gasto" : "Editar gasto"),
       field("Nome", "name", draft.name, "text"),
       field(amountLabel(draft), "amount", draft.amount, "decimal"),
-      el("div", { class: "field" }, [
-        el("label", {}, "Tipo"),
-        segmented("section", [
-          ["extra", "Extra"],
-          ["fixed", "Fixo"],
-          ["card", "Fatura"],
-        ], draft.section),
-      ]),
-      draft.section === "fixed"
+      draft.cardExpense
+        ? ""
+        : el("div", { class: "field" }, [
+          el("label", {}, "Tipo"),
+          segmented("section", [
+            ["extra", "Extra"],
+            ["fixed", "Fixo"],
+            ["card", "Fatura"],
+          ], draft.section),
+        ]),
+      draft.cardExpense
         ? el("div", { class: "field" }, [
-          el("button", {
-            type: "button",
-            class: `switch${draft.onCard ? " on" : ""}`,
-            onclick: () => {
-              draft.onCard = !draft.onCard;
-              draft.payment = draft.onCard ? "card" : "pix";
-              render();
-            },
-          }, [draft.onCard ? "Na fatura do cartão" : "Ainda não foi para o cartão", draft.onCard ? "Sim" : "Não"]),
-          el("small", { class: "muted" }, "Continua nos gastos fixos. O total a pagar deixa de somar este valor outra vez."),
+          el("label", {}, "Como foi pago"),
+          el("div", { class: "choice" }, [el("div", { class: "static" }, "Cartão")]),
         ])
-        : draft.section === "extra"
+        : draft.section === "fixed"
           ? el("div", { class: "field" }, [
-            el("label", {}, "Como foi pago"),
-            segmented("payment", [["pix", "Pix"], ["debit", "Débito"], ["cash", "Dinheiro"], ["card", "Cartão"]], draft.payment),
+            el("button", {
+              type: "button",
+              class: `switch${draft.onCard ? " on" : ""}`,
+              onclick: () => {
+                draft.onCard = !draft.onCard;
+                draft.payment = draft.onCard ? "card" : "pix";
+                if (draft.onCard && !draft.cardLabel) draft.cardLabel = firstCardName();
+                render();
+              },
+            }, [draft.onCard ? "Na fatura do cartão" : "Ainda não foi para o cartão", draft.onCard ? "Sim" : "Não"]),
+            el("small", { class: "muted" }, "Continua nos gastos fixos. O total a pagar deixa de somar este valor outra vez."),
           ])
-          : "",
+          : draft.section === "extra"
+            ? el("div", { class: "field" }, [
+              el("label", {}, "Como foi pago"),
+              segmented("payment", [["pix", "Pix"], ["debit", "Débito"], ["cash", "Dinheiro"], ["card", "Cartão"]], draft.payment),
+            ])
+            : "",
       cardPurchaseFields(draft),
       draft.mode === "edit" && (draft.section === "card" || draft.section === "extra")
         ? field("Parcela", "installment", draft.installment, "text", "3/10, se houver")
         : "",
-      draft.section === "card" || draft.payment === "card" || draft.onCard
-        ? field("Cartão", "cardLabel", draft.cardLabel, "text", "Nubank, Neon ou outro")
-        : "",
+      needsCard ? cardSelect(draft) : "",
       field("Observação", "note", draft.note, "text"),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
@@ -673,6 +884,24 @@ function sheet() {
     if (event.target === overlay) closeSheet();
   } }, [panel]);
   return overlay;
+}
+
+function cardSelect(draft) {
+  const cards = state.data?.cards ?? [];
+  const required = (draft.section === "extra" && (draft.payment === "card" || draft.cardExpense))
+    || (draft.section === "fixed" && draft.onCard)
+    || (draft.cardExpense && draft.mode === "create");
+  const current = draft.cardLabel || "";
+  const known = cards.some((card) => card.name === current);
+  const select = el("select", { id: "cardLabel", name: "cardLabel" });
+  if (!required || !current) select.append(el("option", { value: "" }, required ? "Escolha o cartão" : "Sem cartão"));
+  if (current && !known) select.append(el("option", { value: current }, current));
+  for (const card of cards) select.append(el("option", { value: card.name }, card.name));
+  select.value = current;
+  select.addEventListener("change", () => {
+    state.sheet.cardLabel = select.value;
+  });
+  return el("div", { class: "field" }, [el("label", { for: "cardLabel" }, "Cartão"), select]);
 }
 
 function field(labelText, key, value, mode, placeholder = "") {
@@ -705,7 +934,8 @@ function segmented(key, options, current) {
         if (value === "extra") state.sheet.onCard = false;
         if (value === "fixed") state.sheet.payment = state.sheet.onCard ? "card" : "pix";
       }
-      if (key === "payment" && value === "card" && !state.sheet.cardLabel) state.sheet.cardLabel = "Nubank";
+      if (key === "payment" && value === "card" && !state.sheet.cardLabel) state.sheet.cardLabel = firstCardName();
+      if (key === "section" && value === "card" && !state.sheet.cardLabel) state.sheet.cardLabel = firstCardName();
       render();
     },
   }, label)));
@@ -731,10 +961,24 @@ async function saveSheet(event) {
       });
     } else if (draft.mode === "pin") {
       await request("/api/pin", { method: "POST", body: { currentPin: draft.current, nextPin: draft.next } });
+    } else if (draft.mode === "card") {
+      if (!draft.name.trim()) throw new Error("Dê um nome ao cartão.");
+      const data = await request("/api/cards", { method: "POST", body: { name: draft.name } });
+      state.data.cards = data.cards;
     } else {
+      if (draft.cardExpense && draft.mode === "create") {
+        draft.section = "extra";
+        draft.payment = "card";
+        draft.onCard = false;
+      } else if (draft.cardExpense && draft.section !== "fixed") {
+        draft.payment = "card";
+        draft.onCard = false;
+      }
       const amountCents = parseMoney(draft.amount || "0");
       if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
       if (amountCents === null) throw new Error("Informe o valor. Exemplo: 75,90");
+      const needsCard = (draft.section === "extra" && draft.payment === "card") || (draft.section === "fixed" && draft.onCard);
+      if (needsCard && !String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão deste gasto.");
       const onCardPurchase = draft.mode === "create" && (draft.section === "card" || draft.payment === "card");
       const totalCount = Number(draft.installmentCount);
       const paidCount = Number(draft.installmentsPaid);
@@ -796,19 +1040,23 @@ async function patchExpense(expense, patch) {
   render();
 }
 
-async function removeExpense() {
-  const draft = state.sheet;
-  if (!window.confirm(`Excluir “${draft.name}” deste mês?`)) return;
+async function deleteExpense(expense) {
+  if (!window.confirm(`Excluir “${expense.name}” deste mês?`)) return;
   state.busy = true;
+  state.error = "";
   try {
-    state.data = await request(`/api/expenses/${draft.id}`, { method: "DELETE" });
-    state.sheet = null;
+    state.data = await request(`/api/expenses/${expense.id}`, { method: "DELETE" });
+    if (state.sheet?.id === expense.id) state.sheet = null;
   } catch (error) {
     state.error = messageOf(error);
   } finally {
     state.busy = false;
     render();
   }
+}
+
+async function removeExpense() {
+  await deleteExpense(state.sheet);
 }
 
 async function copyPrevious() {

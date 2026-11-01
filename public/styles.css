@@ -240,6 +240,18 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .section-head h2 { font-size: 28px; margin: 0; }
 
+.money.inline {
+  font-family: Fraunces, Georgia, serif;
+  font-size: 32px;
+  margin: 4px 0;
+  line-height: 1;
+}
+
+.stack-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+
+.stack-actions .primary,
+.stack-actions .secondary { width: 100%; margin-top: 0; }
+
 .list { display: flex; flex-direction: column; gap: 8px; }
 
 .item {
@@ -413,7 +425,17 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   font-weight: 600;
 }
 
-.choice button.on, .switch.on { background: var(--ink); color: white; border-color: var(--ink); }
+.choice button.on, .switch.on, .choice .static { background: var(--ink); color: white; border-color: var(--ink); }
+
+.choice .static {
+  flex: 1;
+  min-height: 48px;
+  border-radius: 14px;
+  border: 1px solid var(--ink);
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+}
 
 .switch { width: 100%; justify-content: space-between; padding: 0 14px; }
 
@@ -429,6 +451,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   min-height: 44px;
   padding: 0;
 }
+
+.linkish.danger { color: var(--bad); }
+
+.linkish.back { margin-bottom: 8px; }
+
+.item-actions { display: flex; gap: 16px; padding: 0 8px 4px; }
+
+.item-actions .linkish { min-height: 32px; font-size: 14px; }
 
 .ghost-list { margin-top: 8px; }
 

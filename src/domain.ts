@@ -213,6 +213,65 @@ export function carryForward(expense: Expense): Expense | null {
   return { ...expense, id: "", paid: false, installment };
 }
 
+export function parseCardName(value: unknown): { ok: true; name: string } | { ok: false; error: string } {
+  if (typeof value !== "string") return { ok: false, error: "Dê um nome ao cartão." };
+  const name = value.trim().replace(/\s+/g, " ").slice(0, 40);
+  if (!name) return { ok: false, error: "Dê um nome ao cartão." };
+  return { ok: true, name };
+}
+
+export function cardKey(value: string | null | undefined): string | null {
+  const cleaned = cleanCardLabel(value ?? null);
+  return cleaned ? cleaned.toLocaleLowerCase("pt-BR") : null;
+}
+
+export function expenseBelongsToCard(expense: Pick<Expense, "section" | "payment" | "onCard">): boolean {
+  return expense.section === "card" || (expense.section === "extra" && expense.payment === "card") || isFixedOnCard(expense);
+}
+
+export function cardLinkRequired(expense: Pick<Expense, "section" | "payment" | "onCard">): boolean {
+  if (expense.section === "extra" && expense.payment === "card") return true;
+  if (isFixedOnCard(expense)) return true;
+  return false;
+}
+
+export function resolveCardLabel(
+  cards: readonly { name: string }[],
+  cardLabel: string | null,
+  required: boolean,
+): { ok: true; cardLabel: string | null } | { ok: false; error: string } {
+  const key = cardKey(cardLabel);
+  if (!key) {
+    return required
+      ? { ok: false, error: "Escolha o cartão deste gasto." }
+      : { ok: true, cardLabel: null };
+  }
+  const match = cards.find((card) => cardKey(card.name) === key);
+  if (!match) return { ok: false, error: "Esse cartão não está cadastrado. Adicione o cartão antes." };
+  return { ok: true, cardLabel: match.name };
+}
+
+export function expensesForCard(expenses: readonly Expense[], cardName: string): Expense[] {
+  const key = cardKey(cardName);
+  if (!key) return [];
+  return expenses.filter((expense) => expenseBelongsToCard(expense) && cardKey(expense.cardLabel) === key);
+}
+
+export function cardInvoiceCents(expenses: readonly Expense[], cardName: string): number {
+  return expensesForCard(expenses, cardName)
+    .filter((expense) => !isFixedOnCard(expense))
+    .reduce((sum, expense) => sum + expense.amountCents, 0);
+}
+
+export function unassignedCardExpenses(expenses: readonly Expense[], cards: readonly { name: string }[]): Expense[] {
+  const keys = new Set(cards.map((card) => cardKey(card.name)).filter((key): key is string => key !== null));
+  return expenses.filter((expense) => {
+    if (!expenseBelongsToCard(expense)) return false;
+    const key = cardKey(expense.cardLabel);
+    return key === null || !keys.has(key);
+  });
+}
+
 function cleanCardLabel(value: string | null): string | null {
   if (!value) return null;
   const trimmed = value.trim().slice(0, 40);
