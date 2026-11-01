@@ -436,7 +436,18 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   font-weight: 600;
 }
 
-.choice button.on, .switch.on, .choice .static { background: var(--ink); color: white; border-color: var(--ink); }
+.choice button.on, .switch.on, .choice .static, .month-picks button.on { background: var(--ink); color: white; border-color: var(--ink); }
+
+.month-picks { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.month-picks button {
+  border: 1px solid var(--line);
+  background: white;
+  border-radius: 999px;
+  min-height: 40px;
+  padding: 0 12px;
+  font-weight: 600;
+}
 
 .choice .static {
   flex: 1;

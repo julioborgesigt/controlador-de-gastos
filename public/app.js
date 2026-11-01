@@ -847,15 +847,24 @@ function incomeView(data) {
       el("span", { class: "amount" }, money(monthIncomeTotal(data, month))),
     ]))),
     el("h2", { class: "subhead" }, "Extras do ano"),
-    el("p", { class: "note" }, "Imposto de renda, décimo terceiro, férias e outros entram só no mês previsto, somados à receita daquele mês."),
-    editable() ? el("button", { class: "primary add-top", type: "button", onclick: openIncomeExtra }, "Adicionar receita extra") : "",
+    el("p", { class: "note" }, "Marque um ou mais meses. O mesmo valor entra em cada um e soma na receita daquele mês."),
+    editable() ? el("button", { class: "primary add-top", type: "button", onclick: () => openIncomeExtra() }, "Adicionar receita extra") : "",
     el("div", { class: "list" }, extras.map((extra) => el("article", { class: "item" }, [
       el("div", { class: "item-copy" }, [
-        el("strong", {}, extra.name),
-        el("small", {}, monthName(extra.monthId)),
+        editable()
+          ? el("button", { type: "button", class: "item-main", onclick: () => openEditIncomeExtra(extra) }, [
+            el("strong", {}, extra.name),
+            el("small", {}, monthName(extra.monthId)),
+          ])
+          : el("div", { class: "item-main" }, [el("strong", {}, extra.name), el("small", {}, monthName(extra.monthId))]),
+        editable()
+          ? el("div", { class: "item-actions" }, [
+            el("button", { class: "linkish", type: "button", onclick: () => openEditIncomeExtra(extra) }, "Editar"),
+            el("button", { class: "linkish danger", type: "button", onclick: () => removeIncomeExtra(extra) }, "Excluir"),
+          ])
+          : "",
       ]),
       el("span", { class: "amount" }, money(extra.amountCents)),
-      editable() ? el("button", { class: "quiet", type: "button", onclick: () => removeIncomeExtra(extra) }, "Excluir") : "",
     ]))),
   ]);
 }
@@ -911,7 +920,60 @@ function monthSelect(selected) {
   select.addEventListener("change", () => {
     state.sheet.monthId = select.value;
   });
-  return el("div", { class: "field" }, [el("label", { for: "extra-month" }, "Mês previsto"), select]);
+  return el("div", { class: "field" }, [el("label", { for: "extra-month" }, "Mês"), select]);
+}
+
+function monthChecks() {
+  const selected = new Set(state.sheet.monthIds || []);
+  return el("div", { class: "field" }, [
+    el("div", { class: "row-between" }, [
+      el("label", {}, "Meses"),
+      el("button", {
+        class: "linkish",
+        type: "button",
+        onclick: () => {
+          const all = state.data.months.map((month) => month.id);
+          state.sheet.monthIds = selected.size === all.length ? [] : all;
+          render();
+        },
+      }, selected.size === state.data.months.length ? "Limpar" : "Todos"),
+    ]),
+    el("div", { class: "month-picks" }, state.data.months.map((month) => el("button", {
+      type: "button",
+      class: selected.has(month.id) ? "on" : "",
+      onclick: () => {
+        const next = new Set(state.sheet.monthIds || []);
+        if (next.has(month.id)) next.delete(month.id);
+        else next.add(month.id);
+        state.sheet.monthIds = [...next];
+        render();
+      },
+    }, shortMonth(month)))),
+  ]);
+}
+
+function shortMonth(month) {
+  const [year, monthNumber] = month.id.split("-");
+  const names = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+  return `${names[Number(monthNumber) - 1]} ${year.slice(2)}`;
+}
+
+function extrasForMonth(monthId) {
+  return (state.data?.incomeExtras || [])
+    .filter((extra) => extra.monthId === monthId)
+    .map((extra) => ({ id: extra.id, name: extra.name, amount: centsToInput(extra.amountCents) }));
+}
+
+function extraAmountField(extra, index) {
+  const input = el("input", {
+    id: `extra-${extra.id}`,
+    inputmode: "decimal",
+    value: extra.amount,
+  });
+  input.addEventListener("input", () => {
+    state.sheet.extras[index].amount = input.value;
+  });
+  return el("div", { class: "field" }, [el("label", { for: `extra-${extra.id}` }, extra.name), input]);
 }
 
 async function saveBase(scope) {
@@ -1133,18 +1195,35 @@ function editMonthIncome(month) {
     monthId: month.id,
     label: month.label,
     amount: centsToInput(month.incomeCents),
+    extras: extrasForMonth(month.id),
   };
   render();
 }
 
-function openIncomeExtra() {
+function openIncomeExtra(monthIds = [state.monthId]) {
   state.sheet = {
     mode: "income-extra",
+    id: "",
     kind: "ir",
     name: "",
     amount: "",
     monthId: state.monthId,
+    monthIds,
   };
+  render();
+}
+
+function openEditIncomeExtra(extra) {
+  state.sheet = {
+    mode: "income-extra",
+    id: extra.id,
+    kind: extra.kind,
+    name: extra.kind === "other" ? extra.name : "",
+    amount: centsToInput(extra.amountCents),
+    monthId: extra.monthId,
+    monthIds: [extra.monthId],
+  };
+  state.error = "";
   render();
 }
 
@@ -1202,7 +1281,18 @@ function sheet() {
     panel.append(
       el("h2", {}, draft.label),
       field("Receita base deste mês", "amount", draft.amount, "decimal"),
-      el("p", { class: "muted" }, "Este mês deixa de seguir a receita base. Os extras previstos continuam somados."),
+      el("p", { class: "muted" }, "Este mês deixa de seguir a receita base. Os extras abaixo continuam somados."),
+      el("p", { class: "eyebrow group" }, "Extras deste mês"),
+      draft.extras?.length
+        ? el("div", {}, draft.extras.map((extra, index) => extraAmountField(extra, index)))
+        : el("p", { class: "muted" }, "Nenhum extra neste mês."),
+      editable()
+        ? el("button", {
+          class: "linkish",
+          type: "button",
+          onclick: () => openIncomeExtra([draft.monthId]),
+        }, "Adicionar extra neste mês")
+        : "",
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
         el("button", { class: "primary", type: "submit" }, "Salvar"),
@@ -1211,7 +1301,7 @@ function sheet() {
     );
   } else if (draft.mode === "income-extra") {
     panel.append(
-      el("h2", {}, "Receita extra"),
+      el("h2", {}, draft.id ? "Editar receita extra" : "Receita extra"),
       el("div", { class: "field" }, [
         el("label", {}, "Tipo"),
         segmented("kind", [
@@ -1223,10 +1313,11 @@ function sheet() {
       ]),
       draft.kind === "other" ? field("Nome", "name", draft.name, "text", "Bônus, PLR...") : "",
       field("Valor", "amount", draft.amount, "decimal"),
-      monthSelect(draft.monthId),
+      draft.id ? monthSelect(draft.monthId) : monthChecks(),
+      draft.id ? "" : el("p", { class: "muted" }, "O mesmo valor entra em cada mês marcado."),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
-        el("button", { class: "primary", type: "submit" }, "Adicionar"),
+        el("button", { class: "primary", type: "submit" }, draft.id ? "Salvar" : "Adicionar"),
       ]),
     );
   } else if (draft.mode === "password") {
@@ -1398,17 +1489,40 @@ async function saveSheet(event) {
     if (draft.mode === "month-income") {
       const incomeCents = parseMoney(draft.amount);
       if (incomeCents === null) throw new Error("Informe a receita. Exemplo: 9800,00");
+      const extras = [];
+      for (const extra of draft.extras || []) {
+        const amountCents = parseMoney(extra.amount || "");
+        if (amountCents === null || amountCents <= 0) throw new Error(`Informe o valor de ${extra.name}. Exemplo: 1200,00`);
+        extras.push({ id: extra.id, amountCents });
+      }
       setWorking(true, "Salvando...");
       await request(`/api/months/${draft.monthId}`, { method: "PATCH", body: { incomeCents } });
+      for (const extra of extras) {
+        state.data = await request(`/api/income/extras/${extra.id}`, {
+          method: "PATCH",
+          body: { amountCents: extra.amountCents, focusMonthId: state.monthId },
+        });
+      }
       await loadMonth(state.monthId);
     } else if (draft.mode === "income-extra") {
       const amountCents = parseMoney(draft.amount || "");
       if (amountCents === null || amountCents <= 0) throw new Error("Informe o valor da receita extra.");
+      if (draft.kind === "other" && !String(draft.name || "").trim()) throw new Error("Dê um nome para essa receita.");
+      if (!draft.id && !(draft.monthIds || []).length) throw new Error("Escolha ao menos um mês.");
       setWorking(true, "Salvando...");
-      state.data = await request("/api/income/extras", {
-        method: "POST",
-        body: { kind: draft.kind, name: draft.name, amountCents, monthId: draft.monthId },
-      });
+      if (draft.id) {
+        state.data = await request(`/api/income/extras/${draft.id}`, {
+          method: "PATCH",
+          body: { kind: draft.kind, name: draft.name, amountCents, monthId: draft.monthId, focusMonthId: state.monthId },
+        });
+      } else {
+        const count = draft.monthIds.length;
+        state.data = await request("/api/income/extras", {
+          method: "POST",
+          body: { kind: draft.kind, name: draft.name, amountCents, monthIds: draft.monthIds, monthId: state.monthId },
+        });
+        state.notice = count > 1 ? `Receita extra lançada em ${count} meses.` : "";
+      }
     } else if (draft.mode === "password") {
       if (draft.next !== draft.confirmation) throw new Error("A confirmação da senha não confere.");
       setWorking(true, "Salvando...");
