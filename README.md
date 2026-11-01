@@ -6,6 +6,8 @@ Um único app de celular para o orçamento de novembro de 2026 a outubro de 2027
 - Dá para nomear um gasto extra e dizer se foi Pix, débito, dinheiro ou cartão.
 - Uma compra parcelada, no formato `3/10`, pode ser trazida para o mês seguinte. A parcela avança sozinha e para quando chega na última.
 - O botão **Trazer lançamentos do mês anterior** repete os gastos fixos que você criou e as parcelas que ainda não acabaram. As linhas da planilha não são copiadas, porque cada mês já tem o seu valor.
+- Ao lançar um gasto no cartão, informe quantas parcelas são, quantas já foram pagas e se o valor é da parcela ou da compra inteira. As parcelas que faltam entram neste mês e nos seguintes.
+- Em **Receita** dá para definir uma receita base, replicar nos meses e ajustar um mês específico. Imposto de renda, décimo terceiro, férias e outros extras entram só no mês previsto.
 
 ## Publicar
 
