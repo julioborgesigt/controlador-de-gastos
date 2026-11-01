@@ -1,38 +1,25 @@
 # Controle de gastos
 
-Aplicativo de celular para o orçamento familiar de novembro de 2026 a outubro de 2027. Os números iniciais vêm da planilha de projeção de faturas. Dá para lançar gastos extras, marcar Pix ou cartão e indicar quando um gasto fixo da casa já entrou na fatura.
+Um único app de celular para o orçamento de novembro de 2026 a outubro de 2027. Os números da planilha já vêm carregados. O que você lançar fica no banco da Cloudflare, protegido por um PIN.
 
-O gasto marcado continua no total de gastos fixos. Ele deixa de ser somado outra vez no que falta pagar, porque já está dentro do cartão.
+- A casa continua no total de gastos fixos mesmo quando o gasto foi para o cartão. O app avisa que aquele valor já está na fatura e não soma de novo.
+- Dá para nomear um gasto extra e dizer se foi Pix, débito, dinheiro ou cartão.
+- Uma compra parcelada, no formato `3/10`, pode ser trazida para o mês seguinte. A parcela avança sozinha e para quando chega na última.
+- O botão **Trazer lançamentos do mês anterior** repete os gastos fixos que você criou e as parcelas que ainda não acabaram. As linhas da planilha não são copiadas, porque cada mês já tem o seu valor.
 
-## Como usar
+## Publicar
 
-Na primeira abertura, crie um PIN de 4 a 8 dígitos. Ele protege a receita, as faturas e os lançamentos.
+O GitHub publica a branch `main` no Worker `controlador-de-gastos` quando estes segredos existem no repositório:
 
-- **Resumo** mostra o que falta pagar, a receita e o saldo do mês.
-- **Cartões** reúne a fatura prevista, os extras lançados no cartão e os gastos da casa que você marcou como já incluídos.
-- **Casa** mantém o indicador de gastos fixos. O botão **Marcar na fatura** avisa que aquele valor já está no cartão.
-- **Extras** serve para nomear um gasto que não estava na planilha e dizer se foi Pix ou cartão.
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN`
 
-Para instalar na tela inicial do celular, abra o endereço publicado no navegador e use “Adicionar à tela de início”.
+O token precisa da permissão **Edit Cloudflare Workers** e de **Account → D1 → Edit**. Na primeira publicação a Cloudflare cria o banco. O endereço fica `https://controlador-de-gastos.<seu-subdominio>.workers.dev`.
 
-## Publicar no Cloudflare
-
-O GitHub publica esta branch sozinho quando os segredos `CLOUDFLARE_API_TOKEN` e `CLOUDFLARE_ACCOUNT_ID` existem no repositório. O banco D1 é criado na primeira publicação. O endereço fica:
-
-`https://controlador-de-gastos-planilha.<seu-subdominio>.workers.dev`
-
-Abra no celular e crie o PIN. Na primeira visita o app cria as tabelas e carrega a planilha.
-
-Para rodar neste computador:
+Para ver neste computador:
 
 ```bash
+npm install
+npm test
 npm run dev
 ```
-
-Se esquecer o PIN, apague o segredo e as sessões e crie outro na próxima visita:
-
-```bash
-npx wrangler d1 execute controlador-de-gastos-planilha --remote --command "DELETE FROM settings WHERE key IN ('pin_hash','pin_salt','login_failures'); DELETE FROM sessions;"
-```
-
-O repositório está público e inclui os valores da planilha. Se esses números não devem ficar visíveis no GitHub, mude o repositório para privado.

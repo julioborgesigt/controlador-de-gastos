@@ -13,8 +13,9 @@ import {
   sessionExpiry,
   sha256,
 } from "./auth.ts";
-import { countsTowardPayment, normalizeExpense, type Payment, type Section } from "./domain.ts";
+import { countsTowardPayment, normalizeExpense, parseInstallment, type Payment, type Section } from "./domain.ts";
 import {
+  copyFromPreviousMonth,
   ensureReady,
   getExpense,
   getMonth,
@@ -140,6 +141,15 @@ app.patch("/api/months/:id", async (c) => {
   return c.json(await monthPayload(c.env.DB, monthId));
 });
 
+app.post("/api/months/:id/copy", async (c) => {
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  const monthId = c.req.param("id");
+  if (!(await getMonth(c.env.DB, monthId))) return c.json({ error: "Mês não encontrado." }, 404);
+  const copied = await copyFromPreviousMonth(c.env.DB, monthId);
+  const payload = await monthPayload(c.env.DB, monthId);
+  return c.json({ copied, ...payload });
+});
+
 app.post("/api/months/:id/settle", async (c) => {
   if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
   const monthId = c.req.param("id");
@@ -179,8 +189,8 @@ app.post("/api/expenses", async (c) => {
   const id = crypto.randomUUID();
   await c.env.DB.prepare(
     `INSERT INTO expenses
-      (id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, sort_order, source, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?)`,
+      (id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?)`,
   )
     .bind(
       id,
@@ -193,6 +203,7 @@ app.post("/api/expenses", async (c) => {
       parsed.value.cardLabel,
       parsed.value.paid ? 1 : 0,
       parsed.value.note,
+      parsed.value.installment,
       sort?.next ?? 1000,
       new Date().toISOString(),
     )
@@ -213,12 +224,13 @@ app.patch("/api/expenses/:id", async (c) => {
     onCard: body.onCard ?? current.onCard,
     cardLabel: body.cardLabel === undefined ? current.cardLabel : body.cardLabel,
     note: body.note === undefined ? current.note : body.note,
+    installment: body.installment === undefined ? current.installment : body.installment,
     paid: body.paid ?? current.paid,
   });
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   await c.env.DB.prepare(
     `UPDATE expenses
-     SET name = ?, section = ?, amount_cents = ?, payment = ?, on_card = ?, card_label = ?, paid = ?, note = ?
+     SET name = ?, section = ?, amount_cents = ?, payment = ?, on_card = ?, card_label = ?, paid = ?, note = ?, installment = ?
      WHERE id = ?`,
   )
     .bind(
@@ -230,6 +242,7 @@ app.patch("/api/expenses/:id", async (c) => {
       parsed.value.cardLabel,
       parsed.value.paid ? 1 : 0,
       parsed.value.note,
+      parsed.value.installment,
       current.id,
     )
     .run();
@@ -270,6 +283,7 @@ type ExpenseDraft = {
   onCard: boolean;
   cardLabel: string | null;
   note: string | null;
+  installment: string | null;
   paid: boolean;
 };
 
@@ -282,6 +296,8 @@ function parseExpenseBody(body: JsonBody): { ok: true; value: ExpenseDraft } | {
   }
   if (!isCents(body.amountCents)) return { ok: false, error: "Informe um valor válido." };
   const note = typeof body.note === "string" ? body.note.trim().slice(0, 300) : "";
+  const installment = parseInstallment(body.installment);
+  if (!installment.ok) return installment;
   const normalized = normalizeExpense({
     section: body.section,
     payment: body.payment,
@@ -295,6 +311,7 @@ function parseExpenseBody(body: JsonBody): { ok: true; value: ExpenseDraft } | {
       name: body.name.trim(),
       amountCents: body.amountCents,
       note: note.length > 0 ? note : null,
+      installment: installment.value,
       paid,
       ...normalized,
     },
@@ -306,7 +323,7 @@ function isSection(value: unknown): value is Section {
 }
 
 function isPayment(value: unknown): value is Payment {
-  return value === "pix" || value === "card";
+  return value === "pix" || value === "card" || value === "debit" || value === "cash";
 }
 
 function isCents(value: unknown): value is number {
@@ -369,6 +386,7 @@ type JsonBody = Record<string, unknown> & {
   onCard?: unknown;
   cardLabel?: unknown;
   note?: unknown;
+  installment?: unknown;
   paid?: unknown;
 };
 

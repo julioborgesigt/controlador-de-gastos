@@ -1,5 +1,5 @@
 export type Section = "card" | "fixed" | "extra";
-export type Payment = "pix" | "card";
+export type Payment = "pix" | "card" | "debit" | "cash";
 
 export type Expense = {
   id: string;
@@ -12,6 +12,7 @@ export type Expense = {
   cardLabel: string | null;
   paid: boolean;
   note: string | null;
+  installment: string | null;
   sortOrder: number;
   source: "sheet" | "user";
 };
@@ -90,7 +91,8 @@ export function normalizeExpense(input: {
     return { section: "card", payment: "card", onCard: false, cardLabel };
   }
   if (input.section === "extra") {
-    const payment: Payment = input.payment === "card" ? "card" : "pix";
+    const payment: Payment =
+      input.payment === "card" || input.payment === "debit" || input.payment === "cash" ? input.payment : "pix";
     return {
       section: "extra",
       payment,
@@ -105,6 +107,39 @@ export function normalizeExpense(input: {
     onCard,
     cardLabel: onCard ? cardLabel : null,
   };
+}
+
+export function parseInstallment(value: unknown): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (value === undefined || value === null || value === "") return { ok: true, value: null };
+  if (typeof value !== "string") return { ok: false, error: "Parcela inválida." };
+  const text = value.trim();
+  if (!text) return { ok: true, value: null };
+  const match = /^(\d{1,3})\/(\d{1,3})$/.exec(text);
+  if (!match || Number(match[1]) < 1 || Number(match[1]) > Number(match[2])) {
+    return { ok: false, error: "Use a parcela no formato 3/10." };
+  }
+  return { ok: true, value: `${Number(match[1])}/${Number(match[2])}` };
+}
+
+export function previousMonthId(monthId: string): string | null {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthId);
+  if (!match) return null;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 2, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+export function carryForward(expense: Expense): Expense | null {
+  if (expense.source !== "user" || expense.amountCents === 0) return null;
+  if (expense.section !== "fixed" && !expense.installment) return null;
+  let installment = expense.installment;
+  if (installment && expense.section !== "fixed") {
+    const parsed = parseInstallment(installment);
+    if (!parsed.ok || !parsed.value) return null;
+    const [current, total] = parsed.value.split("/").map(Number);
+    if (current >= total) return null;
+    installment = `${current + 1}/${total}`;
+  }
+  return { ...expense, id: "", paid: false, installment };
 }
 
 function cleanCardLabel(value: string | null): string | null {

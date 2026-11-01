@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "controlador-de-gastos-planilha",
+  "name": "controlador-de-gastos",
   "main": "src/index.ts",
   // Newest date supported by the installed workerd binary (Wrangler 4.156.0).
   "compatibility_date": "2026-10-30",
@@ -24,7 +24,7 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "controlador-de-gastos-planilha",
+      "database_name": "controlador-de-gastos",
       "migrations_dir": "migrations"
     }
   ]

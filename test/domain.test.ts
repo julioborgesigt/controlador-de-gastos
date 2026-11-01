@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { clearFailures, isValidPin, lockedMessage, nextFailure } from "../src/auth.ts";
-import { computeTotals, isFixedOnCard, normalizeExpense, type Expense } from "../src/domain.ts";
+import { carryForward, computeTotals, isFixedOnCard, normalizeExpense, type Expense } from "../src/domain.ts";
 import seedJson from "../src/seed-data.json" with { type: "json" };
 
 type Seed = {
@@ -48,6 +48,7 @@ function expensesFor(monthIndex: number): Expense[] {
     cardLabel: item.cardLabel,
     paid: month.settled === 1 && (item.amounts[monthIndex] ?? 0) !== 0,
     note: null,
+    installment: null,
     sortOrder: item.sortOrder,
     source: "sheet",
   }));
@@ -107,6 +108,7 @@ test("gasto extra no cartão aumenta a fatura e o extra no Pix fica fora dela", 
       cardLabel: "Nubank",
       paid: false,
       note: null,
+      installment: null,
       sortOrder: 100,
       source: "user",
     },
@@ -121,6 +123,7 @@ test("gasto extra no cartão aumenta a fatura e o extra no Pix fica fora dela", 
       cardLabel: null,
       paid: false,
       note: null,
+      installment: null,
       sortOrder: 101,
       source: "user",
     },
@@ -143,6 +146,33 @@ test("normaliza pagamento para não somar gasto fixo duas vezes", () => {
 
   const invoice = normalizeExpense({ section: "card", payment: "pix", onCard: true, cardLabel: "" });
   assert.deepEqual(invoice, { section: "card", payment: "card", onCard: false, cardLabel: null });
+});
+
+test("parcela do cartão avança no mês seguinte e o gasto fixo lançado pelo usuário se repete", () => {
+  const card: Expense = {
+    id: "1",
+    monthId: "2026-12",
+    name: "Geladeira",
+    section: "card",
+    amountCents: 20000,
+    payment: "card",
+    onCard: false,
+    cardLabel: "Nubank",
+    paid: true,
+    note: null,
+    installment: "3/10",
+    sortOrder: 1,
+    source: "user",
+  };
+  const carried = carryForward(card);
+  assert.equal(carried?.installment, "4/10");
+  assert.equal(carried?.paid, false);
+  card.installment = "10/10";
+  assert.equal(carryForward(card), null);
+
+  const fixed: Expense = { ...card, section: "fixed", installment: null, source: "user", payment: "pix" };
+  assert.equal(carryForward(fixed)?.section, "fixed");
+  assert.equal(carryForward({ ...fixed, source: "sheet" }), null);
 });
 
 test("PIN aceita só dígitos e bloqueia depois de oito erros", () => {

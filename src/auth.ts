@@ -9,8 +9,10 @@ export function isValidPin(pin: unknown): pin is string {
 
 export async function hashPin(pin: string, salt: Uint8Array): Promise<string> {
   const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+  const saltBuffer = new ArrayBuffer(salt.byteLength);
+  new Uint8Array(saltBuffer).set(salt);
   const bits = await crypto.subtle.deriveBits(
-    { name: "PBKDF2", salt, iterations: PIN_ITERATIONS, hash: "SHA-256" },
+    { name: "PBKDF2", salt: saltBuffer, iterations: PIN_ITERATIONS, hash: "SHA-256" },
     key,
     256,
   );

@@ -4,8 +4,6 @@ on:
   push:
     branches:
       - main
-      - main2
-      - main3
   workflow_dispatch:
 
 jobs:
@@ -28,12 +26,8 @@ jobs:
       - name: Instalar dependências
         run: npm ci
 
-      - name: Testar e gerar o site
-        run: |
-          if [ -f vite.config.ts ]; then
-            npm test
-            npm run build
-          fi
+      - name: Testar
+        run: npm test
 
       - name: Publicar o Worker
         uses: cloudflare/wrangler-action@v4

@@ -1,6 +1,6 @@
 import seed from "./seed-data.json";
 import type { Expense, Payment, Section } from "./domain.ts";
-import { computeTotals } from "./domain.ts";
+import { carryForward, computeTotals, previousMonthId } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -56,6 +56,7 @@ type ExpenseRow = {
   card_label: string | null;
   paid: number;
   note: string | null;
+  installment: string | null;
   sort_order: number;
   source: string;
 };
@@ -78,6 +79,10 @@ async function migrateAndSeed(db: D1Database): Promise<void> {
     .filter((part) => part.length > 0)
     .map((sql) => db.prepare(sql));
   await db.batch(statements);
+  const columns = await db.prepare("PRAGMA table_info(expenses)").all<{ name: string }>();
+  if (!(columns.results ?? []).some((column) => column.name === "installment")) {
+    await db.prepare("ALTER TABLE expenses ADD COLUMN installment TEXT").run();
+  }
 
   const seeded = await db.prepare("SELECT value FROM settings WHERE key = 'seeded'").first<{ value: string }>();
   if (seeded?.value === "1") return;
@@ -180,6 +185,7 @@ export function mapExpense(row: ExpenseRow): Expense {
     cardLabel: row.card_label,
     paid: row.paid === 1,
     note: row.note,
+    installment: row.installment ?? null,
     sortOrder: row.sort_order,
     source: row.source === "user" ? "user" : "sheet",
   };
@@ -211,4 +217,46 @@ export async function monthPayload(db: D1Database, monthId: string) {
 
 export async function syncSettled(db: D1Database, monthId: string): Promise<void> {
   await monthPayload(db, monthId);
+}
+
+export async function copyFromPreviousMonth(db: D1Database, monthId: string): Promise<number> {
+  const sourceMonth = previousMonthId(monthId);
+  if (!sourceMonth) return 0;
+  const source = await listExpenses(db, sourceMonth);
+  const destination = await listExpenses(db, monthId);
+  const taken = new Set(destination.map((expense) => `${expense.section}|${expense.name.toLowerCase()}`));
+  const nextSort = destination.reduce((max, expense) => Math.max(max, expense.sortOrder), 0);
+  const createdAt = new Date().toISOString();
+  const inserts: D1PreparedStatement[] = [];
+  for (const expense of source) {
+    const carried = carryForward(expense);
+    if (!carried) continue;
+    const key = `${carried.section}|${carried.name.toLowerCase()}`;
+    if (taken.has(key)) continue;
+    taken.add(key);
+    inserts.push(
+      db
+        .prepare(
+          `INSERT INTO expenses
+            (id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'user', ?)`,
+        )
+        .bind(
+          crypto.randomUUID(),
+          monthId,
+          carried.name,
+          carried.section,
+          carried.amountCents,
+          carried.payment,
+          carried.onCard ? 1 : 0,
+          carried.cardLabel,
+          carried.note,
+          carried.installment,
+          nextSort + inserts.length + 1,
+          createdAt,
+        ),
+    );
+  }
+  if (inserts.length) await db.batch(inserts);
+  return inserts.length;
 }

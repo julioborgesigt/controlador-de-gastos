@@ -8,6 +8,7 @@ const state = {
   view: "resumo",
   data: null,
   error: "",
+  notice: "",
   busy: false,
   showEmpty: false,
   sheet: null,
@@ -141,6 +142,7 @@ function shell() {
     el("div", { class: "months" }, data.months.map(monthChip)),
     el("main", { class: "content" }, [
       state.error ? el("p", { class: "error" }, state.error) : "",
+      state.notice ? el("p", { class: "note" }, state.notice) : "",
       viewBody(data),
     ]),
     el("nav", { class: "nav" }, views.map(([id, label]) => el("button", {
@@ -150,6 +152,7 @@ function shell() {
         state.view = id;
         state.showEmpty = false;
         state.error = "";
+        state.notice = "";
         render();
       },
     }, [glyph(id), label]))),
@@ -216,10 +219,11 @@ function summary(data) {
     jump("casa", "Gastos fixos", money(totals.fixedCents), totals.fixedOnCardCents
       ? `${money(totals.fixedOnCardCents)} já entram na fatura e não somam de novo`
       : "Casa, Pix e boletos deste mês"),
-    jump("extras", "Gastos extras", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} no Pix · ${money(totals.extrasCardCents)} no cartão`),
+    jump("extras", "Gastos extras", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
     totals.remainingCents > 0
       ? el("button", { class: "primary", type: "button", onclick: () => settle("pay-remaining") }, "Quitar o que falta")
       : el("button", { class: "secondary", type: "button", onclick: () => settle("reopen") }, "Reabrir mês"),
+    el("button", { class: "secondary", type: "button", onclick: copyPrevious }, "Trazer lançamentos do mês anterior"),
     el("p", { class: "muted" }, "Quitar marca como pagos a fatura, o Pix e os extras. Um gasto fixo marcado na fatura continua na casa, sem ser cobrado outra vez."),
     el("button", { class: "linkish", type: "button", onclick: logout }, "Sair"),
   ]);
@@ -318,8 +322,9 @@ function expenseRow(expense, section) {
   const meta = [];
   if (expense.section === "extra" && section === "card") meta.push("Extra");
   if (onInvoice && section === "card") meta.push("Gasto fixo, já incluído");
-  if (expense.payment === "pix") meta.push("Pix");
+  if (expense.payment !== "card" || onInvoice) meta.push(paymentLabel(expense.payment));
   if (expense.payment === "card" && !onInvoice) meta.push(expense.cardLabel ? `Cartão ${expense.cardLabel}` : "Cartão");
+  if (expense.installment) meta.push(expense.installment);
   if (expense.paid) meta.push("Pago");
   const check = onInvoice
     ? el("span", { class: "check spacer", "aria-hidden": "true" }, "")
@@ -349,7 +354,7 @@ function expenseRow(expense, section) {
       ]),
       invoiceToggle,
       onInvoice && section === "card" ? el("span", { class: "badge" }, "Já contabilizado, não soma de novo") : "",
-      expense.payment === "pix" && expense.section === "extra" ? el("span", { class: "badge pix" }, "Pix") : "",
+      expense.section === "extra" && expense.payment !== "card" ? el("span", { class: "badge pix" }, paymentLabel(expense.payment)) : "",
     ]),
     el("span", { class: `amount${onInvoice && section === "card" ? " aside" : ""}` }, expense.amountCents === 0 ? "—" : money(expense.amountCents)),
   ]);
@@ -366,6 +371,7 @@ function openCreate(section, payment) {
     onCard: false,
     cardLabel: section === "card" || payment === "card" ? "Nubank" : "",
     note: "",
+    installment: "",
     paid: false,
     source: "user",
   };
@@ -384,6 +390,7 @@ function openEdit(expense) {
     onCard: expense.onCard,
     cardLabel: expense.cardLabel || "",
     note: expense.note || "",
+    installment: expense.installment || "",
     paid: expense.paid,
     source: expense.source,
   };
@@ -457,9 +464,12 @@ function sheet() {
         : draft.section === "extra"
           ? el("div", { class: "field" }, [
             el("label", {}, "Como foi pago"),
-            segmented("payment", [["pix", "Pix"], ["card", "Cartão"]], draft.payment),
+            segmented("payment", [["pix", "Pix"], ["debit", "Débito"], ["cash", "Dinheiro"], ["card", "Cartão"]], draft.payment),
           ])
           : "",
+      draft.section === "card" || draft.section === "extra"
+        ? field("Parcela", "installment", draft.installment, "text", "3/10, se houver")
+        : "",
       draft.section === "card" || draft.payment === "card" || draft.onCard
         ? field("Cartão", "cardLabel", draft.cardLabel, "text", "Nubank, Neon ou outro")
         : "",
@@ -537,6 +547,7 @@ async function saveSheet(event) {
         onCard: draft.section === "fixed" && draft.onCard,
         cardLabel: draft.cardLabel,
         note: draft.note,
+        installment: draft.installment,
         paid: draft.paid,
       };
       if (draft.mode === "create") {
@@ -567,6 +578,7 @@ async function patchExpense(expense, patch) {
         onCard: expense.onCard,
         cardLabel: expense.cardLabel,
         note: expense.note,
+        installment: expense.installment,
         paid: expense.paid,
         ...patch,
       },
@@ -592,6 +604,20 @@ async function removeExpense() {
   }
 }
 
+async function copyPrevious() {
+  state.error = "";
+  try {
+    const data = await request(`/api/months/${state.monthId}/copy`, { method: "POST", body: {} });
+    state.data = data;
+    state.notice = data.copied > 0
+      ? `Trouxe ${data.copied} ${data.copied === 1 ? "lançamento" : "lançamentos"} do mês anterior.`
+      : "Não havia lançamento novo para trazer. A planilha de cada mês já está carregada.";
+  } catch (error) {
+    state.error = messageOf(error);
+  }
+  render();
+}
+
 async function settle(mode) {
   state.error = "";
   try {
@@ -613,6 +639,13 @@ function closeSheet() {
   state.sheet = null;
   state.error = "";
   render();
+}
+
+function paymentLabel(payment) {
+  if (payment === "card") return "Cartão";
+  if (payment === "debit") return "Débito";
+  if (payment === "cash") return "Dinheiro";
+  return "Pix";
 }
 
 function money(cents) {

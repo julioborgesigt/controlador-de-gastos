@@ -397,7 +397,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .field { margin-bottom: 14px; }
 
-.choice { gap: 8px; }
+.choice { gap: 8px; flex-wrap: wrap; }
 
 .choice button, .switch {
   flex: 1;
