@@ -753,6 +753,8 @@ export async function payRecurringOnCard(
     alias: string;
     amountCents: number;
     totalCount: number;
+    startMonthId?: string;
+    mode?: "installment" | "total";
   },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const expense = await getExpense(db, input.ownerId, input.expenseId);
@@ -760,12 +762,14 @@ export async function payRecurringOnCard(
   if (expense.section !== "fixed") return { ok: false, error: "Só um gasto recorrente entra na fatura por aqui." };
   const alias = input.alias.trim().replace(/\s+/g, " ").slice(0, 80);
   if (!alias) return { ok: false, error: "Escolha o apelido que vai aparecer na fatura." };
+  const startMonthId = input.startMonthId || expense.monthId;
+  const mode = input.mode === "total" ? "total" : "installment";
   const plan = planCardPurchase({
-    startMonthId: expense.monthId,
+    startMonthId,
     totalCount: input.totalCount,
     paidCount: 0,
     amountCents: input.amountCents,
-    mode: "installment",
+    mode,
   });
   if (!plan.ok) return plan;
   await clearRecurringCardLines(db, input.ownerId, input.expenseId);
@@ -775,7 +779,7 @@ export async function payRecurringOnCard(
     .run();
   return insertCardPurchase(db, {
     ownerId: input.ownerId,
-    startMonthId: expense.monthId,
+    startMonthId,
     name: alias,
     section: "card",
     payment: "card",
@@ -784,7 +788,7 @@ export async function payRecurringOnCard(
     totalCount: input.totalCount,
     paidCount: 0,
     amountCents: input.amountCents,
-    mode: "installment",
+    mode,
   });
 }
 
