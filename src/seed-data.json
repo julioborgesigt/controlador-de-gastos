@@ -1,0 +1,618 @@
+{
+  "months": [
+    {
+      "id": "2026-11",
+      "label": "Novembro 2026",
+      "incomeCents": 1090023,
+      "settled": 1,
+      "sortOrder": 0
+    },
+    {
+      "id": "2026-12",
+      "label": "Dezembro 2026",
+      "incomeCents": 980000,
+      "settled": 0,
+      "sortOrder": 1
+    },
+    {
+      "id": "2027-01",
+      "label": "Janeiro 2027",
+      "incomeCents": 885000,
+      "settled": 0,
+      "sortOrder": 2
+    },
+    {
+      "id": "2027-02",
+      "label": "Fevereiro 2027",
+      "incomeCents": 880000,
+      "settled": 0,
+      "sortOrder": 3
+    },
+    {
+      "id": "2027-03",
+      "label": "Março 2027",
+      "incomeCents": 800000,
+      "settled": 0,
+      "sortOrder": 4
+    },
+    {
+      "id": "2027-04",
+      "label": "Abril 2027",
+      "incomeCents": 1100000,
+      "settled": 0,
+      "sortOrder": 5
+    },
+    {
+      "id": "2027-05",
+      "label": "Maio 2027",
+      "incomeCents": 800000,
+      "settled": 0,
+      "sortOrder": 6
+    },
+    {
+      "id": "2027-06",
+      "label": "Junho 2027",
+      "incomeCents": 800000,
+      "settled": 0,
+      "sortOrder": 7
+    },
+    {
+      "id": "2027-07",
+      "label": "Julho 2027",
+      "incomeCents": 800000,
+      "settled": 0,
+      "sortOrder": 8
+    },
+    {
+      "id": "2027-08",
+      "label": "Agosto 2027",
+      "incomeCents": 800000,
+      "settled": 0,
+      "sortOrder": 9
+    },
+    {
+      "id": "2027-09",
+      "label": "Setembro 2027",
+      "incomeCents": 800000,
+      "settled": 0,
+      "sortOrder": 10
+    },
+    {
+      "id": "2027-10",
+      "label": "Outubro 2027",
+      "incomeCents": 800000,
+      "settled": 0,
+      "sortOrder": 11
+    }
+  ],
+  "items": [
+    {
+      "key": "nubank-vista",
+      "name": "Nubank - Compras à vista / Recorrentes / Estornos",
+      "section": "card",
+      "payment": "card",
+      "cardLabel": "Nubank",
+      "sortOrder": 0,
+      "amounts": [
+        209824,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "nubank-parc",
+      "name": "Nubank - Parcelamentos Ativos",
+      "section": "card",
+      "payment": "card",
+      "cardLabel": "Nubank",
+      "sortOrder": 1,
+      "amounts": [
+        228672,
+        181739,
+        152275,
+        145481,
+        143481,
+        47206,
+        47206,
+        47206,
+        36216,
+        28696,
+        2000,
+        2000
+      ]
+    },
+    {
+      "key": "neon-parc",
+      "name": "Neon - Parcelamentos Ativos",
+      "section": "card",
+      "payment": "card",
+      "cardLabel": "Neon",
+      "sortOrder": 2,
+      "amounts": [
+        42527,
+        31527,
+        16013,
+        16013,
+        5680,
+        5680,
+        5680,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "novas-compras",
+      "name": "Novas Compras no Cartão / Gastos Variáveis Futuros",
+      "section": "card",
+      "payment": "card",
+      "cardLabel": null,
+      "sortOrder": 3,
+      "amounts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "faculdade-p-s",
+      "name": "Faculdade + pós",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 4,
+      "amounts": [
+        18000,
+        18000,
+        18000,
+        9000,
+        9000,
+        9000,
+        9000,
+        9000,
+        9000,
+        9000,
+        9000,
+        9000
+      ]
+    },
+    {
+      "key": "energia-el-trica",
+      "name": "Energia Elétrica",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 5,
+      "amounts": [
+        60000,
+        60000,
+        60000,
+        60000,
+        60000,
+        60000,
+        60000,
+        60000,
+        60000,
+        60000,
+        60000,
+        60000
+      ]
+    },
+    {
+      "key": "gua-e-saneamento",
+      "name": "Água e Saneamento",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 6,
+      "amounts": [
+        0,
+        18000,
+        18000,
+        18000,
+        18000,
+        18000,
+        18000,
+        18000,
+        18000,
+        18000,
+        18000,
+        18000
+      ]
+    },
+    {
+      "key": "internet-fixa-e-telefonia-m-vel",
+      "name": "Internet Fixa e Telefonia Móvel",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 7,
+      "amounts": [
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000
+      ]
+    },
+    {
+      "key": "supermercado-feira-e-padaria-pagos-via-pix-d-bito",
+      "name": "Supermercado, Feira e Padaria (Pagos via Pix/Débito)",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 8,
+      "amounts": [
+        0,
+        150000,
+        250000,
+        250000,
+        250000,
+        250000,
+        250000,
+        250000,
+        250000,
+        250000,
+        250000,
+        250000
+      ]
+    },
+    {
+      "key": "combust-vel-e-manuten-o-de-ve-culo",
+      "name": "Combustível e Manutenção de Veículo",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 9,
+      "amounts": [
+        0,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000
+      ]
+    },
+    {
+      "key": "educa-o-escola-e-cursos",
+      "name": "Educação, Escola e Cursos",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 10,
+      "amounts": [
+        75000,
+        75000,
+        75000,
+        75000,
+        85000,
+        85000,
+        85000,
+        85000,
+        85000,
+        85000,
+        85000,
+        85000
+      ]
+    },
+    {
+      "key": "sa-de-farm-cia-e-plano-de-sa-de",
+      "name": "Saúde, Farmácia e Plano de Saúde",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 11,
+      "amounts": [
+        0,
+        35000,
+        35000,
+        35000,
+        35000,
+        35000,
+        35000,
+        35000,
+        35000,
+        35000,
+        35000,
+        35000
+      ]
+    },
+    {
+      "key": "lazer-restaurantes-e-assinaturas",
+      "name": "Lazer, Restaurantes e Assinaturas",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 12,
+      "amounts": [
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000
+      ]
+    },
+    {
+      "key": "corte-de-cabelo",
+      "name": "Corte de cabelo",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 13,
+      "amounts": [
+        7000,
+        7000,
+        7000,
+        7000,
+        7000,
+        7000,
+        7000,
+        7000,
+        7000,
+        7000,
+        7000,
+        7000
+      ]
+    },
+    {
+      "key": "merenda-emanuel",
+      "name": "Merenda Emanuel",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 14,
+      "amounts": [
+        22000,
+        22000,
+        22000,
+        22000,
+        22000,
+        22000,
+        22000,
+        22000,
+        22000,
+        22000,
+        22000,
+        22000
+      ]
+    },
+    {
+      "key": "merendas-fds",
+      "name": "Merendas FDS",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 15,
+      "amounts": [
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000
+      ]
+    },
+    {
+      "key": "paulo",
+      "name": "Paulo",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 16,
+      "amounts": [
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000,
+        5000
+      ]
+    },
+    {
+      "key": "frigor-fico",
+      "name": "Frigorífico",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 17,
+      "amounts": [
+        0,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000,
+        25000
+      ]
+    },
+    {
+      "key": "emprestado",
+      "name": "Emprestado",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 18,
+      "amounts": [
+        0,
+        0,
+        30000,
+        30000,
+        30000,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "cart-o-emprestado-3-10",
+      "name": "Cartão emprestado 3/10",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 19,
+      "amounts": [
+        0,
+        29000,
+        29000,
+        29000,
+        29000,
+        29000,
+        29000,
+        29000,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "eliana",
+      "name": "Eliana",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 20,
+      "amounts": [
+        0,
+        50000,
+        50000,
+        50000,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "eliana-outra-parcela",
+      "name": "Eliana · outra parcela",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 21,
+      "amounts": [
+        0,
+        17500,
+        17500,
+        17500,
+        17500,
+        17500,
+        17500,
+        17500,
+        17500,
+        17500,
+        0,
+        0
+      ]
+    },
+    {
+      "key": "emprestado-a-partir-de-abril",
+      "name": "Emprestado · a partir de abril",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 22,
+      "amounts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        400000,
+        100000,
+        100000,
+        100000,
+        100000,
+        100000,
+        100000
+      ]
+    },
+    {
+      "key": "cart-o-emprestado-pegar-1-000-e-recuperar-850",
+      "name": "Cartão emprestado (pegar 1.000 e recuperar 850)",
+      "section": "fixed",
+      "payment": "pix",
+      "cardLabel": null,
+      "sortOrder": 23,
+      "amounts": [
+        0,
+        0,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000,
+        10000
+      ]
+    }
+  ]
+}
