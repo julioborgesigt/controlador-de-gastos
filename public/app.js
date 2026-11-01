@@ -4,6 +4,8 @@ const state = {
   booting: true,
   needsSetup: false,
   authed: false,
+  authView: "login",
+  auth: { cpf: "", email: "", password: "", confirmation: "" },
   monthId: sessionStorage.getItem("monthId") || "",
   view: "resumo",
   data: null,
@@ -30,6 +32,7 @@ async function boot() {
     const session = await request("/api/session");
     state.needsSetup = session.needsSetup;
     state.authed = session.authenticated;
+    if (session.needsSetup) state.authView = "register";
     if (state.authed) await loadMonth(state.monthId);
   } catch (error) {
     state.error = messageOf(error);
@@ -79,7 +82,7 @@ function render() {
     return;
   }
   if (!state.authed) {
-    root.append(lockScreen());
+    root.append(authScreen());
     state.viewKey = viewKey;
     return;
   }
@@ -118,41 +121,94 @@ function setWorking(active, label = "Salvando...") {
   ]));
 }
 
-function lockScreen() {
-  const pin = el("input", {
-    id: "pin",
-    inputmode: "numeric",
-    autocomplete: "one-time-code",
-    maxlength: "8",
-    placeholder: "4 a 8 dígitos",
-  });
+function authScreen() {
+  const registering = state.authView === "register";
   const form = el("form", { class: "lock-card hero" }, [
     el("div", { class: "mark" }, "R$"),
-    el("h1", {}, state.needsSetup ? "Crie o PIN" : "Controle de gastos"),
-    el("p", { class: "lede" }, state.needsSetup
-      ? "Este PIN abre o orçamento neste celular. Ele fica só no banco do aplicativo."
-      : "Digite o PIN para ver a fatura, a casa e os gastos extras."),
+    el("h1", {}, registering ? "Criar conta" : "Entrar"),
+    el("p", { class: "lede" }, registering
+      ? "Informe CPF, e-mail e senha. O e-mail fica guardado para códigos e avisos futuros."
+      : "Entre com CPF e senha para ver a fatura, a casa e os gastos extras."),
     state.error ? el("p", { class: "error" }, state.error) : "",
-    el("div", { class: "field" }, [el("label", { for: "pin" }, "PIN"), pin]),
-    el("button", { class: "primary", type: "submit" }, state.needsSetup ? "Criar PIN e entrar" : "Entrar"),
+    authInput("cpf", "CPF", state.auth.cpf, { key: "cpf", inputmode: "numeric", autocomplete: "username", placeholder: "000.000.000-00", mask: "cpf" }),
+    registering ? authInput("email", "E-mail", state.auth.email, { key: "email", type: "email", autocomplete: "email", placeholder: "voce@email.com" }) : "",
+    authInput("password", "Senha", state.auth.password, { key: "password", type: "password", autocomplete: registering ? "new-password" : "current-password", placeholder: "Mínimo de 8 caracteres" }),
+    registering ? authInput("confirmation", "Confirmar senha", state.auth.confirmation, { key: "confirmation", type: "password", autocomplete: "new-password" }) : "",
+    el("button", { class: "primary", type: "submit" }, registering ? "Criar conta" : "Entrar"),
+    el("p", { class: "auth-switch" }, [
+      el("button", {
+        class: "linkish",
+        type: "button",
+        onclick: () => {
+          state.authView = registering ? "login" : "register";
+          state.error = "";
+          state.auth.password = "";
+          state.auth.confirmation = "";
+          render();
+        },
+      }, registering ? "Já tenho conta" : "Criar conta"),
+    ]),
   ]);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    state.error = "";
-    setWorking(true, "Entrando...");
-    try {
-      await request(state.needsSetup ? "/api/setup" : "/api/login", { method: "POST", body: { pin: pin.value } });
-      state.authed = true;
-      state.needsSetup = false;
-      await loadMonth(state.monthId);
-    } catch (error) {
-      state.error = messageOf(error);
-    } finally {
-      setWorking(false);
-      render();
-    }
+  form.addEventListener("submit", submitAuth);
+  return el("main", { class: "screen auth" }, [form]);
+}
+
+function authInput(id, label, value, options) {
+  const input = el("input", {
+    id,
+    type: options.type || "text",
+    inputmode: options.inputmode || "text",
+    autocomplete: options.autocomplete || "off",
+    placeholder: options.placeholder || "",
+    value,
   });
-  return screen(form);
+  input.addEventListener("input", () => {
+    const next = options.mask === "cpf" ? formatCpf(input.value) : input.value;
+    state.auth[options.key] = next;
+    if (next !== input.value) input.value = next;
+  });
+  return el("div", { class: "field" }, [el("label", { for: id }, label), input]);
+}
+
+function formatCpf(value) {
+  const digits = value.replace(/\D/g, "").slice(0, 11);
+  if (digits.length <= 3) return digits;
+  if (digits.length <= 6) return `${digits.slice(0, 3)}.${digits.slice(3)}`;
+  if (digits.length <= 9) return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6)}`;
+  return `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`;
+}
+
+async function submitAuth(event) {
+  event.preventDefault();
+  const registering = state.authView === "register";
+  state.error = "";
+  if (registering && state.auth.password !== state.auth.confirmation) {
+    state.error = "A confirmação da senha não confere.";
+    render();
+    return;
+  }
+  setWorking(true, registering ? "Criando conta..." : "Entrando...");
+  try {
+    const body = registering
+      ? {
+        cpf: state.auth.cpf,
+        email: state.auth.email,
+        password: state.auth.password,
+        passwordConfirmation: state.auth.confirmation,
+      }
+      : { cpf: state.auth.cpf, password: state.auth.password };
+    await request(registering ? "/api/register" : "/api/login", { method: "POST", body });
+    state.authed = true;
+    state.needsSetup = false;
+    state.auth.password = "";
+    state.auth.confirmation = "";
+    await loadMonth(state.monthId);
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
 }
 
 function screen(child) {
@@ -165,7 +221,7 @@ function shell() {
     el("header", { class: "top" }, [
       el("div", { class: "top-row" }, [
         el("p", { class: "eyebrow" }, "Orçamento familiar"),
-        el("button", { class: "linkish", type: "button", onclick: openPin }, "PIN"),
+        el("button", { class: "linkish", type: "button", onclick: openPassword }, "Senha"),
       ]),
     ]),
     el("div", { class: "months" }, data.months.map(monthChip)),
@@ -799,8 +855,8 @@ function openIncomeExtra() {
   render();
 }
 
-function openPin() {
-  state.sheet = { mode: "pin", current: "", next: "" };
+function openPassword() {
+  state.sheet = { mode: "password", current: "", next: "", confirmation: "" };
   state.error = "";
   render();
 }
@@ -841,11 +897,12 @@ function sheet() {
         el("button", { class: "primary", type: "submit" }, "Adicionar"),
       ]),
     );
-  } else if (draft.mode === "pin") {
+  } else if (draft.mode === "password") {
     panel.append(
-      el("h2", {}, "Trocar PIN"),
-      field("PIN atual", "current", "", "numeric"),
-      field("PIN novo", "next", "", "numeric"),
+      el("h2", {}, "Trocar senha"),
+      field("Senha atual", "current", "", "password"),
+      field("Nova senha", "next", "", "password"),
+      field("Confirmar nova senha", "confirmation", "", "password"),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
         el("button", { class: "primary", type: "submit" }, "Trocar"),
@@ -944,8 +1001,10 @@ function field(labelText, key, value, mode, placeholder = "") {
   const input = el(key === "note" ? "textarea" : "input", {
     id: key,
     name: key,
+    type: mode === "password" ? "password" : undefined,
     value,
     placeholder,
+    autocomplete: mode === "password" ? "new-password" : undefined,
     inputmode: mode === "decimal" ? "decimal" : mode === "numeric" ? "numeric" : "text",
   });
   input.addEventListener("input", () => {
@@ -996,9 +1055,13 @@ async function saveSheet(event) {
         method: "POST",
         body: { kind: draft.kind, name: draft.name, amountCents, monthId: draft.monthId },
       });
-    } else if (draft.mode === "pin") {
+    } else if (draft.mode === "password") {
+      if (draft.next !== draft.confirmation) throw new Error("A confirmação da senha não confere.");
       setWorking(true, "Salvando...");
-      await request("/api/pin", { method: "POST", body: { currentPin: draft.current, nextPin: draft.next } });
+      await request("/api/password", {
+        method: "POST",
+        body: { currentPassword: draft.current, nextPassword: draft.next, passwordConfirmation: draft.confirmation },
+      });
     } else if (draft.mode === "card") {
       if (!draft.name.trim()) throw new Error("Dê um nome ao cartão.");
       setWorking(true, "Salvando...");
@@ -1135,6 +1198,9 @@ async function settle(mode) {
 async function logout() {
   await request("/api/logout", { method: "POST", body: {} });
   state.authed = false;
+  state.authView = "login";
+  state.auth.password = "";
+  state.auth.confirmation = "";
   state.data = null;
   render();
 }
@@ -1183,8 +1249,9 @@ async function request(path, options = {}) {
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   const data = await response.json().catch(() => ({}));
-  if (response.status === 401 && path !== "/api/login" && path !== "/api/setup") {
+  if (response.status === 401 && path !== "/api/login" && path !== "/api/register") {
     state.authed = false;
+    state.authView = "login";
     render();
   }
   if (!response.ok) {

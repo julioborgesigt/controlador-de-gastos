@@ -3,12 +3,42 @@ const SESSION_DAYS = 30;
 const MAX_FAILURES = 8;
 const LOCK_MS = 5 * 60 * 1000;
 
-export function isValidPin(pin: unknown): pin is string {
-  return typeof pin === "string" && /^[0-9]{4,8}$/.test(pin);
+export function parseCpf(value: unknown): { ok: true; cpf: string } | { ok: false; error: string } {
+  if (typeof value !== "string") return { ok: false, error: "Informe um CPF válido." };
+  const cpf = value.replace(/\D/g, "");
+  if (!isValidCpf(cpf)) return { ok: false, error: "Informe um CPF válido." };
+  return { ok: true, cpf };
 }
 
-export async function hashPin(pin: string, salt: Uint8Array): Promise<string> {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(pin), "PBKDF2", false, ["deriveBits"]);
+export function parseEmail(value: unknown): { ok: true; email: string } | { ok: false; error: string } {
+  if (typeof value !== "string") return { ok: false, error: "Informe um e-mail válido." };
+  const email = value.trim().toLowerCase();
+  if (email.length > 120 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { ok: false, error: "Informe um e-mail válido." };
+  }
+  return { ok: true, email };
+}
+
+export function parsePassword(value: unknown): { ok: true; password: string } | { ok: false; error: string } {
+  if (typeof value !== "string" || value.length < 8 || value.length > 72) {
+    return { ok: false, error: "Use uma senha com 8 a 72 caracteres." };
+  }
+  return { ok: true, password: value };
+}
+
+export function isValidCpf(cpf: string): boolean {
+  if (!/^\d{11}$/.test(cpf) || /^(\d)\1{10}$/.test(cpf)) return false;
+  const digit = (length: number) => {
+    let sum = 0;
+    for (let index = 0; index < length; index += 1) sum += Number(cpf[index]) * (length + 1 - index);
+    const rest = (sum * 10) % 11;
+    return rest === 10 ? 0 : rest;
+  };
+  return digit(9) === Number(cpf[9]) && digit(10) === Number(cpf[10]);
+}
+
+export async function hashSecret(secret: string, salt: Uint8Array): Promise<string> {
+  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), "PBKDF2", false, ["deriveBits"]);
   const saltBuffer = new ArrayBuffer(salt.byteLength);
   new Uint8Array(saltBuffer).set(salt);
   const bits = await crypto.subtle.deriveBits(
@@ -73,7 +103,7 @@ export function lockedMessage(state: FailureState, now = Date.now()): string | n
   const until = Date.parse(state.lockedUntil);
   if (Number.isNaN(until) || until <= now) return null;
   const minutes = Math.max(1, Math.ceil((until - now) / 60000));
-  return `PIN bloqueado por ${minutes} min depois de várias tentativas.`;
+  return `Acesso bloqueado por ${minutes} min depois de várias tentativas.`;
 }
 
 export function nextFailure(state: FailureState, now = Date.now()): FailureState {

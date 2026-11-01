@@ -2,10 +2,12 @@ import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { Hono, type Context } from "hono";
 import {
   clearFailures,
-  hashPin,
-  isValidPin,
+  hashSecret,
   lockedMessage,
   nextFailure,
+  parseCpf,
+  parseEmail,
+  parsePassword,
   randomBytes,
   randomToken,
   safeEqual,
@@ -26,8 +28,12 @@ import {
 import {
   applyBaseIncome,
   copyFromPreviousMonth,
+  countUsers,
   createCard,
+  createUser,
   ensureReady,
+  findUserByCpf,
+  findUserById,
   getExpense,
   getMonth,
   getSetting,
@@ -37,10 +43,11 @@ import {
   setMonthIncome,
   setSetting,
   unlockMonthIncome,
+  updatePassword,
 } from "./db.ts";
 
 const COOKIE = "gastos_session";
-const FAILURE_KEY = "login_failures";
+const AUTH_ERROR = "Entre com CPF e senha.";
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -67,46 +74,51 @@ app.use("/api/*", async (c, next) => {
 app.get("/api/health", (c) => c.json({ ok: true }));
 
 app.get("/api/session", async (c) => {
-  const needsSetup = (await getSetting(c.env.DB, "pin_hash")) === null;
-  const authenticated = needsSetup ? false : await isAuthenticated(c.env.DB, getCookie(c, COOKIE));
+  const needsSetup = (await countUsers(c.env.DB)) === 0;
+  const authenticated = await isAuthenticated(c.env.DB, getCookie(c, COOKIE));
   return c.json({ needsSetup, authenticated });
 });
 
-app.post("/api/setup", async (c) => {
-  if ((await getSetting(c.env.DB, "pin_hash")) !== null) {
-    return c.json({ error: "O PIN já foi criado." }, 409);
-  }
+app.post("/api/register", async (c) => {
   const body = await readJson(c);
-  if (!isValidPin(body.pin)) return c.json({ error: "Use um PIN de 4 a 8 dígitos." }, 400);
+  const cpf = parseCpf(body.cpf);
+  if (!cpf.ok) return c.json({ error: cpf.error }, 400);
+  const email = parseEmail(body.email);
+  if (!email.ok) return c.json({ error: email.error }, 400);
+  const password = parsePassword(body.password);
+  if (!password.ok) return c.json({ error: password.error }, 400);
+  if (body.passwordConfirmation !== password.password) {
+    return c.json({ error: "A confirmação da senha não confere." }, 400);
+  }
   const salt = randomBytes(16);
-  const hash = await hashPin(body.pin, salt);
-  await setSetting(c.env.DB, "pin_salt", toHex(salt));
-  await setSetting(c.env.DB, "pin_hash", hash);
-  await setSetting(c.env.DB, FAILURE_KEY, JSON.stringify(clearFailures()));
-  await startSession(c);
-  return c.json({ ok: true });
+  const created = await createUser(c.env.DB, {
+    cpf: cpf.cpf,
+    email: email.email,
+    passwordHash: await hashSecret(password.password, salt),
+    passwordSalt: toHex(salt),
+  });
+  if (!created.ok) return c.json({ error: created.error }, 409);
+  await startSession(c, created.id);
+  return c.json({ ok: true }, 201);
 });
 
 app.post("/api/login", async (c) => {
   const body = await readJson(c);
-  const failures = await failureState(c.env.DB);
+  const cpf = parseCpf(body.cpf);
+  const password = parsePassword(body.password);
+  if (!cpf.ok || !password.ok) return c.json({ error: "CPF ou senha incorretos." }, 401);
+  const failures = await failureState(c.env.DB, cpf.cpf);
   const locked = lockedMessage(failures);
   if (locked) return c.json({ error: locked }, 429);
-  if (!isValidPin(body.pin)) {
-    await setSetting(c.env.DB, FAILURE_KEY, JSON.stringify(nextFailure(failures)));
-    return c.json({ error: "PIN incorreto." }, 401);
-  }
-  const saltHex = await getSetting(c.env.DB, "pin_salt");
-  const expected = await getSetting(c.env.DB, "pin_hash");
-  if (!saltHex || !expected) return c.json({ error: "Crie um PIN primeiro." }, 409);
-  const actual = await hashPin(body.pin, fromHex(saltHex));
-  if (!safeEqual(actual, expected)) {
+  const user = await findUserByCpf(c.env.DB, cpf.cpf);
+  const actual = await hashSecret(password.password, user ? fromHex(user.passwordSalt) : new Uint8Array(16));
+  if (!user || !safeEqual(actual, user.passwordHash)) {
     const updated = nextFailure(failures);
-    await setSetting(c.env.DB, FAILURE_KEY, JSON.stringify(updated));
-    return c.json({ error: lockedMessage(updated) ?? "PIN incorreto." }, 401);
+    await setSetting(c.env.DB, failureKey(cpf.cpf), JSON.stringify(updated));
+    return c.json({ error: lockedMessage(updated) ?? "CPF ou senha incorretos." }, 401);
   }
-  await setSetting(c.env.DB, FAILURE_KEY, JSON.stringify(clearFailures()));
-  await startSession(c);
+  await setSetting(c.env.DB, failureKey(cpf.cpf), JSON.stringify(clearFailures()));
+  await startSession(c, user.id);
   return c.json({ ok: true });
 });
 
@@ -119,34 +131,34 @@ app.post("/api/logout", async (c) => {
   return c.json({ ok: true });
 });
 
-app.post("/api/pin", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+app.post("/api/password", async (c) => {
+  const user = await currentAccount(c);
+  if (!user) return c.json({ error: AUTH_ERROR }, 401);
   const body = await readJson(c);
-  if (!isValidPin(body.currentPin) || !isValidPin(body.nextPin)) {
-    return c.json({ error: "Use um PIN de 4 a 8 dígitos." }, 400);
+  const next = parsePassword(body.nextPassword);
+  if (!next.ok) return c.json({ error: next.error }, 400);
+  if (body.passwordConfirmation !== next.password) {
+    return c.json({ error: "A confirmação da senha não confere." }, 400);
   }
-  const saltHex = await getSetting(c.env.DB, "pin_salt");
-  const expected = await getSetting(c.env.DB, "pin_hash");
-  if (!saltHex || !expected) return c.json({ error: "Crie um PIN primeiro." }, 409);
-  const actual = await hashPin(body.currentPin, fromHex(saltHex));
-  if (!safeEqual(actual, expected)) return c.json({ error: "PIN atual incorreto." }, 401);
+  if (typeof body.currentPassword !== "string") return c.json({ error: "Senha atual incorreta." }, 401);
+  const actual = await hashSecret(body.currentPassword, fromHex(user.passwordSalt));
+  if (!safeEqual(actual, user.passwordHash)) return c.json({ error: "Senha atual incorreta." }, 401);
   const salt = randomBytes(16);
-  await setSetting(c.env.DB, "pin_salt", toHex(salt));
-  await setSetting(c.env.DB, "pin_hash", await hashPin(body.nextPin, salt));
-  await c.env.DB.prepare("DELETE FROM sessions").run();
-  await startSession(c);
+  await updatePassword(c.env.DB, user.id, await hashSecret(next.password, salt), toHex(salt));
+  await c.env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(user.id).run();
+  await startSession(c, user.id);
   return c.json({ ok: true });
 });
 
 app.get("/api/months/:id", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
   const payload = await monthPayload(c.env.DB, c.req.param("id"));
   if (!payload) return c.json({ error: "Mês não encontrado." }, 404);
   return c.json(payload);
 });
 
 app.patch("/api/months/:id", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
   const monthId = c.req.param("id");
   const month = await getMonth(c.env.DB, monthId);
   if (!month) return c.json({ error: "Mês não encontrado." }, 404);
@@ -157,7 +169,7 @@ app.patch("/api/months/:id", async (c) => {
 });
 
 app.post("/api/months/:id/use-base-income", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
   const monthId = c.req.param("id");
   if (!(await getMonth(c.env.DB, monthId))) return c.json({ error: "Mês não encontrado." }, 404);
   await unlockMonthIncome(c.env.DB, monthId);
@@ -165,7 +177,7 @@ app.post("/api/months/:id/use-base-income", async (c) => {
 });
 
 app.post("/api/income/base", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
   const body = await readJson(c);
   if (!isCents(body.amountCents) || body.amountCents < 0) return c.json({ error: "Informe a receita base." }, 400);
   const scope = body.scope === "all" ? "all" : "unlocked";
@@ -175,7 +187,7 @@ app.post("/api/income/base", async (c) => {
 });
 
 app.post("/api/income/extras", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
   const body = await readJson(c);
   const kind = body.kind;
   if (kind !== "ir" && kind !== "thirteenth" && kind !== "vacation" && kind !== "other") {
@@ -196,7 +208,7 @@ app.post("/api/income/extras", async (c) => {
 });
 
 app.delete("/api/income/extras/:id", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
   const current = await c.env.DB.prepare("SELECT month_id FROM income_extras WHERE id = ?")
     .bind(c.req.param("id"))
     .first<{ month_id: string }>();
@@ -206,7 +218,7 @@ app.delete("/api/income/extras/:id", async (c) => {
 });
 
 app.post("/api/months/:id/copy", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
   const monthId = c.req.param("id");
   if (!(await getMonth(c.env.DB, monthId))) return c.json({ error: "Mês não encontrado." }, 404);
   const copied = await copyFromPreviousMonth(c.env.DB, monthId);
@@ -215,7 +227,7 @@ app.post("/api/months/:id/copy", async (c) => {
 });
 
 app.post("/api/months/:id/settle", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
   const monthId = c.req.param("id");
   const month = await getMonth(c.env.DB, monthId);
   if (!month) return c.json({ error: "Mês não encontrado." }, 404);
@@ -240,7 +252,7 @@ app.post("/api/months/:id/settle", async (c) => {
 });
 
 app.post("/api/cards", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
   const body = await readJson(c);
   const parsed = parseCardName(body.name);
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
@@ -250,7 +262,7 @@ app.post("/api/cards", async (c) => {
 });
 
 app.post("/api/expenses", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
   const body = await readJson(c);
   const parsed = await expenseWithCard(c.env.DB, body);
   if (!parsed.ok) return c.json({ error: parsed.error }, parsed.status);
@@ -304,7 +316,7 @@ app.post("/api/expenses", async (c) => {
 });
 
 app.patch("/api/expenses/:id", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
   const current = await getExpense(c.env.DB, c.req.param("id"));
   if (!current) return c.json({ error: "Gasto não encontrado." }, 404);
   const body = await readJson(c);
@@ -342,7 +354,7 @@ app.patch("/api/expenses/:id", async (c) => {
 });
 
 app.delete("/api/expenses/:id", async (c) => {
-  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com CPF e senha." }, 401);
   const current = await getExpense(c.env.DB, c.req.param("id"));
   if (!current) return c.json({ error: "Gasto não encontrado." }, 404);
   await c.env.DB.prepare("DELETE FROM expenses WHERE id = ?").bind(current.id).run();
@@ -458,8 +470,12 @@ function isMonthId(value: unknown): value is string {
 
 type FailureState = { count: number; lockedUntil: string | null };
 
-async function failureState(db: D1Database): Promise<FailureState> {
-  const raw = await getSetting(db, FAILURE_KEY);
+function failureKey(cpf: string): string {
+  return `login_failures:${cpf}`;
+}
+
+async function failureState(db: D1Database, cpf: string): Promise<FailureState> {
+  const raw = await getSetting(db, failureKey(cpf));
   if (!raw) return clearFailures();
   try {
     const parsed = JSON.parse(raw) as FailureState;
@@ -473,13 +489,28 @@ async function failureState(db: D1Database): Promise<FailureState> {
 async function isAuthenticated(db: D1Database, token: string | undefined): Promise<boolean> {
   if (!token) return false;
   const id = await sha256(token);
-  const row = await db.prepare("SELECT expires_at FROM sessions WHERE id = ?").bind(id).first<{ expires_at: string }>();
-  if (!row) return false;
+  const row = await db.prepare("SELECT expires_at, user_id FROM sessions WHERE id = ?").bind(id).first<{
+    expires_at: string;
+    user_id: string | null;
+  }>();
+  if (!row?.user_id) return false;
   if (Date.parse(row.expires_at) <= Date.now()) {
     await db.prepare("DELETE FROM sessions WHERE id = ?").bind(id).run();
     return false;
   }
   return true;
+}
+
+async function currentAccount(c: AppContext) {
+  const token = getCookie(c, COOKIE);
+  if (!token) return null;
+  const id = await sha256(token);
+  const row = await c.env.DB.prepare("SELECT expires_at, user_id FROM sessions WHERE id = ?").bind(id).first<{
+    expires_at: string;
+    user_id: string | null;
+  }>();
+  if (!row?.user_id || Date.parse(row.expires_at) <= Date.now()) return null;
+  return findUserById(c.env.DB, row.user_id);
 }
 
 type AppContext = Context<{ Bindings: Env }>;
@@ -488,16 +519,23 @@ async function requireAuth(c: AppContext): Promise<boolean> {
   return isAuthenticated(c.env.DB, getCookie(c, COOKIE));
 }
 
-async function startSession(c: AppContext): Promise<void> {
+async function startSession(c: AppContext, userId: string): Promise<void> {
   const token = randomToken();
-  await c.env.DB.prepare("INSERT INTO sessions (id, expires_at) VALUES (?, ?)").bind(await sha256(token), sessionExpiry()).run();
+  await c.env.DB.prepare("INSERT INTO sessions (id, expires_at, user_id) VALUES (?, ?, ?)").bind(
+    await sha256(token),
+    sessionExpiry(),
+    userId,
+  ).run();
   setCookie(c, COOKIE, token, sessionCookieOptions(c.req.url));
 }
 
 type JsonBody = Record<string, unknown> & {
-  pin?: unknown;
-  currentPin?: unknown;
-  nextPin?: unknown;
+  cpf?: unknown;
+  email?: unknown;
+  password?: unknown;
+  passwordConfirmation?: unknown;
+  currentPassword?: unknown;
+  nextPassword?: unknown;
   monthId?: unknown;
   incomeCents?: unknown;
   mode?: unknown;

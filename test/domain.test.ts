@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { clearFailures, isValidPin, lockedMessage, nextFailure } from "../src/auth.ts";
+import { clearFailures, lockedMessage, nextFailure, parseCpf, parseEmail, parsePassword } from "../src/auth.ts";
 import {
   cardInvoiceCents,
   cardLinkRequired,
@@ -263,10 +263,14 @@ test("compra no cartão reparte o total e começa depois das parcelas já pagas"
   }).ok, false);
 });
 
-test("PIN aceita só dígitos e bloqueia depois de oito erros", () => {
-  assert.equal(isValidPin("1234"), true);
-  assert.equal(isValidPin("12"), false);
-  assert.equal(isValidPin("abcd"), false);
+test("conta exige CPF válido, e-mail e senha, e bloqueia depois de oito erros", () => {
+  assert.deepEqual(parseCpf("529.982.247-25"), { ok: true, cpf: "52998224725" });
+  assert.equal(parseCpf("111.111.111-11").ok, false);
+  assert.equal(parseCpf("123").ok, false);
+  assert.deepEqual(parseEmail("  Pessoa@Email.com "), { ok: true, email: "pessoa@email.com" });
+  assert.equal(parseEmail("sem-arroba").ok, false);
+  assert.equal(parsePassword("12345678").ok, true);
+  assert.equal(parsePassword("curta").ok, false);
   let state = clearFailures();
   for (let attempt = 0; attempt < 7; attempt += 1) state = nextFailure(state, 0);
   assert.equal(lockedMessage(state, 0), null);

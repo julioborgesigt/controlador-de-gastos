@@ -50,6 +50,14 @@ CREATE TABLE IF NOT EXISTS income_extras (
   month_id TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY,
+  cpf TEXT NOT NULL UNIQUE,
+  email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  password_salt TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
 `;
 
 type MonthRow = {
@@ -111,6 +119,10 @@ async function migrateAndSeed(db: D1Database): Promise<void> {
   const monthColumns = await db.prepare("PRAGMA table_info(months)").all<{ name: string }>();
   if (!(monthColumns.results ?? []).some((column) => column.name === "income_locked")) {
     await db.prepare("ALTER TABLE months ADD COLUMN income_locked INTEGER NOT NULL DEFAULT 0").run();
+  }
+  const sessionColumns = await db.prepare("PRAGMA table_info(sessions)").all<{ name: string }>();
+  if (!(sessionColumns.results ?? []).some((column) => column.name === "user_id")) {
+    await db.prepare("ALTER TABLE sessions ADD COLUMN user_id TEXT").run();
   }
 
   const seeded = await db.prepare("SELECT value FROM settings WHERE key = 'seeded'").first<{ value: string }>();
@@ -174,6 +186,87 @@ async function backfillIncomeLocks(db: D1Database): Promise<void> {
     )
     .run();
   await setSetting(db, "income_locked_backfill", "1");
+}
+
+export type Account = {
+  id: string;
+  cpf: string;
+  email: string;
+  passwordHash: string;
+  passwordSalt: string;
+};
+
+export async function countUsers(db: D1Database): Promise<number> {
+  const row = await db.prepare("SELECT COUNT(*) AS n FROM users").first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+export async function findUserByCpf(db: D1Database, cpf: string): Promise<Account | null> {
+  const row = await db
+    .prepare("SELECT id, cpf, email, password_hash, password_salt FROM users WHERE cpf = ?")
+    .bind(cpf)
+    .first<{ id: string; cpf: string; email: string; password_hash: string; password_salt: string }>();
+  return row ? mapAccount(row) : null;
+}
+
+export async function findUserByEmail(db: D1Database, email: string): Promise<Account | null> {
+  const row = await db
+    .prepare("SELECT id, cpf, email, password_hash, password_salt FROM users WHERE email = ?")
+    .bind(email)
+    .first<{ id: string; cpf: string; email: string; password_hash: string; password_salt: string }>();
+  return row ? mapAccount(row) : null;
+}
+
+export async function findUserById(db: D1Database, id: string): Promise<Account | null> {
+  const row = await db
+    .prepare("SELECT id, cpf, email, password_hash, password_salt FROM users WHERE id = ?")
+    .bind(id)
+    .first<{ id: string; cpf: string; email: string; password_hash: string; password_salt: string }>();
+  return row ? mapAccount(row) : null;
+}
+
+export async function createUser(
+  db: D1Database,
+  input: { cpf: string; email: string; passwordHash: string; passwordSalt: string },
+): Promise<{ ok: true; id: string } | { ok: false; error: string }> {
+  if (await findUserByCpf(db, input.cpf)) return { ok: false, error: "Já existe uma conta com este CPF." };
+  if (await findUserByEmail(db, input.email)) return { ok: false, error: "Já existe uma conta com este e-mail." };
+  const id = crypto.randomUUID();
+  try {
+    await db
+      .prepare(
+        "INSERT INTO users (id, cpf, email, password_hash, password_salt, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+      .bind(id, input.cpf, input.email, input.passwordHash, input.passwordSalt, new Date().toISOString())
+      .run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("UNIQUE")) return { ok: false, error: "Já existe uma conta com este CPF ou e-mail." };
+    throw error;
+  }
+  return { ok: true, id };
+}
+
+export async function updatePassword(
+  db: D1Database,
+  userId: string,
+  passwordHash: string,
+  passwordSalt: string,
+): Promise<void> {
+  await db
+    .prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?")
+    .bind(passwordHash, passwordSalt, userId)
+    .run();
+}
+
+function mapAccount(row: { id: string; cpf: string; email: string; password_hash: string; password_salt: string }): Account {
+  return {
+    id: row.id,
+    cpf: row.cpf,
+    email: row.email,
+    passwordHash: row.password_hash,
+    passwordSalt: row.password_salt,
+  };
 }
 
 export async function getSetting(db: D1Database, key: string): Promise<string | null> {
