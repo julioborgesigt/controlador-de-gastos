@@ -1,0 +1,10 @@
+{
+  "name": "Controle de Gastos",
+  "short_name": "Gastos",
+  "description": "Controle prático de gastos fixos de casa, cartão de crédito e gastos extras via Pix ou Cartão.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#0f172a",
+  "orientation": "portrait"
+}
