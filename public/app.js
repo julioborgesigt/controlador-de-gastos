@@ -1354,11 +1354,23 @@ function sheet() {
     );
   } else {
     const needsCard = draft.cardExpense || draft.section === "card" || draft.payment === "card" || draft.onCard;
+    const cardSpend = draft.cardExpense && draft.mode === "create";
     panel.append(
-      el("h2", {}, draft.cardExpense && draft.mode === "create" ? "Gasto no cartão" : draft.mode === "create" ? "Novo gasto" : "Editar gasto"),
-      field("Nome", "name", draft.name, "text"),
-      field(amountLabel(draft), "amount", draft.amount, "decimal"),
-      draft.cardExpense
+      el("h2", {}, cardSpend ? "Gasto no cartão" : draft.mode === "create" ? "Novo gasto" : "Editar gasto"),
+      cardSpend
+        ? el("div", { class: "field" }, [
+          el("label", {}, "O valor informado é"),
+          segmented("amountMode", [["installment", "Da parcela"], ["total", "Da compra toda"]], draft.amountMode || "installment"),
+        ])
+        : "",
+      cardSpend
+        ? el("div", { class: "pair" }, [
+          field("Nome", "name", draft.name, "text"),
+          field(draft.amountMode === "total" ? "Valor da compra" : "Valor da parcela", "amount", draft.amount, "decimal"),
+        ])
+        : field("Nome", "name", draft.name, "text"),
+      cardSpend ? "" : field(amountLabel(draft), "amount", draft.amount, "decimal"),
+      cardSpend
         ? ""
         : el("div", { class: "field" }, [
           el("label", {}, "Tipo"),
@@ -1368,11 +1380,8 @@ function sheet() {
             ["card", "Fatura"],
           ], draft.section),
         ]),
-      draft.cardExpense
-        ? el("div", { class: "field" }, [
-          el("label", {}, "Como foi pago"),
-          el("div", { class: "choice" }, [el("div", { class: "static" }, "Cartão")]),
-        ])
+      cardSpend
+        ? ""
         : draft.section === "fixed"
           ? el("div", { class: "field" }, [
             el("button", {
@@ -1393,7 +1402,13 @@ function sheet() {
               segmented("payment", [["pix", "Pix"], ["debit", "Débito"], ["cash", "Dinheiro"], ["card", "Cartão"]], draft.payment),
             ])
             : "",
-      cardPurchaseFields(draft),
+      cardSpend
+        ? el("div", { class: "pair" }, [
+          field("Quantidade de parcelas", "installmentCount", draft.installmentCount || "1", "numeric"),
+          field("Parcelas já pagas", "installmentsPaid", draft.installmentsPaid || "0", "numeric"),
+        ])
+        : "",
+      cardSpend ? el("p", { class: "muted", id: "installment-preview" }, installmentPreview(draft)) : cardPurchaseFields(draft),
       draft.mode === "edit" && (draft.section === "card" || draft.section === "extra")
         ? field("Parcela", "installment", draft.installment, "text", "3/10, se houver")
         : "",
