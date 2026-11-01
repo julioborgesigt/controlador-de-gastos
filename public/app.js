@@ -25,6 +25,9 @@ const state = {
   confirm: null,
 };
 
+let overlayPushed = false;
+let suppressHistory = false;
+
 const views = [
   ["resumo", "Resumo"],
   ["cartoes", "Cartões"],
@@ -36,19 +39,30 @@ const views = [
 boot();
 
 async function boot() {
+  render();
   try {
     const session = await request("/api/session");
     state.needsSetup = session.needsSetup;
     state.authed = session.authenticated;
     if (session.needsSetup) state.authView = "register";
-    if (state.authed) {
-      try {
-        const spaces = await request("/api/spaces");
-        state.spaces = spaces.spaces || [];
-      } catch {
-        state.spaces = [];
+    if (!state.authed) {
+      clearMonthCache();
+    } else {
+      const cached = readMonthCache(state.monthId);
+      if (cached) {
+        state.data = cached;
+        state.monthId = cached.month.id;
+        state.booting = false;
+        render();
       }
-      await loadMonth(state.monthId);
+      await Promise.all([
+        request("/api/spaces").then((data) => {
+          state.spaces = data.spaces || [];
+        }).catch(() => {
+          state.spaces = [];
+        }),
+        loadMonth(state.monthId),
+      ]);
     }
   } catch (error) {
     state.error = messageOf(error);
@@ -80,6 +94,31 @@ async function loadMonth(monthId) {
   state.data = data;
   state.monthId = data.month.id;
   sessionStorage.setItem("monthId", data.month.id);
+  rememberMonth(data);
+}
+
+function rememberMonth(data) {
+  try {
+    sessionStorage.setItem("monthCache:v1", JSON.stringify({ data }));
+  } catch {
+    sessionStorage.removeItem("monthCache:v1");
+  }
+}
+
+function readMonthCache(monthId) {
+  try {
+    const parsed = JSON.parse(sessionStorage.getItem("monthCache:v1") || "");
+    const data = parsed?.data;
+    if (!data?.month?.id || !Array.isArray(data.months) || !Array.isArray(data.expenses)) return null;
+    if (monthId && data.month.id !== monthId) return null;
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+function clearMonthCache() {
+  sessionStorage.removeItem("monthCache:v1");
 }
 
 function currentMonthId() {
@@ -95,21 +134,25 @@ function render() {
   const viewKey = `${state.authed}:${state.monthId}:${state.view}:${state.cardFocus || ""}`;
   const keepPlace = state.viewKey === viewKey;
   root.replaceChildren();
+  root.removeAttribute("aria-busy");
   if (state.booting) {
     root.append(screen(el("p", { class: "lede" }, "Abrindo o mês...")));
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
+    syncOverlayHistory();
     return;
   }
   if (!state.authed) {
     root.append(authScreen());
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
+    syncOverlayHistory();
     return;
   }
   if (state.choosing) {
     root.append(accessScreen());
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
+    syncOverlayHistory();
     return;
   }
   root.append(shell());
@@ -119,7 +162,45 @@ function render() {
   else unlockPage(keepPlace ? lockedScroll : 0);
   state.viewKey = viewKey;
   queueMicrotask(centerMonthChip);
+  syncOverlayHistory();
 }
+
+function overlayIsOpen() {
+  return Boolean(state.sheet || state.confirm || state.accountMenu);
+}
+
+function syncOverlayHistory() {
+  if (suppressHistory) return;
+  const open = overlayIsOpen();
+  if (open && !overlayPushed) {
+    history.pushState({ overlay: 1 }, "");
+    overlayPushed = true;
+    return;
+  }
+  if (!open && overlayPushed) {
+    overlayPushed = false;
+    if (history.state && history.state.overlay) {
+      suppressHistory = true;
+      history.back();
+    }
+  }
+}
+
+window.addEventListener("popstate", () => {
+  if (suppressHistory) {
+    suppressHistory = false;
+    return;
+  }
+  if (!overlayPushed) return;
+  overlayPushed = false;
+  if (state.confirm) state.confirm = null;
+  else if (state.accountMenu) state.accountMenu = false;
+  else {
+    state.sheet = null;
+    state.error = "";
+  }
+  render();
+});
 
 let sheetGuardBound = false;
 let sheetTouchY = 0;
@@ -2198,6 +2279,7 @@ async function logout() {
   state.accountMenu = false;
   state.confirm = null;
   state.sheet = null;
+  clearMonthCache();
   await request("/api/logout", { method: "POST", body: {} });
   state.authed = false;
   state.authView = "login";
