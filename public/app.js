@@ -26,7 +26,7 @@ const state = {
 const views = [
   ["resumo", "Resumo"],
   ["cartoes", "Cartões"],
-  ["casa", "Casa"],
+  ["casa", "Recorrente"],
   ["extras", "Extras"],
   ["receita", "Receita"],
 ];
@@ -224,7 +224,7 @@ function authScreen() {
     el("h1", {}, registering ? "Criar conta" : "Entrar"),
     el("p", { class: "lede" }, registering
       ? "Informe CPF, e-mail e senha. O e-mail fica guardado para códigos e avisos futuros."
-      : "Entre com CPF e senha para ver a fatura, a casa e os gastos extras."),
+      : "Entre com CPF e senha para ver a fatura, os recorrentes e os gastos extras."),
     state.error ? el("p", { class: "error" }, state.error) : "",
     authInput("cpf", "CPF", state.auth.cpf, { key: "cpf", inputmode: "numeric", autocomplete: "username", placeholder: "000.000.000-00", mask: "cpf" }),
     registering ? authInput("email", "E-mail", state.auth.email, { key: "email", type: "email", autocomplete: "email", placeholder: "voce@email.com" }) : "",
@@ -673,9 +673,9 @@ function summary(data) {
     jump("cartoes", "Fatura do cartão", money(totals.faturaCents), totals.extrasCardCents
       ? `${money(totals.invoiceCents)} previstos + ${money(totals.extrasCardCents)} em extras`
       : "Nubank, Neon e linhas da fatura"),
-    jump("casa", "Gastos fixos", money(totals.fixedCents), totals.fixedOnCardCents
-      ? `${money(totals.fixedOnCardCents)} já entram na fatura e não somam de novo`
-      : "Casa, Pix e boletos deste mês"),
+    jump("casa", "Gastos recorrentes", money(totals.fixedCents), totals.fixedOnCardCents
+      ? `${money(totals.fixedOnCardCents)} já foram para o cartão`
+      : "Contas que voltam todo mês"),
     jump("extras", "Gastos extras", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
     editable() && totals.remainingCents > 0
       ? el("button", { class: "primary", type: "button", onclick: () => askConfirm("settle") }, "Quitar o que falta")
@@ -771,7 +771,7 @@ function confirmCopy() {
   if (state.confirm === "settle") {
     return {
       title: "Quitar o que falta",
-      body: `Marca como pagos a fatura, o Pix e os extras ainda em aberto em ${month}. Um gasto fixo que já está na fatura continua na casa e não é cobrado outra vez. Se não restar valor a pagar, o mês fica quitado.`,
+      body: `Marca como pagos a fatura, o Pix e os extras ainda em aberto em ${month}. Um recorrente já lançado no cartão continua na lista e não é cobrado outra vez. Se não restar valor a pagar, o mês fica quitado.`,
       action: "Quitar",
     };
   }
@@ -892,7 +892,7 @@ function cardDetail(data) {
       el("h2", {}, card ? card.name : "Sem cartão"),
       el("p", { class: "money inline" }, money(total)),
       el("p", { class: "muted" }, card
-        ? "Gastos vinculados a este cartão. O que veio da casa já está na fatura e não soma de novo."
+        ? "Gastos vinculados a este cartão. O recorrente que já virou lançamento aparece pelo apelido."
         : "Estes gastos ainda não têm um cartão cadastrado."),
     ]),
     editable() ? el("div", { class: "stack-actions" }, [
@@ -906,7 +906,7 @@ function cardDetail(data) {
   const groups = [
     ["Fatura prevista", visible.filter((expense) => expense.section === "card")],
     ["Gastos do cartão", visible.filter((expense) => expense.section === "extra")],
-    ["Da casa, já na fatura", visible.filter((expense) => expense.section === "fixed")],
+    ["Recorrente, já na fatura", visible.filter((expense) => expense.section === "fixed" && !linkedInvoice(expense))],
   ];
   for (const [title, rows] of groups) {
     if (!rows.length) continue;
@@ -991,7 +991,7 @@ function sectionList(data, section) {
   const all = data.expenses.filter((expense) => belongs(expense, section));
   const visible = all.filter((expense) => state.showEmpty || expense.amountCents !== 0 || expense.source === "user");
   const hidden = all.length - visible.length;
-  const heading = section === "card" ? "Cartões" : section === "fixed" ? "Casa" : "Extras";
+  const heading = section === "card" ? "Cartões" : section === "fixed" ? "Recorrente" : "Extras";
   const total = section === "card" ? totals.faturaCents : section === "fixed" ? totals.fixedCents : totals.extrasCardCents + totals.extrasPixCents;
   const children = [
     el("div", { class: "section-head" }, [
@@ -1001,7 +1001,7 @@ function sectionList(data, section) {
     ]),
   ];
   if (section === "fixed") {
-    children.push(el("p", { class: "note" }, "Marque “Na fatura” quando o gasto fixo foi para o cartão. Ele continua neste total da casa e aparece como já contabilizado, sem entrar de novo no que falta pagar."));
+    children.push(el("p", { class: "note" }, "Pago com cartão pergunta o cartão, o valor e o parcelamento. O apelido entra na fatura."));
   }
   if (section === "extra") {
     children.push(el("p", { class: "note" }, "Dê um nome ao gasto extra e diga se ele saiu no Pix, débito, dinheiro ou cartão."));
@@ -1011,7 +1011,7 @@ function sectionList(data, section) {
       class: "primary add-top",
       type: "button",
       onclick: () => openCreate(section, "pix"),
-    }, section === "fixed" ? "Adicionar gasto fixo" : "Adicionar gasto"));
+    }, section === "fixed" ? "Adicionar gasto recorrente" : "Adicionar gasto"));
   }
   children.push(el("div", { class: "list" }, visible.map((expense) => expenseRow(expense, section))));
   if (!visible.length) {
@@ -1118,6 +1118,37 @@ function cardPurchaseFields(draft) {
     ]),
     el("p", { class: "muted", id: "installment-preview" }, installmentPreview(draft)),
   ]);
+}
+
+function cardPayPreview(draft) {
+  const alias = String(draft.alias || "").trim() || "o apelido";
+  const card = draft.cardLabel ? `do ${draft.cardLabel}` : "do cartão";
+  if (draft.billing === "installments") {
+    const count = Number(draft.installmentCount);
+    const amount = parseMoney(draft.installmentAmount || "");
+    if (!Number.isInteger(count) || count < 2 || amount === null || amount <= 0) {
+      return "As parcelas entram na fatura deste mês em diante, com o apelido escolhido.";
+    }
+    return `${count} parcelas de ${money(amount)} na fatura ${card}, como “${alias}”.`;
+  }
+  const amount = draft.amountChoice === "other" ? parseMoney(draft.otherAmount || "") : draft.described;
+  if (amount === null || amount <= 0) return "O valor entra neste mês na fatura do cartão, com o apelido escolhido.";
+  return `${money(amount)} neste mês na fatura ${card}, como “${alias}”.`;
+}
+
+async function undoCardPay(id) {
+  state.error = "";
+  setWorking(true, "Desfazendo...");
+  try {
+    state.data = await request(`/api/expenses/${id}/card-payment`, { method: "DELETE" });
+    state.sheet = null;
+    state.notice = "O pagamento no cartão foi desfeito e saiu da fatura.";
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
 }
 
 function installmentPreview(draft) {
@@ -1258,13 +1289,13 @@ function belongs(expense, section) {
 
 function blurb(section, totals) {
   if (section === "card" && totals.fixedOnCardCents) {
-    return `${money(totals.fixedOnCardCents)} de gastos da casa já estão dentro desta fatura e não são somados de novo.`;
+    return `${money(totals.fixedOnCardCents)} de recorrentes já foram lançados no cartão e não somam de novo.`;
   }
-  if (section === "card") return "Linhas previstas da planilha mais os extras lançados no cartão.";
+  if (section === "card") return "Linhas previstas da planilha mais os gastos lançados no cartão.";
   if (section === "fixed") {
     return totals.fixedOnCardCents
-      ? `${money(totals.fixedCashCents)} ainda saem no Pix ou boleto. ${money(totals.fixedOnCardCents)} já estão na fatura.`
-      : "Tudo isto entra no mês, separado da fatura, até você marcar o que foi para o cartão.";
+      ? `${money(totals.fixedCashCents)} ainda saem no Pix ou boleto. ${money(totals.fixedOnCardCents)} já foram para o cartão.`
+      : "Contas que voltam todo mês.";
   }
   return "Estes gastos não estavam na projeção e valem só para este mês.";
 }
@@ -1274,7 +1305,7 @@ function expenseRow(expense, section, options = {}) {
   const lockedCard = Boolean(options.cardExpense) && expense.section !== "fixed";
   const meta = [];
   if (expense.section === "extra" && section === "card" && !options.manage) meta.push("Extra");
-  if (onInvoice && section === "card") meta.push("Gasto fixo, já incluído");
+  if (onInvoice && section === "card") meta.push("Recorrente, já incluído");
   if (expense.payment !== "card" || onInvoice) meta.push(paymentLabel(expense.payment));
   if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Cartão ${expense.cardLabel}` : "Cartão");
   if (expense.installment) meta.push(expense.installment);
@@ -1291,8 +1322,8 @@ function expenseRow(expense, section, options = {}) {
     ? el("button", {
       type: "button",
       class: `toggle${onInvoice ? " on" : ""}`,
-      onclick: () => toggleInvoice(expense),
-    }, onInvoice ? "Na fatura" : "Marcar na fatura")
+      onclick: () => openCardPay(expense),
+    }, "Pago com cartão")
     : "";
   const edit = () => {
     if (editable()) openEdit(expense, { cardExpense: lockedCard });
@@ -1387,7 +1418,8 @@ function openEdit(expense, options = {}) {
     payment: expense.payment,
     onCard: expense.onCard,
     cardLabel: expense.cardLabel || "",
-    note: expense.note || "",
+    note: visibleNote(expense.note),
+    originId: originIdFrom(expense.note),
     installment: expense.installment || "",
     paid: expense.paid,
     source: expense.source,
@@ -1396,18 +1428,48 @@ function openEdit(expense, options = {}) {
   render();
 }
 
-function toggleInvoice(expense) {
-  if (!expense.onCard) {
-    const cardLabel = expense.cardLabel || firstCardName();
-    if (!cardLabel) {
-      state.error = "Adicione um cartão antes de marcar o gasto na fatura.";
-      render();
-      return;
-    }
-    patchExpense(expense, { onCard: true, payment: "card", cardLabel });
+function originIdFrom(note) {
+  const line = String(note || "").split("\n").find((item) => item.startsWith("origem:"));
+  return line ? line.slice("origem:".length) : "";
+}
+
+function visibleNote(note) {
+  return String(note || "").split("\n").filter((item) => item && !item.startsWith("origem:")).join("\n");
+}
+
+function composeNote(originId, note) {
+  const text = String(note || "").trim();
+  if (!originId) return text;
+  return text ? `origem:${originId}\n${text}` : `origem:${originId}`;
+}
+
+function linkedInvoice(expense) {
+  return (state.data?.expenses || []).some((item) => originIdFrom(item.note) === expense.id);
+}
+
+function openCardPay(expense) {
+  const cards = state.data?.cards ?? [];
+  if (!cards.length) {
+    state.error = "Adicione um cartão antes de lançar o pagamento.";
+    openCreateCard();
     return;
   }
-  patchExpense(expense, { onCard: false, payment: "pix", cardLabel: null });
+  const selected = cards.some((card) => card.name === expense.cardLabel) ? expense.cardLabel : (cards.length === 1 ? cards[0].name : "");
+  state.sheet = {
+    mode: "card-pay",
+    id: expense.id,
+    described: expense.amountCents,
+    alias: expense.name,
+    cardLabel: selected,
+    amountChoice: "same",
+    otherAmount: "",
+    billing: "once",
+    installmentCount: "2",
+    installmentAmount: expense.amountCents > 0 ? centsToInput(expense.amountCents) : "",
+    linked: linkedInvoice(expense) || expense.onCard,
+  };
+  state.error = "";
+  render();
 }
 
 function editMonthIncome(month) {
@@ -1579,6 +1641,37 @@ function sheet() {
         el("button", { class: "primary", type: "submit" }, "Trocar"),
       ]),
     );
+  } else if (draft.mode === "card-pay") {
+    const described = money(draft.described || 0);
+    panel.append(
+      el("h2", {}, "Pago com cartão"),
+      el("p", { class: "muted" }, `Na lista este gasto está como ${described}. O apelido é o nome que entra na fatura.`),
+      field("Apelido na fatura", "alias", draft.alias, "text", "Faculdade, energia..."),
+      cardSelect(draft),
+      el("div", { class: "field" }, [
+        el("label", {}, "O valor cobrado é"),
+        segmented("amountChoice", [["same", `O descrito · ${described}`], ["other", "Outro valor"]], draft.amountChoice),
+      ]),
+      draft.amountChoice === "other" ? field("Valor cobrado", "otherAmount", draft.otherAmount, "decimal") : "",
+      el("div", { class: "field" }, [
+        el("label", {}, "Parcelamento"),
+        segmented("billing", [["once", "À vista"], ["installments", "Parcelado"]], draft.billing),
+      ]),
+      draft.billing === "installments"
+        ? el("div", { class: "pair" }, [
+          field("Quantidade de parcelas", "installmentCount", draft.installmentCount || "2", "numeric"),
+          field("Valor da parcela", "installmentAmount", draft.installmentAmount || "", "decimal"),
+        ])
+        : "",
+      el("p", { class: "muted", id: "installment-preview" }, cardPayPreview(draft)),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
+        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Lançando..." : "Lançar na fatura"),
+      ]),
+      draft.linked
+        ? el("button", { class: "danger", type: "button", onclick: () => undoCardPay(draft.id) }, "Desfazer pagamento no cartão")
+        : "",
+    );
   } else if (draft.mode === "card") {
     panel.append(
       el("h2", {}, "Novo cartão"),
@@ -1612,25 +1705,22 @@ function sheet() {
           el("label", {}, "Tipo"),
           segmented("section", [
             ["extra", "Extra"],
-            ["fixed", "Fixo"],
+            ["fixed", "Recorrente"],
             ["card", "Fatura"],
           ], draft.section),
         ]),
       cardSpend
         ? ""
-        : draft.section === "fixed"
+        : draft.section === "fixed" && draft.mode === "edit"
           ? el("div", { class: "field" }, [
             el("button", {
               type: "button",
-              class: `switch${draft.onCard ? " on" : ""}`,
+              class: "secondary",
               onclick: () => {
-                draft.onCard = !draft.onCard;
-                draft.payment = draft.onCard ? "card" : "pix";
-                if (draft.onCard && !draft.cardLabel) draft.cardLabel = firstCardName();
-                render();
+                const expense = state.data?.expenses?.find((item) => item.id === draft.id);
+                if (expense) openCardPay(expense);
               },
-            }, [draft.onCard ? "Na fatura do cartão" : "Ainda não foi para o cartão", draft.onCard ? "Sim" : "Não"]),
-            el("small", { class: "muted" }, "Continua nos gastos fixos. O total a pagar deixa de somar este valor outra vez."),
+            }, "Pago com cartão"),
           ])
           : draft.section === "extra"
             ? el("div", { class: "field" }, [
@@ -1667,7 +1757,8 @@ function sheet() {
 
 function cardSelect(draft) {
   const cards = state.data?.cards ?? [];
-  const required = (draft.section === "extra" && (draft.payment === "card" || draft.cardExpense))
+  const required = draft.mode === "card-pay"
+    || (draft.section === "extra" && (draft.payment === "card" || draft.cardExpense))
     || (draft.section === "fixed" && draft.onCard)
     || (draft.cardExpense && draft.mode === "create");
   const current = draft.cardLabel || "";
@@ -1696,7 +1787,9 @@ function field(labelText, key, value, mode, placeholder = "") {
   input.addEventListener("input", () => {
     state.sheet[key] = input.value;
     const preview = document.querySelector("#installment-preview");
-    if (preview && state.sheet) preview.textContent = installmentPreview(state.sheet);
+    if (preview && state.sheet) {
+      preview.textContent = state.sheet.mode === "card-pay" ? cardPayPreview(state.sheet) : installmentPreview(state.sheet);
+    }
   });
   return el("div", { class: "field" }, [el("label", { for: key }, labelText), input]);
 }
@@ -1728,7 +1821,36 @@ async function saveSheet(event) {
   state.error = "";
   try {
     if (draft.mode === "passkey") return;
-    if (draft.mode === "share") {
+    if (draft.mode === "card-pay") {
+      const alias = String(draft.alias || "").trim();
+      if (!alias) throw new Error("Escolha o apelido que vai aparecer na fatura.");
+      if (!draft.cardLabel) throw new Error("Escolha o cartão.");
+      let amountCents = draft.described;
+      let installmentCount = 1;
+      if (draft.billing === "installments") {
+        installmentCount = Number(draft.installmentCount);
+        amountCents = parseMoney(draft.installmentAmount || "");
+        if (!Number.isInteger(installmentCount) || installmentCount < 2 || installmentCount > 48) {
+          throw new Error("Informe de 2 a 48 parcelas.");
+        }
+        if (amountCents === null || amountCents <= 0) throw new Error("Informe o valor da parcela.");
+      } else if (draft.amountChoice === "other") {
+        amountCents = parseMoney(draft.otherAmount || "");
+        if (amountCents === null || amountCents <= 0) throw new Error("Informe o valor cobrado no cartão.");
+      } else if (!amountCents || amountCents <= 0) {
+        throw new Error("Este gasto está sem valor. Informe outro valor.");
+      }
+      setWorking(true, "Lançando na fatura...");
+      state.data = await request(`/api/expenses/${draft.id}/card-payment`, {
+        method: "POST",
+        body: { cardLabel: draft.cardLabel, alias, amountCents, installmentCount },
+      });
+      state.notice = installmentCount > 1
+        ? `Lancei ${installmentCount} parcelas na fatura, com o apelido “${alias}”.`
+        : `Lancei “${alias}” na fatura do cartão.`;
+      state.sheet = null;
+      return;
+    } else if (draft.mode === "share") {
       setWorking(true, "Salvando...");
       const data = await request("/api/shares", { method: "POST", body: { cpf: draft.cpf, permission: draft.permission } });
       state.shares = data.shares || [];
@@ -1819,7 +1941,7 @@ async function saveSheet(event) {
         payment: draft.section === "fixed" && draft.onCard ? "card" : draft.payment,
         onCard: draft.section === "fixed" && draft.onCard,
         cardLabel: draft.cardLabel,
-        note: draft.note,
+        note: composeNote(draft.originId, draft.note),
         installment: onCardPurchase ? null : draft.installment,
         paid: draft.paid,
         installmentPlan: onCardPurchase ? { totalCount, paidCount, amountMode: draft.amountMode || "installment" } : undefined,

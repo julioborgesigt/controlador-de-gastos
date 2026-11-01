@@ -210,7 +210,13 @@ export function carryForward(expense: Expense): Expense | null {
     if (current >= total) return null;
     installment = `${current + 1}/${total}`;
   }
-  return { ...expense, id: "", paid: false, installment };
+  const next = { ...expense, id: "", paid: false, installment };
+  if (expense.section === "fixed") {
+    next.onCard = false;
+    next.payment = expense.payment === "card" ? "pix" : expense.payment;
+    next.cardLabel = null;
+  }
+  return next;
 }
 
 export function parseCardName(value: unknown): { ok: true; name: string } | { ok: false; error: string } {

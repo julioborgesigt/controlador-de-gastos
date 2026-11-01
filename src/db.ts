@@ -732,6 +732,77 @@ export async function insertCardPurchase(
   return { ok: true };
 }
 
+export function recurringOriginNote(expenseId: string): string {
+  return `origem:${expenseId}`;
+}
+
+export async function clearRecurringCardLines(db: D1Database, ownerId: string, expenseId: string): Promise<void> {
+  const marker = recurringOriginNote(expenseId);
+  await db
+    .prepare("DELETE FROM expenses WHERE owner_id = ? AND (note = ? OR note LIKE ?)")
+    .bind(ownerId, marker, `${marker}\n%`)
+    .run();
+}
+
+export async function payRecurringOnCard(
+  db: D1Database,
+  input: {
+    ownerId: string;
+    expenseId: string;
+    cardLabel: string;
+    alias: string;
+    amountCents: number;
+    totalCount: number;
+  },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const expense = await getExpense(db, input.ownerId, input.expenseId);
+  if (!expense) return { ok: false, error: "Gasto não encontrado." };
+  if (expense.section !== "fixed") return { ok: false, error: "Só um gasto recorrente entra na fatura por aqui." };
+  const alias = input.alias.trim().replace(/\s+/g, " ").slice(0, 80);
+  if (!alias) return { ok: false, error: "Escolha o apelido que vai aparecer na fatura." };
+  const plan = planCardPurchase({
+    startMonthId: expense.monthId,
+    totalCount: input.totalCount,
+    paidCount: 0,
+    amountCents: input.amountCents,
+    mode: "installment",
+  });
+  if (!plan.ok) return plan;
+  await clearRecurringCardLines(db, input.ownerId, input.expenseId);
+  await db
+    .prepare("UPDATE expenses SET payment = 'card', on_card = 1, card_label = ?, paid = 1 WHERE owner_id = ? AND id = ?")
+    .bind(input.cardLabel, input.ownerId, input.expenseId)
+    .run();
+  return insertCardPurchase(db, {
+    ownerId: input.ownerId,
+    startMonthId: expense.monthId,
+    name: alias,
+    section: "card",
+    payment: "card",
+    cardLabel: input.cardLabel,
+    note: recurringOriginNote(input.expenseId),
+    totalCount: input.totalCount,
+    paidCount: 0,
+    amountCents: input.amountCents,
+    mode: "installment",
+  });
+}
+
+export async function clearRecurringCardCharge(
+  db: D1Database,
+  ownerId: string,
+  expenseId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const expense = await getExpense(db, ownerId, expenseId);
+  if (!expense) return { ok: false, error: "Gasto não encontrado." };
+  await clearRecurringCardLines(db, ownerId, expenseId);
+  await db
+    .prepare("UPDATE expenses SET payment = 'pix', on_card = 0, card_label = NULL, paid = 0 WHERE owner_id = ? AND id = ?")
+    .bind(ownerId, expenseId)
+    .run();
+  return { ok: true };
+}
+
 export async function applyBaseIncome(db: D1Database, ownerId: string, amountCents: number, scope: "all" | "unlocked"): Promise<void> {
   await setSetting(db, baseIncomeKey(ownerId), String(amountCents));
   if (scope === "all") {
