@@ -128,6 +128,77 @@ export function previousMonthId(monthId: string): string | null {
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
+const MONTH_LABELS = [
+  "Janeiro",
+  "Fevereiro",
+  "Março",
+  "Abril",
+  "Maio",
+  "Junho",
+  "Julho",
+  "Agosto",
+  "Setembro",
+  "Outubro",
+  "Novembro",
+  "Dezembro",
+];
+
+export function addMonths(monthId: string, offset: number): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthId);
+  if (!match) return monthId;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1 + offset, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+export function monthLabel(monthId: string): string {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthId);
+  if (!match) return monthId;
+  return `${MONTH_LABELS[Number(match[2]) - 1]} ${match[1]}`;
+}
+
+export function monthSortOrder(monthId: string): number {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthId);
+  if (!match) return 0;
+  return Number(match[1]) * 12 + Number(match[2]);
+}
+
+export type CardPurchasePlan = {
+  schedule: Array<{ monthId: string; installment: string | null; amountCents: number }>;
+};
+
+export function planCardPurchase(input: {
+  startMonthId: string;
+  totalCount: number;
+  paidCount: number;
+  amountCents: number;
+  mode: "installment" | "total";
+}): { ok: true; plan: CardPurchasePlan } | { ok: false; error: string } {
+  if (!Number.isInteger(input.totalCount) || input.totalCount < 1 || input.totalCount > 48) {
+    return { ok: false, error: "Informe de 1 a 48 parcelas." };
+  }
+  if (!Number.isInteger(input.paidCount) || input.paidCount < 0 || input.paidCount >= input.totalCount) {
+    return { ok: false, error: "As parcelas já pagas precisam ser menores que o total." };
+  }
+  if (!Number.isInteger(input.amountCents) || input.amountCents <= 0) {
+    return { ok: false, error: "Informe um valor maior que zero." };
+  }
+  const installmentCents = input.mode === "total" ? Math.floor(input.amountCents / input.totalCount) : input.amountCents;
+  if (installmentCents <= 0) return { ok: false, error: "O valor total não cobre todas as parcelas." };
+  const remainder = input.mode === "total" ? input.amountCents - installmentCents * input.totalCount : 0;
+  const remaining = input.totalCount - input.paidCount;
+  const schedule = [];
+  for (let index = 0; index < remaining; index += 1) {
+    const number = input.paidCount + 1 + index;
+    const isLast = number === input.totalCount;
+    schedule.push({
+      monthId: addMonths(input.startMonthId, index),
+      installment: input.totalCount > 1 ? `${number}/${input.totalCount}` : null,
+      amountCents: installmentCents + (isLast ? remainder : 0),
+    });
+  }
+  return { ok: true, plan: { schedule } };
+}
+
 export function carryForward(expense: Expense): Expense | null {
   if (expense.source !== "user" || expense.amountCents === 0) return null;
   if (expense.section !== "fixed" && !expense.installment) return null;

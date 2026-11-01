@@ -10,6 +10,7 @@ import {
   isFixedOnCard,
   normalizeExpense,
   parseCardName,
+  planCardPurchase,
   resolveCardLabel,
   unassignedCardExpenses,
   type Expense,
@@ -234,6 +235,32 @@ test("detalhe do cartão soma a fatura daquele cartão e separa o que já veio d
   assert.equal(cardInvoiceCents(expenses, "Neon"), 31527);
   assert.equal(expensesForCard(expenses, "Neon").some((item) => item.name === "Energia Elétrica"), true);
   assert.equal(unassignedCardExpenses(expenses, [{ name: "Nubank" }, { name: "Neon" }]).some((item) => item.cardLabel), false);
+});
+
+test("compra no cartão reparte o total e começa depois das parcelas já pagas", () => {
+  const plan = planCardPurchase({
+    startMonthId: "2026-12",
+    totalCount: 10,
+    paidCount: 3,
+    amountCents: 100001,
+    mode: "total",
+  });
+  assert.equal(plan.ok, true);
+  if (!plan.ok) return;
+  assert.equal(plan.plan.schedule.length, 7);
+  assert.equal(plan.plan.schedule[0]?.installment, "4/10");
+  assert.equal(plan.plan.schedule[0]?.monthId, "2026-12");
+  assert.equal(plan.plan.schedule[0]?.amountCents, 10000);
+  assert.equal(plan.plan.schedule[6]?.installment, "10/10");
+  assert.equal(plan.plan.schedule[6]?.monthId, "2027-06");
+  assert.equal(plan.plan.schedule[6]?.amountCents, 10001);
+  assert.equal(planCardPurchase({
+    startMonthId: "2026-12",
+    totalCount: 4,
+    paidCount: 4,
+    amountCents: 1000,
+    mode: "installment",
+  }).ok, false);
 });
 
 test("PIN aceita só dígitos e bloqueia depois de oito erros", () => {

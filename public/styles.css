@@ -100,6 +100,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .primary { background: var(--ink); color: #fffaf3; width: 100%; margin-top: 16px; }
 
+.primary.add-top { margin-top: 0; margin-bottom: 12px; }
+
+.subhead { font-size: 22px; margin: 18px 0 8px; }
+
 .secondary, .quiet, .danger { background: transparent; }
 
 .secondary { border: 1px solid var(--line); background: white; }
@@ -371,10 +375,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   border: 0;
   background: transparent;
   min-height: 52px;
-  border-radius: 16px;
+  border-radius: 14px;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
+  padding: 0 2px;
 }
 
 .nav button.active { background: white; color: var(--ink); }
