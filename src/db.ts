@@ -1,6 +1,6 @@
 import seed from "./seed-data.json";
 import type { Expense, Payment, Section } from "./domain.ts";
-import { carryForward, computeTotals, previousMonthId } from "./domain.ts";
+import { carryForward, cardKey, computeTotals, previousMonthId } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -35,6 +35,13 @@ CREATE TABLE IF NOT EXISTS sessions (
   expires_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions (expires_at);
+CREATE TABLE IF NOT EXISTS cards (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  sort_order INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_name ON cards (name COLLATE NOCASE);
 `;
 
 type MonthRow = {
@@ -83,6 +90,7 @@ async function migrateAndSeed(db: D1Database): Promise<void> {
   if (!(columns.results ?? []).some((column) => column.name === "installment")) {
     await db.prepare("ALTER TABLE expenses ADD COLUMN installment TEXT").run();
   }
+  await ensureCards(db);
 
   const seeded = await db.prepare("SELECT value FROM settings WHERE key = 'seeded'").first<{ value: string }>();
   if (seeded?.value === "1") return;
@@ -191,10 +199,67 @@ export function mapExpense(row: ExpenseRow): Expense {
   };
 }
 
+export type CardAccount = { id: string; name: string; sortOrder: number };
+
+export async function listCards(db: D1Database): Promise<CardAccount[]> {
+  const result = await db.prepare("SELECT id, name, sort_order FROM cards ORDER BY sort_order, name").all<{
+    id: string;
+    name: string;
+    sort_order: number;
+  }>();
+  return (result.results ?? []).map((card) => ({ id: card.id, name: card.name, sortOrder: card.sort_order }));
+}
+
+export async function createCard(db: D1Database, name: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const cards = await listCards(db);
+  const key = cardKey(name);
+  if (key && cards.some((card) => cardKey(card.name) === key)) {
+    return { ok: false, error: "Já existe um cartão com esse nome." };
+  }
+  const sortOrder = cards.reduce((max, card) => Math.max(max, card.sortOrder), -1) + 1;
+  try {
+    await db
+      .prepare("INSERT INTO cards (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)")
+      .bind(crypto.randomUUID(), name, sortOrder, new Date().toISOString())
+      .run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("UNIQUE")) return { ok: false, error: "Já existe um cartão com esse nome." };
+    throw error;
+  }
+  return { ok: true };
+}
+
+async function ensureCards(db: D1Database): Promise<void> {
+  const existing = await listCards(db);
+  const known = new Set(existing.map((card) => cardKey(card.name)).filter((key): key is string => key !== null));
+  let order = existing.reduce((max, card) => Math.max(max, card.sortOrder), -1);
+  const now = new Date().toISOString();
+  const inserts: D1PreparedStatement[] = [];
+  const defaults = existing.length === 0 ? ["Nubank", "Neon"] : [];
+  const labels = await db
+    .prepare("SELECT DISTINCT card_label AS name FROM expenses WHERE card_label IS NOT NULL AND TRIM(card_label) != ''")
+    .all<{ name: string }>();
+  for (const name of [...defaults, ...(labels.results ?? []).map((row) => row.name)]) {
+    const cleaned = name.trim().replace(/\s+/g, " ").slice(0, 40);
+    const key = cardKey(cleaned);
+    if (!cleaned || !key || known.has(key)) continue;
+    known.add(key);
+    order += 1;
+    inserts.push(
+      db
+        .prepare("INSERT INTO cards (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)")
+        .bind(crypto.randomUUID(), cleaned, order, now),
+    );
+  }
+  if (inserts.length) await db.batch(inserts);
+}
+
 export async function monthPayload(db: D1Database, monthId: string) {
   const month = await getMonth(db, monthId);
   if (!month) return null;
   const expenses = await listExpenses(db, monthId);
+  const cards = await listCards(db);
   const totals = computeTotals(expenses, month.income_cents);
   const settled = totals.remainingCents === 0 && totals.commitmentsCents > 0;
   if (settled !== (month.settled === 1)) {
@@ -211,6 +276,7 @@ export async function monthPayload(db: D1Database, monthId: string) {
     },
     months: months.map((item) => ({ ...item, settled: item.id === monthId ? settled : item.settled })),
     expenses,
+    cards,
     totals,
   };
 }

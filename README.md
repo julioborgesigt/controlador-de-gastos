@@ -4,6 +4,7 @@ Um único app de celular para o orçamento de novembro de 2026 a outubro de 2027
 
 - A casa continua no total de gastos fixos mesmo quando o gasto foi para o cartão. O app avisa que aquele valor já está na fatura e não soma de novo.
 - Dá para nomear um gasto extra e dizer se foi Pix, débito, dinheiro ou cartão.
+- Na aba Cartões dá para cadastrar um cartão e lançar **+ Gasto Cartão**. Esse gasto só entra no cartão escolhido, sem Pix, débito ou dinheiro. O detalhe de cada cartão deixa editar ou excluir cada item.
 - Uma compra parcelada, no formato `3/10`, pode ser trazida para o mês seguinte. A parcela avança sozinha e para quando chega na última.
 - O botão **Trazer lançamentos do mês anterior** repete os gastos fixos que você criou e as parcelas que ainda não acabaram. As linhas da planilha não são copiadas, porque cada mês já tem o seu valor.
 

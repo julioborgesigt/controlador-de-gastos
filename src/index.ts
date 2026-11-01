@@ -13,13 +13,24 @@ import {
   sessionExpiry,
   sha256,
 } from "./auth.ts";
-import { countsTowardPayment, normalizeExpense, parseInstallment, type Payment, type Section } from "./domain.ts";
+import {
+  cardLinkRequired,
+  countsTowardPayment,
+  normalizeExpense,
+  parseCardName,
+  parseInstallment,
+  resolveCardLabel,
+  type Payment,
+  type Section,
+} from "./domain.ts";
 import {
   copyFromPreviousMonth,
+  createCard,
   ensureReady,
   getExpense,
   getMonth,
   getSetting,
+  listCards,
   monthPayload,
   setSetting,
 } from "./db.ts";
@@ -175,11 +186,21 @@ app.post("/api/months/:id/settle", async (c) => {
   return c.json(await monthPayload(c.env.DB, monthId));
 });
 
+app.post("/api/cards", async (c) => {
+  if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
+  const body = await readJson(c);
+  const parsed = parseCardName(body.name);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const created = await createCard(c.env.DB, parsed.name);
+  if (!created.ok) return c.json({ error: created.error }, 409);
+  return c.json({ cards: await listCards(c.env.DB) }, 201);
+});
+
 app.post("/api/expenses", async (c) => {
   if (!(await requireAuth(c))) return c.json({ error: "Entre com o PIN." }, 401);
   const body = await readJson(c);
-  const parsed = parseExpenseBody(body);
-  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const parsed = await expenseWithCard(c.env.DB, body);
+  if (!parsed.ok) return c.json({ error: parsed.error }, parsed.status);
   if (!isMonthId(body.monthId) || !(await getMonth(c.env.DB, body.monthId))) {
     return c.json({ error: "Mês não encontrado." }, 404);
   }
@@ -216,7 +237,7 @@ app.patch("/api/expenses/:id", async (c) => {
   const current = await getExpense(c.env.DB, c.req.param("id"));
   if (!current) return c.json({ error: "Gasto não encontrado." }, 404);
   const body = await readJson(c);
-  const parsed = parseExpenseBody({
+  const parsed = await expenseWithCard(c.env.DB, {
     name: body.name ?? current.name,
     amountCents: body.amountCents ?? current.amountCents,
     section: body.section ?? current.section,
@@ -227,7 +248,7 @@ app.patch("/api/expenses/:id", async (c) => {
     installment: body.installment === undefined ? current.installment : body.installment,
     paid: body.paid ?? current.paid,
   });
-  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  if (!parsed.ok) return c.json({ error: parsed.error }, parsed.status);
   await c.env.DB.prepare(
     `UPDATE expenses
      SET name = ?, section = ?, amount_cents = ?, payment = ?, on_card = ?, card_label = ?, paid = ?, note = ?, installment = ?
@@ -286,6 +307,17 @@ type ExpenseDraft = {
   installment: string | null;
   paid: boolean;
 };
+
+async function expenseWithCard(
+  db: D1Database,
+  body: JsonBody,
+): Promise<{ ok: true; value: ExpenseDraft } | { ok: false; error: string; status: 400 }> {
+  const parsed = parseExpenseBody(body);
+  if (!parsed.ok) return { ok: false, error: parsed.error, status: 400 };
+  const linked = resolveCardLabel(await listCards(db), parsed.value.cardLabel, cardLinkRequired(parsed.value));
+  if (!linked.ok) return { ok: false, error: linked.error, status: 400 };
+  return { ok: true, value: { ...parsed.value, cardLabel: linked.cardLabel } };
+}
 
 function parseExpenseBody(body: JsonBody): { ok: true; value: ExpenseDraft } | { ok: false; error: string } {
   if (!isSection(body.section) || !isPayment(body.payment)) {

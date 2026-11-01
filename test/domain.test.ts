@@ -1,7 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { clearFailures, isValidPin, lockedMessage, nextFailure } from "../src/auth.ts";
-import { carryForward, computeTotals, isFixedOnCard, normalizeExpense, type Expense } from "../src/domain.ts";
+import {
+  cardInvoiceCents,
+  cardLinkRequired,
+  carryForward,
+  computeTotals,
+  expensesForCard,
+  isFixedOnCard,
+  normalizeExpense,
+  parseCardName,
+  resolveCardLabel,
+  unassignedCardExpenses,
+  type Expense,
+} from "../src/domain.ts";
 import seedJson from "../src/seed-data.json" with { type: "json" };
 
 type Seed = {
@@ -173,6 +185,55 @@ test("parcela do cartão avança no mês seguinte e o gasto fixo lançado pelo u
   const fixed: Expense = { ...card, section: "fixed", installment: null, source: "user", payment: "pix" };
   assert.equal(carryForward(fixed)?.section, "fixed");
   assert.equal(carryForward({ ...fixed, source: "sheet" }), null);
+});
+
+test("cartão novo exige nome e o gasto no cartão fica vinculado a um cartão cadastrado", () => {
+  assert.deepEqual(parseCardName("  Inter  "), { ok: true, name: "Inter" });
+  assert.equal(parseCardName("   ").ok, false);
+
+  const cards = [{ name: "Nubank" }, { name: "Neon" }];
+  const extra = normalizeExpense({ section: "extra", payment: "card", onCard: false, cardLabel: " nubank " });
+  assert.equal(cardLinkRequired(extra), true);
+  assert.deepEqual(resolveCardLabel(cards, extra.cardLabel, true), { ok: true, cardLabel: "Nubank" });
+  assert.equal(resolveCardLabel(cards, null, true).ok, false);
+  assert.equal(resolveCardLabel(cards, "Inter", true).ok, false);
+
+  const invoice = normalizeExpense({ section: "card", payment: "card", onCard: false, cardLabel: null });
+  assert.equal(cardLinkRequired(invoice), false);
+  assert.deepEqual(resolveCardLabel(cards, invoice.cardLabel, false), { ok: true, cardLabel: null });
+});
+
+test("detalhe do cartão soma a fatura daquele cartão e separa o que já veio da casa", () => {
+  const expenses = expensesFor(1);
+  const energy = expenses.find((item) => item.name === "Energia Elétrica");
+  assert.ok(energy);
+  energy.onCard = true;
+  energy.payment = "card";
+  energy.cardLabel = "Neon";
+  expenses.push({
+    id: "extra-card",
+    monthId: "2026-12",
+    name: "Presente",
+    section: "extra",
+    amountCents: 8000,
+    payment: "card",
+    onCard: false,
+    cardLabel: "Nubank",
+    paid: false,
+    note: null,
+    installment: null,
+    sortOrder: 100,
+    source: "user",
+  });
+
+  const nubank = expensesForCard(expenses, "nubank").map((item) => item.name);
+  assert.ok(nubank.includes("Nubank - Parcelamentos Ativos"));
+  assert.ok(nubank.includes("Presente"));
+  assert.equal(nubank.includes("Energia Elétrica"), false);
+  assert.equal(cardInvoiceCents(expenses, "Nubank"), 181739 + 8000);
+  assert.equal(cardInvoiceCents(expenses, "Neon"), 31527);
+  assert.equal(expensesForCard(expenses, "Neon").some((item) => item.name === "Energia Elétrica"), true);
+  assert.equal(unassignedCardExpenses(expenses, [{ name: "Nubank" }, { name: "Neon" }]).some((item) => item.cardLabel), false);
 });
 
 test("PIN aceita só dígitos e bloqueia depois de oito erros", () => {
