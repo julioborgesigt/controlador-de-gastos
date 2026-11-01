@@ -57,6 +57,8 @@ button { cursor: pointer; }
 
 .auth-switch { margin: 8px 0 0; text-align: center; }
 
+.lock-card .secondary { width: 100%; margin-top: 8px; }
+
 .mark {
   width: 54px;
   height: 54px;
@@ -139,6 +141,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 }
 
 .top-row, .row-between { justify-content: space-between; gap: 12px; }
+
+.top-actions { display: flex; gap: 12px; align-items: center; }
 
 .eyebrow {
   margin: 0;

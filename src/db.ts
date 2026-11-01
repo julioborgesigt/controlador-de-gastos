@@ -1,5 +1,6 @@
 import seed from "./seed-data.json";
 import type { Expense, Payment, Section } from "./domain.ts";
+import { formatCpf } from "./auth.ts";
 import { carryForward, cardKey, computeTotals, monthLabel, monthSortOrder, planCardPurchase, previousMonthId } from "./domain.ts";
 
 const SCHEMA = `
@@ -58,6 +59,22 @@ CREATE TABLE IF NOT EXISTS users (
   password_salt TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS passkeys (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  public_key TEXT NOT NULL,
+  counter INTEGER NOT NULL,
+  transports TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys (user_id);
+CREATE TABLE IF NOT EXISTS passkey_challenges (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  challenge TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
 `;
 
 type MonthRow = {
@@ -115,7 +132,6 @@ async function migrateAndSeed(db: D1Database): Promise<void> {
   if (!(columns.results ?? []).some((column) => column.name === "installment")) {
     await db.prepare("ALTER TABLE expenses ADD COLUMN installment TEXT").run();
   }
-  await ensureCards(db);
   const monthColumns = await db.prepare("PRAGMA table_info(months)").all<{ name: string }>();
   if (!(monthColumns.results ?? []).some((column) => column.name === "income_locked")) {
     await db.prepare("ALTER TABLE months ADD COLUMN income_locked INTEGER NOT NULL DEFAULT 0").run();
@@ -128,6 +144,7 @@ async function migrateAndSeed(db: D1Database): Promise<void> {
   const seeded = await db.prepare("SELECT value FROM settings WHERE key = 'seeded'").first<{ value: string }>();
   if (seeded?.value === "1") {
     await backfillIncomeLocks(db);
+    await ensureOwnership(db);
     return;
   }
 
@@ -175,6 +192,7 @@ async function migrateAndSeed(db: D1Database): Promise<void> {
   }
   await setSetting(db, "seeded", "1");
   await backfillIncomeLocks(db);
+  await ensureOwnership(db);
 }
 
 async function backfillIncomeLocks(db: D1Database): Promise<void> {
@@ -186,6 +204,80 @@ async function backfillIncomeLocks(db: D1Database): Promise<void> {
     )
     .run();
   await setSetting(db, "income_locked_backfill", "1");
+}
+
+async function ensureColumn(db: D1Database, table: string, column: string, ddl: string): Promise<void> {
+  const columns = await db.prepare(`PRAGMA table_info(${table})`).all<{ name: string }>();
+  if (!(columns.results ?? []).some((item) => item.name === column)) {
+    await db.prepare(ddl).run();
+  }
+}
+
+async function ensureOwnership(db: D1Database): Promise<void> {
+  await ensureColumn(db, "expenses", "owner_id", "ALTER TABLE expenses ADD COLUMN owner_id TEXT");
+  await ensureColumn(db, "cards", "owner_id", "ALTER TABLE cards ADD COLUMN owner_id TEXT");
+  await ensureColumn(db, "income_extras", "owner_id", "ALTER TABLE income_extras ADD COLUMN owner_id TEXT");
+  await ensureColumn(db, "months", "owner_id", "ALTER TABLE months ADD COLUMN owner_id TEXT");
+  await ensureColumn(db, "sessions", "scope_owner_id", "ALTER TABLE sessions ADD COLUMN scope_owner_id TEXT");
+  await db.prepare("DROP INDEX IF EXISTS idx_cards_name").run();
+  await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_owner_name ON cards (owner_id, name COLLATE NOCASE)").run();
+  await db.prepare(
+    "CREATE TABLE IF NOT EXISTS shares (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, guest_id TEXT NOT NULL, permission TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (owner_id, guest_id))",
+  ).run();
+
+  if ((await getSetting(db, "ownership_v1")) === "1") return;
+
+  const oldest = await db.prepare("SELECT id FROM users ORDER BY created_at LIMIT 1").first<{ id: string }>();
+  const owner = oldest?.id ?? "legacy";
+  await db.prepare("UPDATE months SET owner_id = ? WHERE owner_id IS NULL OR owner_id = ''").bind(owner).run();
+  await db.prepare("UPDATE expenses SET owner_id = ? WHERE owner_id IS NULL OR owner_id = ''").bind(owner).run();
+  await db.prepare("UPDATE cards SET owner_id = ? WHERE owner_id IS NULL OR owner_id = ''").bind(owner).run();
+  await db.prepare("UPDATE income_extras SET owner_id = ? WHERE owner_id IS NULL OR owner_id = ''").bind(owner).run();
+
+  const table = await db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'months'").first<{ sql: string }>();
+  if (!table?.sql.includes("PRIMARY KEY (owner_id, id)")) {
+    await db.prepare(
+      `CREATE TABLE months_v2 (
+        owner_id TEXT NOT NULL,
+        id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        income_cents INTEGER NOT NULL,
+        settled INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL,
+        income_locked INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (owner_id, id)
+      )`,
+    ).run();
+    await db.prepare(
+      `INSERT INTO months_v2 (owner_id, id, label, income_cents, settled, sort_order, income_locked)
+       SELECT owner_id, id, label, income_cents, settled, sort_order, COALESCE(income_locked, 0)
+       FROM months WHERE owner_id IS NOT NULL AND owner_id != ''`,
+    ).run();
+    await db.prepare("DROP TABLE months").run();
+    await db.prepare("ALTER TABLE months_v2 RENAME TO months").run();
+  }
+
+  await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_owner_name ON cards (owner_id, name COLLATE NOCASE)").run();
+  const base = await getSetting(db, "base_income_cents");
+  if (base !== null && oldest) await setSetting(db, `base_income_cents:${oldest.id}`, base);
+  const users = await db.prepare("SELECT id FROM users").all<{ id: string }>();
+  for (const user of users.results ?? []) {
+    if (user.id !== oldest?.id) await provisionUser(db, user.id);
+  }
+  await setSetting(db, "ownership_v1", "1");
+}
+
+export async function provisionUser(db: D1Database, userId: string): Promise<void> {
+  const existing = await db.prepare("SELECT id FROM months WHERE owner_id = ? LIMIT 1").bind(userId).first();
+  if (existing) return;
+  const inserts = seed.months.map((month) =>
+    db
+      .prepare(
+        "INSERT INTO months (owner_id, id, label, income_cents, settled, sort_order, income_locked) VALUES (?, ?, ?, 0, 0, ?, 0)",
+      )
+      .bind(userId, month.id, month.label, month.sortOrder),
+  );
+  if (inserts.length) await db.batch(inserts);
 }
 
 export type Account = {
@@ -244,6 +336,7 @@ export async function createUser(
     if (message.includes("UNIQUE")) return { ok: false, error: "Já existe uma conta com este CPF ou e-mail." };
     throw error;
   }
+  await provisionUser(db, id);
   return { ok: true, id };
 }
 
@@ -257,6 +350,109 @@ export async function updatePassword(
     .prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?")
     .bind(passwordHash, passwordSalt, userId)
     .run();
+}
+
+export type PasskeyRecord = {
+  id: string;
+  userId: string;
+  publicKey: string;
+  counter: number;
+  transports: string[];
+  createdAt: string;
+};
+
+export async function listPasskeys(db: D1Database, userId: string): Promise<PasskeyRecord[]> {
+  const result = await db
+    .prepare("SELECT id, user_id, public_key, counter, transports, created_at FROM passkeys WHERE user_id = ? ORDER BY created_at")
+    .bind(userId)
+    .all<{ id: string; user_id: string; public_key: string; counter: number; transports: string | null; created_at: string }>();
+  return (result.results ?? []).map(mapPasskey);
+}
+
+export async function getPasskey(db: D1Database, id: string): Promise<PasskeyRecord | null> {
+  const row = await db
+    .prepare("SELECT id, user_id, public_key, counter, transports, created_at FROM passkeys WHERE id = ?")
+    .bind(id)
+    .first<{ id: string; user_id: string; public_key: string; counter: number; transports: string | null; created_at: string }>();
+  return row ? mapPasskey(row) : null;
+}
+
+export async function countPasskeys(db: D1Database, userId: string): Promise<number> {
+  const row = await db.prepare("SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?").bind(userId).first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+export async function insertPasskey(
+  db: D1Database,
+  input: { id: string; userId: string; publicKey: string; counter: number; transports: string[] },
+): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO passkeys (id, user_id, public_key, counter, transports, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(input.id, input.userId, input.publicKey, input.counter, input.transports.join(","), new Date().toISOString())
+    .run();
+}
+
+export async function updatePasskeyCounter(db: D1Database, id: string, counter: number): Promise<void> {
+  await db.prepare("UPDATE passkeys SET counter = ? WHERE id = ?").bind(counter, id).run();
+}
+
+export async function deletePasskey(db: D1Database, id: string, userId: string): Promise<boolean> {
+  const result = await db.prepare("DELETE FROM passkeys WHERE id = ? AND user_id = ?").bind(id, userId).run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+export async function deleteUserPasskeys(db: D1Database, userId: string): Promise<number> {
+  const count = await countPasskeys(db, userId);
+  if (count > 0) await db.prepare("DELETE FROM passkeys WHERE user_id = ?").bind(userId).run();
+  return count;
+}
+
+export async function savePasskeyChallenge(
+  db: D1Database,
+  input: { userId: string | null; challenge: string; kind: "register" | "login" },
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db.prepare("DELETE FROM passkey_challenges WHERE expires_at < ?").bind(now).run();
+  await db
+    .prepare("INSERT INTO passkey_challenges (id, user_id, challenge, kind, expires_at) VALUES (?, ?, ?, ?, ?)")
+    .bind(crypto.randomUUID(), input.userId, input.challenge, input.kind, new Date(Date.now() + 5 * 60 * 1000).toISOString())
+    .run();
+}
+
+export async function matchPasskeyChallenge(
+  db: D1Database,
+  challenge: string,
+  kind: "register" | "login",
+  userId?: string,
+): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT id, user_id, expires_at FROM passkey_challenges WHERE challenge = ? AND kind = ?")
+    .bind(challenge, kind)
+    .first<{ id: string; user_id: string | null; expires_at: string }>();
+  if (!row || Date.parse(row.expires_at) <= Date.now()) return false;
+  if (userId && row.user_id !== userId) return false;
+  await db.prepare("DELETE FROM passkey_challenges WHERE id = ?").bind(row.id).run();
+  return true;
+}
+
+function mapPasskey(row: {
+  id: string;
+  user_id: string;
+  public_key: string;
+  counter: number;
+  transports: string | null;
+  created_at: string;
+}): PasskeyRecord {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    publicKey: row.public_key,
+    counter: row.counter,
+    transports: row.transports ? row.transports.split(",").filter(Boolean) : [],
+    createdAt: row.created_at,
+  };
 }
 
 function mapAccount(row: { id: string; cpf: string; email: string; password_hash: string; password_salt: string }): Account {
@@ -281,9 +477,10 @@ export async function setSetting(db: D1Database, key: string, value: string): Pr
     .run();
 }
 
-export async function listMonths(db: D1Database): Promise<Array<{ id: string; label: string; settled: boolean; sortOrder: number; incomeCents: number; incomeLocked: boolean }>> {
+export async function listMonths(db: D1Database, ownerId: string): Promise<Array<{ id: string; label: string; settled: boolean; sortOrder: number; incomeCents: number; incomeLocked: boolean }>> {
   const result = await db
-    .prepare("SELECT id, label, income_cents, settled, sort_order, income_locked FROM months ORDER BY sort_order")
+    .prepare("SELECT id, label, income_cents, settled, sort_order, income_locked FROM months WHERE owner_id = ? ORDER BY sort_order")
+    .bind(ownerId)
     .all<MonthRow>();
   return (result.results ?? []).map((month) => ({
     id: month.id,
@@ -295,13 +492,17 @@ export async function listMonths(db: D1Database): Promise<Array<{ id: string; la
   }));
 }
 
-export async function getMonth(db: D1Database, monthId: string): Promise<MonthRow | null> {
-  return db.prepare("SELECT id, label, income_cents, settled, sort_order, income_locked FROM months WHERE id = ?").bind(monthId).first<MonthRow>();
+export async function getMonth(db: D1Database, ownerId: string, monthId: string): Promise<MonthRow | null> {
+  return db
+    .prepare("SELECT id, label, income_cents, settled, sort_order, income_locked FROM months WHERE owner_id = ? AND id = ?")
+    .bind(ownerId, monthId)
+    .first<MonthRow>();
 }
 
-export async function listIncomeExtras(db: D1Database): Promise<IncomeExtra[]> {
+export async function listIncomeExtras(db: D1Database, ownerId: string): Promise<IncomeExtra[]> {
   const result = await db
-    .prepare("SELECT id, kind, name, amount_cents, month_id FROM income_extras ORDER BY month_id, name")
+    .prepare("SELECT id, kind, name, amount_cents, month_id FROM income_extras WHERE owner_id = ? ORDER BY month_id, name")
+    .bind(ownerId)
     .all<{ id: string; kind: IncomeExtra["kind"]; name: string; amount_cents: number; month_id: string }>();
   return (result.results ?? []).map((row) => ({
     id: row.id,
@@ -312,16 +513,16 @@ export async function listIncomeExtras(db: D1Database): Promise<IncomeExtra[]> {
   }));
 }
 
-export async function listExpenses(db: D1Database, monthId: string): Promise<Expense[]> {
+export async function listExpenses(db: D1Database, ownerId: string, monthId: string): Promise<Expense[]> {
   const result = await db
-    .prepare("SELECT * FROM expenses WHERE month_id = ? ORDER BY sort_order, name")
-    .bind(monthId)
+    .prepare("SELECT * FROM expenses WHERE owner_id = ? AND month_id = ? ORDER BY sort_order, name")
+    .bind(ownerId, monthId)
     .all<ExpenseRow>();
   return (result.results ?? []).map(mapExpense);
 }
 
-export async function getExpense(db: D1Database, id: string): Promise<Expense | null> {
-  const row = await db.prepare("SELECT * FROM expenses WHERE id = ?").bind(id).first<ExpenseRow>();
+export async function getExpense(db: D1Database, ownerId: string, id: string): Promise<Expense | null> {
+  const row = await db.prepare("SELECT * FROM expenses WHERE owner_id = ? AND id = ?").bind(ownerId, id).first<ExpenseRow>();
   return row ? mapExpense(row) : null;
 }
 
@@ -345,17 +546,20 @@ export function mapExpense(row: ExpenseRow): Expense {
 
 export type CardAccount = { id: string; name: string; sortOrder: number };
 
-export async function listCards(db: D1Database): Promise<CardAccount[]> {
-  const result = await db.prepare("SELECT id, name, sort_order FROM cards ORDER BY sort_order, name").all<{
-    id: string;
-    name: string;
-    sort_order: number;
-  }>();
+export async function listCards(db: D1Database, ownerId: string): Promise<CardAccount[]> {
+  const result = await db
+    .prepare("SELECT id, name, sort_order FROM cards WHERE owner_id = ? ORDER BY sort_order, name")
+    .bind(ownerId)
+    .all<{
+      id: string;
+      name: string;
+      sort_order: number;
+    }>();
   return (result.results ?? []).map((card) => ({ id: card.id, name: card.name, sortOrder: card.sort_order }));
 }
 
-export async function createCard(db: D1Database, name: string): Promise<{ ok: true } | { ok: false; error: string }> {
-  const cards = await listCards(db);
+export async function createCard(db: D1Database, ownerId: string, name: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const cards = await listCards(db, ownerId);
   const key = cardKey(name);
   if (key && cards.some((card) => cardKey(card.name) === key)) {
     return { ok: false, error: "Já existe um cartão com esse nome." };
@@ -363,8 +567,8 @@ export async function createCard(db: D1Database, name: string): Promise<{ ok: tr
   const sortOrder = cards.reduce((max, card) => Math.max(max, card.sortOrder), -1) + 1;
   try {
     await db
-      .prepare("INSERT INTO cards (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)")
-      .bind(crypto.randomUUID(), name, sortOrder, new Date().toISOString())
+      .prepare("INSERT INTO cards (id, owner_id, name, sort_order, created_at) VALUES (?, ?, ?, ?, ?)")
+      .bind(crypto.randomUUID(), ownerId, name, sortOrder, new Date().toISOString())
       .run();
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -374,37 +578,12 @@ export async function createCard(db: D1Database, name: string): Promise<{ ok: tr
   return { ok: true };
 }
 
-async function ensureCards(db: D1Database): Promise<void> {
-  const existing = await listCards(db);
-  const known = new Set(existing.map((card) => cardKey(card.name)).filter((key): key is string => key !== null));
-  let order = existing.reduce((max, card) => Math.max(max, card.sortOrder), -1);
-  const now = new Date().toISOString();
-  const inserts: D1PreparedStatement[] = [];
-  const defaults = existing.length === 0 ? ["Nubank", "Neon"] : [];
-  const labels = await db
-    .prepare("SELECT DISTINCT card_label AS name FROM expenses WHERE card_label IS NOT NULL AND TRIM(card_label) != ''")
-    .all<{ name: string }>();
-  for (const name of [...defaults, ...(labels.results ?? []).map((row) => row.name)]) {
-    const cleaned = name.trim().replace(/\s+/g, " ").slice(0, 40);
-    const key = cardKey(cleaned);
-    if (!cleaned || !key || known.has(key)) continue;
-    known.add(key);
-    order += 1;
-    inserts.push(
-      db
-        .prepare("INSERT INTO cards (id, name, sort_order, created_at) VALUES (?, ?, ?, ?)")
-        .bind(crypto.randomUUID(), cleaned, order, now),
-    );
-  }
-  if (inserts.length) await db.batch(inserts);
-}
-
-export async function monthPayload(db: D1Database, monthId: string) {
-  const month = await getMonth(db, monthId);
+export async function monthPayload(db: D1Database, ownerId: string, monthId: string) {
+  const month = await getMonth(db, ownerId, monthId);
   if (!month) return null;
-  const expenses = await listExpenses(db, monthId);
-  const cards = await listCards(db);
-  const incomeExtras = await listIncomeExtras(db);
+  const expenses = await listExpenses(db, ownerId, monthId);
+  const cards = await listCards(db, ownerId);
+  const incomeExtras = await listIncomeExtras(db, ownerId);
   const extraIncomeCents = incomeExtras
     .filter((extra) => extra.monthId === monthId)
     .reduce((sum, extra) => sum + extra.amountCents, 0);
@@ -412,10 +591,10 @@ export async function monthPayload(db: D1Database, monthId: string) {
   const totals = computeTotals(expenses, incomeCents);
   const settled = totals.remainingCents === 0 && totals.commitmentsCents > 0;
   if (settled !== (month.settled === 1)) {
-    await db.prepare("UPDATE months SET settled = ? WHERE id = ?").bind(settled ? 1 : 0, monthId).run();
+    await db.prepare("UPDATE months SET settled = ? WHERE owner_id = ? AND id = ?").bind(settled ? 1 : 0, ownerId, monthId).run();
   }
-  const months = await listMonths(db);
-  const baseIncome = await getSetting(db, "base_income_cents");
+  const months = await listMonths(db, ownerId);
+  const baseIncome = await getSetting(db, baseIncomeKey(ownerId));
   return {
     month: {
       id: month.id,
@@ -436,15 +615,15 @@ export async function monthPayload(db: D1Database, monthId: string) {
   };
 }
 
-export async function syncSettled(db: D1Database, monthId: string): Promise<void> {
-  await monthPayload(db, monthId);
+export async function syncSettled(db: D1Database, ownerId: string, monthId: string): Promise<void> {
+  await monthPayload(db, ownerId, monthId);
 }
 
-export async function copyFromPreviousMonth(db: D1Database, monthId: string): Promise<number> {
+export async function copyFromPreviousMonth(db: D1Database, ownerId: string, monthId: string): Promise<number> {
   const sourceMonth = previousMonthId(monthId);
   if (!sourceMonth) return 0;
-  const source = await listExpenses(db, sourceMonth);
-  const destination = await listExpenses(db, monthId);
+  const source = await listExpenses(db, ownerId, sourceMonth);
+  const destination = await listExpenses(db, ownerId, monthId);
   const taken = new Set(destination.map((expense) => `${expense.section}|${expense.name.toLowerCase()}`));
   const nextSort = destination.reduce((max, expense) => Math.max(max, expense.sortOrder), 0);
   const createdAt = new Date().toISOString();
@@ -459,11 +638,12 @@ export async function copyFromPreviousMonth(db: D1Database, monthId: string): Pr
       db
         .prepare(
           `INSERT INTO expenses
-            (id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'user', ?)`,
+            (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'user', ?)`,
         )
         .bind(
           crypto.randomUUID(),
+          ownerId,
           monthId,
           carried.name,
           carried.section,
@@ -482,20 +662,27 @@ export async function copyFromPreviousMonth(db: D1Database, monthId: string): Pr
   return inserts.length;
 }
 
-export async function ensureMonth(db: D1Database, monthId: string): Promise<void> {
-  const existing = await getMonth(db, monthId);
+export async function ensureMonth(db: D1Database, ownerId: string, monthId: string): Promise<void> {
+  const existing = await getMonth(db, ownerId, monthId);
   if (existing) return;
-  const base = await getSetting(db, "base_income_cents");
+  const base = await getSetting(db, baseIncomeKey(ownerId));
   const income = base === null ? 0 : Number(base);
   await db
-    .prepare("INSERT INTO months (id, label, income_cents, settled, sort_order, income_locked) VALUES (?, ?, ?, 0, ?, 0)")
-    .bind(monthId, monthLabel(monthId), Number.isFinite(income) ? income : 0, monthSortOrder(monthId))
+    .prepare(
+      "INSERT INTO months (owner_id, id, label, income_cents, settled, sort_order, income_locked) VALUES (?, ?, ?, ?, 0, ?, 0)",
+    )
+    .bind(ownerId, monthId, monthLabel(monthId), Number.isFinite(income) ? income : 0, monthSortOrder(monthId))
     .run();
+}
+
+function baseIncomeKey(ownerId: string): string {
+  return `base_income_cents:${ownerId}`;
 }
 
 export async function insertCardPurchase(
   db: D1Database,
   input: {
+    ownerId: string;
     startMonthId: string;
     name: string;
     section: Section;
@@ -512,23 +699,24 @@ export async function insertCardPurchase(
   if (!plan.ok) return plan;
   const createdAt = new Date().toISOString();
   for (const part of plan.plan.schedule) {
-    await ensureMonth(db, part.monthId);
+    await ensureMonth(db, input.ownerId, part.monthId);
   }
   const inserts: D1PreparedStatement[] = [];
   for (const part of plan.plan.schedule) {
     const sort = await db
-      .prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM expenses WHERE month_id = ?")
-      .bind(part.monthId)
+      .prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM expenses WHERE owner_id = ? AND month_id = ?")
+      .bind(input.ownerId, part.monthId)
       .first<{ next: number }>();
     inserts.push(
       db
         .prepare(
           `INSERT INTO expenses
-            (id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-           VALUES (?, ?, ?, ?, ?, 'card', 0, ?, 0, ?, ?, ?, 'user', ?)`,
+            (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, 'card', 0, ?, 0, ?, ?, ?, 'user', ?)`,
         )
         .bind(
           crypto.randomUUID(),
+          input.ownerId,
           part.monthId,
           input.name,
           input.section === "fixed" ? "card" : input.section,
@@ -545,21 +733,134 @@ export async function insertCardPurchase(
   return { ok: true };
 }
 
-export async function applyBaseIncome(db: D1Database, amountCents: number, scope: "all" | "unlocked"): Promise<void> {
-  await setSetting(db, "base_income_cents", String(amountCents));
+export async function applyBaseIncome(db: D1Database, ownerId: string, amountCents: number, scope: "all" | "unlocked"): Promise<void> {
+  await setSetting(db, baseIncomeKey(ownerId), String(amountCents));
   if (scope === "all") {
-    await db.prepare("UPDATE months SET income_cents = ?, income_locked = 0").bind(amountCents).run();
+    await db.prepare("UPDATE months SET income_cents = ?, income_locked = 0 WHERE owner_id = ?").bind(amountCents, ownerId).run();
     return;
   }
-  await db.prepare("UPDATE months SET income_cents = ? WHERE income_locked = 0").bind(amountCents).run();
+  await db.prepare("UPDATE months SET income_cents = ? WHERE owner_id = ? AND income_locked = 0").bind(amountCents, ownerId).run();
 }
 
-export async function setMonthIncome(db: D1Database, monthId: string, amountCents: number): Promise<void> {
-  await db.prepare("UPDATE months SET income_cents = ?, income_locked = 1 WHERE id = ?").bind(amountCents, monthId).run();
+export async function setMonthIncome(db: D1Database, ownerId: string, monthId: string, amountCents: number): Promise<void> {
+  await db
+    .prepare("UPDATE months SET income_cents = ?, income_locked = 1 WHERE owner_id = ? AND id = ?")
+    .bind(amountCents, ownerId, monthId)
+    .run();
 }
 
-export async function unlockMonthIncome(db: D1Database, monthId: string): Promise<void> {
-  const base = await getSetting(db, "base_income_cents");
+export async function unlockMonthIncome(db: D1Database, ownerId: string, monthId: string): Promise<void> {
+  const base = await getSetting(db, baseIncomeKey(ownerId));
   const amount = base === null ? 0 : Number(base);
-  await db.prepare("UPDATE months SET income_cents = ?, income_locked = 0 WHERE id = ?").bind(Number.isFinite(amount) ? amount : 0, monthId).run();
+  await db
+    .prepare("UPDATE months SET income_cents = ?, income_locked = 0 WHERE owner_id = ? AND id = ?")
+    .bind(Number.isFinite(amount) ? amount : 0, ownerId, monthId)
+    .run();
+}
+
+export type SharePermission = "view" | "edit";
+
+export type Space = {
+  ownerId: string;
+  label: string;
+  detail: string;
+  permission: "own" | SharePermission;
+};
+
+export async function listSpaces(db: D1Database, actorId: string): Promise<Space[]> {
+  const me = await findUserById(db, actorId);
+  const incoming = await db
+    .prepare(
+      `SELECT s.permission, u.id, u.cpf, u.email
+       FROM shares s JOIN users u ON u.id = s.owner_id
+       WHERE s.guest_id = ?
+       ORDER BY u.cpf`,
+    )
+    .bind(actorId)
+    .all<{ permission: SharePermission; id: string; cpf: string; email: string }>();
+  return [
+    { ownerId: actorId, label: "Meus gastos", detail: me ? formatCpf(me.cpf) : "", permission: "own" },
+    ...(incoming.results ?? []).map((row) => ({
+      ownerId: row.id,
+      label: formatCpf(row.cpf),
+      detail: row.email,
+      permission: row.permission,
+    })),
+  ];
+}
+
+export async function listOutgoingShares(db: D1Database, ownerId: string) {
+  const result = await db
+    .prepare(
+      `SELECT s.id, s.permission, u.cpf, u.email
+       FROM shares s JOIN users u ON u.id = s.guest_id
+       WHERE s.owner_id = ?
+       ORDER BY u.cpf`,
+    )
+    .bind(ownerId)
+    .all<{ id: string; permission: SharePermission; cpf: string; email: string }>();
+  return (result.results ?? []).map((row) => ({
+    id: row.id,
+    permission: row.permission,
+    cpf: formatCpf(row.cpf),
+    email: row.email,
+  }));
+}
+
+export async function shareWithCpf(
+  db: D1Database,
+  ownerId: string,
+  cpf: string,
+  permission: SharePermission,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const guest = await findUserByCpf(db, cpf);
+  if (!guest) return { ok: false, error: "Não há conta com esse CPF." };
+  if (guest.id === ownerId) return { ok: false, error: "Informe o CPF de outra pessoa." };
+  await db
+    .prepare(
+      `INSERT INTO shares (id, owner_id, guest_id, permission, created_at)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(owner_id, guest_id) DO UPDATE SET permission = excluded.permission`,
+    )
+    .bind(crypto.randomUUID(), ownerId, guest.id, permission, new Date().toISOString())
+    .run();
+  return { ok: true };
+}
+
+export async function updateSharePermission(
+  db: D1Database,
+  ownerId: string,
+  shareId: string,
+  permission: SharePermission,
+): Promise<boolean> {
+  const result = await db
+    .prepare("UPDATE shares SET permission = ? WHERE id = ? AND owner_id = ?")
+    .bind(permission, shareId, ownerId)
+    .run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+export async function deleteShare(db: D1Database, ownerId: string, shareId: string): Promise<boolean> {
+  const result = await db.prepare("DELETE FROM shares WHERE id = ? AND owner_id = ?").bind(shareId, ownerId).run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+export async function accessTo(
+  db: D1Database,
+  actorId: string,
+  ownerId: string,
+): Promise<{ permission: "own" | SharePermission; label: string } | null> {
+  if (actorId === ownerId) {
+    const me = await findUserById(db, actorId);
+    return { permission: "own", label: me ? "Meus gastos" : "Meus gastos" };
+  }
+  const row = await db
+    .prepare(
+      `SELECT s.permission, u.cpf FROM shares s JOIN users u ON u.id = s.owner_id
+       WHERE s.owner_id = ? AND s.guest_id = ?`,
+    )
+    .bind(ownerId, actorId)
+    .first<{ permission: SharePermission; cpf: string }>();
+  if (!row) return null;
+  return { permission: row.permission, label: formatCpf(row.cpf) };
 }
