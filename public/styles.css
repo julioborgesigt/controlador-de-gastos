@@ -247,7 +247,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   line-height: 1;
 }
 
-.stack-actions { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+.stack-actions { display: flex; flex-direction: column; gap: 8px; margin: 0 0 12px; }
 
 .stack-actions .primary,
 .stack-actions .secondary { width: 100%; margin-top: 0; }
@@ -462,6 +462,43 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .ghost-list { margin-top: 8px; }
 
+body.is-working { cursor: progress; }
+
+body.is-working #app { pointer-events: none; }
+
+.working {
+  position: fixed;
+  z-index: 30;
+  top: calc(12px + var(--safe-top));
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 32px);
+  background: var(--ink);
+  color: #fffaf3;
+  border-radius: 999px;
+  padding: 10px 16px;
+  font-weight: 600;
+  box-shadow: var(--shadow);
+}
+
+.spinner {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border: 2px solid rgba(255, 250, 243, 0.35);
+  border-top-color: #fffaf3;
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; }
+  .spinner { animation: none; border-top-color: #fffaf3; }
 }
