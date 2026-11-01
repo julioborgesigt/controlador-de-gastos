@@ -538,6 +538,13 @@ app.post("/api/expenses/:id/card-payment", async (c) => {
   if (typeof body.installmentCount !== "number" || !Number.isInteger(body.installmentCount)) {
     return c.json({ error: "Informe a quantidade de parcelas." }, 400);
   }
+  const invoiceMonthId = isMonthId(body.invoiceMonthId) ? body.invoiceMonthId : current.monthId;
+  if (!(await getMonth(c.env.DB, writer.scope.ownerId, invoiceMonthId))) {
+    return c.json({ error: "Escolha o mês da fatura." }, 400);
+  }
+  if (body.amountMode !== undefined && body.amountMode !== "installment" && body.amountMode !== "total") {
+    return c.json({ error: "Diga se o valor é da parcela ou do total." }, 400);
+  }
   const paid = await payRecurringOnCard(c.env.DB, {
     ownerId: writer.scope.ownerId,
     expenseId: current.id,
@@ -545,6 +552,8 @@ app.post("/api/expenses/:id/card-payment", async (c) => {
     alias: typeof body.alias === "string" ? body.alias : "",
     amountCents: body.amountCents,
     totalCount: body.installmentCount,
+    startMonthId: invoiceMonthId,
+    mode: body.amountMode === "total" ? "total" : "installment",
   });
   if (!paid.ok) return c.json({ error: paid.error }, 400);
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));

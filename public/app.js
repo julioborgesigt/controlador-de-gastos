@@ -1,3 +1,5 @@
+import { quoteInstallments, solveInstallmentTriple } from "./installment-link.js";
+
 const root = document.querySelector("#app");
 
 const state = {
@@ -1123,17 +1125,127 @@ function cardPurchaseFields(draft) {
 function cardPayPreview(draft) {
   const alias = String(draft.alias || "").trim() || "o apelido";
   const card = draft.cardLabel ? `do ${draft.cardLabel}` : "do cartão";
+  const when = faturaWhen(draft.invoiceMonthId);
   if (draft.billing === "installments") {
-    const count = Number(draft.installmentCount);
-    const amount = parseMoney(draft.installmentAmount || "");
-    if (!Number.isInteger(count) || count < 2 || amount === null || amount <= 0) {
-      return "As parcelas entram na fatura deste mês em diante, com o apelido escolhido.";
+    const charged = parseMoney(draft.chargedAmount || "");
+    const count = installmentCountOf(draft);
+    const per = parseMoney(draft.installmentAmount || "");
+    const from = faturaWhen(draft.invoiceMonthId, true);
+    if (count === null || count < 2 || per === null || per <= 0) {
+      return `As parcelas entram ${from}, com o apelido escolhido.`;
     }
-    return `${count} parcelas de ${money(amount)} na fatura ${card}, como “${alias}”.`;
+    const quote = quoteInstallments(charged, count, per);
+    if (quote?.kind === "remainder") {
+      return `${count - 1} ${count - 1 === 1 ? "parcela" : "parcelas"} de ${money(per)} e a última de ${money(quote.lastCents)} ${from} ${card}, como “${alias}”.`;
+    }
+    if (quote?.kind === "mismatch") {
+      return `${count} parcelas de ${money(per)} somam ${money(per * count)}. O valor cobrado está em ${money(charged)}.`;
+    }
+    return `${count} parcelas de ${money(per)} ${from} ${card}, como “${alias}”.`;
   }
-  const amount = draft.amountChoice === "other" ? parseMoney(draft.otherAmount || "") : draft.described;
-  if (amount === null || amount <= 0) return "O valor entra neste mês na fatura do cartão, com o apelido escolhido.";
-  return `${money(amount)} neste mês na fatura ${card}, como “${alias}”.`;
+  const amount = draft.amountChoice === "other" ? parseMoney(draft.chargedAmount || "") : draft.described;
+  if (amount === null || amount <= 0) return `O valor entra ${when}, com o apelido escolhido.`;
+  return `${money(amount)} ${when} ${card}, como “${alias}”.`;
+}
+
+function faturaWhen(monthId, from = false) {
+  const month = (state.data?.months || []).find((item) => item.id === monthId);
+  const [name, year] = String(month?.label || "").split(" ");
+  const when = name && year ? `${name.toLowerCase()} de ${year}` : "este mês";
+  return from ? `a partir da fatura de ${when}` : `na fatura de ${when}`;
+}
+
+function installmentCountOf(draft) {
+  const raw = String(draft.installmentCount || "").trim();
+  if (!/^\d+$/.test(raw)) return null;
+  const count = Number(raw);
+  return count >= 1 && count <= 48 ? count : null;
+}
+
+function readInstallmentTriple(draft) {
+  return {
+    chargedCents: parseMoney(String(draft.chargedAmount || "")),
+    count: installmentCountOf(draft),
+    perCents: parseMoney(String(draft.installmentAmount || "")),
+  };
+}
+
+function applySolvedInstallments(draft, solved, edited) {
+  draft.amountEdits = solved.edits;
+  if (edited !== "charged" && solved.values.chargedCents != null) {
+    draft.chargedAmount = centsToInput(solved.values.chargedCents);
+  }
+  if (edited !== "count" && solved.values.count != null) {
+    draft.installmentCount = String(solved.values.count);
+  }
+  if (edited !== "per" && solved.values.perCents != null) {
+    draft.installmentAmount = centsToInput(solved.values.perCents);
+  }
+}
+
+function prepareCardInstallments(draft) {
+  if (!String(draft.chargedAmount || "").trim() && draft.amountChoice === "same" && draft.described > 0) {
+    draft.chargedAmount = centsToInput(draft.described);
+  }
+  if (!String(draft.installmentCount || "").trim()) draft.installmentCount = "2";
+  if ((draft.amountEdits || []).includes("per")) return;
+  const solved = solveInstallmentTriple(readInstallmentTriple(draft), "count", ["charged"], draft.amountChoice === "same" ? "charged" : null);
+  applySolvedInstallments(draft, solved, "count");
+}
+
+function linkCardPayAmounts(editedKey) {
+  const draft = state.sheet;
+  const edited = editedKey === "chargedAmount" ? "charged" : editedKey === "installmentCount" ? "count" : "per";
+  if (editedKey === "chargedAmount") draft.amountChoice = "other";
+  const locked = draft.amountChoice === "same" ? "charged" : null;
+  const solved = solveInstallmentTriple(readInstallmentTriple(draft), edited, draft.amountEdits || [], locked);
+  applySolvedInstallments(draft, solved, edited);
+  if (draft.amountChoice === "other") reflectSegment("amountChoice", "other");
+  reflectInstallmentInputs(editedKey);
+  refreshCardPayPreview();
+}
+
+function reflectInstallmentInputs(editedKey) {
+  const draft = state.sheet;
+  const values = {
+    chargedAmount: draft.chargedAmount,
+    installmentCount: draft.installmentCount,
+    installmentAmount: draft.installmentAmount,
+  };
+  for (const [id, value] of Object.entries(values)) {
+    if (id === editedKey || value == null) continue;
+    const input = document.getElementById(id);
+    if (input && input.value !== value) input.value = value;
+  }
+}
+
+function reflectSegment(key, value) {
+  document.querySelectorAll(`[data-segment="${key}"]`).forEach((button) => {
+    button.classList.toggle("on", button.dataset.value === value);
+  });
+}
+
+function refreshCardPayPreview() {
+  const preview = document.querySelector("#installment-preview");
+  if (preview && state.sheet?.mode === "card-pay") preview.textContent = cardPayPreview(state.sheet);
+}
+
+function invoiceMonthField(draft) {
+  const months = state.data?.months || [];
+  const select = el("select", { id: "invoiceMonthId", name: "invoiceMonthId" });
+  if (draft.invoiceMonthId && !months.some((month) => month.id === draft.invoiceMonthId)) {
+    select.append(el("option", { value: draft.invoiceMonthId }, draft.invoiceMonthId));
+  }
+  for (const month of months) select.append(el("option", { value: month.id }, month.label));
+  select.value = draft.invoiceMonthId || "";
+  select.addEventListener("change", () => {
+    state.sheet.invoiceMonthId = select.value;
+    refreshCardPayPreview();
+  });
+  return el("div", { class: "field" }, [
+    el("label", { for: "invoiceMonthId" }, "Este valor será pago na fatura de:"),
+    select,
+  ]);
 }
 
 async function undoCardPay(id) {
@@ -1462,10 +1574,12 @@ function openCardPay(expense) {
     alias: expense.name,
     cardLabel: selected,
     amountChoice: "same",
-    otherAmount: "",
+    chargedAmount: "",
     billing: "once",
     installmentCount: "2",
-    installmentAmount: expense.amountCents > 0 ? centsToInput(expense.amountCents) : "",
+    installmentAmount: "",
+    amountEdits: [],
+    invoiceMonthId: expense.monthId || state.monthId,
     linked: linkedInvoice(expense) || expense.onCard,
   };
   state.error = "";
@@ -1652,7 +1766,9 @@ function sheet() {
         el("label", {}, "O valor cobrado é"),
         segmented("amountChoice", [["same", `O descrito · ${described}`], ["other", "Outro valor"]], draft.amountChoice),
       ]),
-      draft.amountChoice === "other" ? field("Valor cobrado", "otherAmount", draft.otherAmount, "decimal") : "",
+      draft.amountChoice === "other" || draft.billing === "installments"
+        ? field("Valor cobrado", "chargedAmount", draft.chargedAmount, "decimal")
+        : "",
       el("div", { class: "field" }, [
         el("label", {}, "Parcelamento"),
         segmented("billing", [["once", "À vista"], ["installments", "Parcelado"]], draft.billing),
@@ -1663,6 +1779,7 @@ function sheet() {
           field("Valor da parcela", "installmentAmount", draft.installmentAmount || "", "decimal"),
         ])
         : "",
+      invoiceMonthField(draft),
       el("p", { class: "muted", id: "installment-preview" }, cardPayPreview(draft)),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
@@ -1770,6 +1887,7 @@ function cardSelect(draft) {
   select.value = current;
   select.addEventListener("change", () => {
     state.sheet.cardLabel = select.value;
+    refreshCardPayPreview();
   });
   return el("div", { class: "field" }, [el("label", { for: "cardLabel" }, "Cartão"), select]);
 }
@@ -1786,6 +1904,10 @@ function field(labelText, key, value, mode, placeholder = "") {
   });
   input.addEventListener("input", () => {
     state.sheet[key] = input.value;
+    if (state.sheet.mode === "card-pay" && state.sheet.billing === "installments" && (key === "chargedAmount" || key === "installmentCount" || key === "installmentAmount")) {
+      linkCardPayAmounts(key);
+      return;
+    }
     const preview = document.querySelector("#installment-preview");
     if (preview && state.sheet) {
       preview.textContent = state.sheet.mode === "card-pay" ? cardPayPreview(state.sheet) : installmentPreview(state.sheet);
@@ -1798,8 +1920,18 @@ function segmented(key, options, current) {
   return el("div", { class: "choice" }, options.map(([value, label]) => el("button", {
     type: "button",
     class: current === value ? "on" : "",
+    "data-segment": key,
+    "data-value": value,
     onclick: () => {
       state.sheet[key] = value;
+      if (state.sheet.mode === "card-pay" && key === "billing" && value === "installments") prepareCardInstallments(state.sheet);
+      if (state.sheet.mode === "card-pay" && key === "amountChoice" && value === "same") {
+        state.sheet.chargedAmount = state.sheet.described > 0 ? centsToInput(state.sheet.described) : "";
+        if (state.sheet.billing === "installments") {
+          const solved = solveInstallmentTriple(readInstallmentTriple(state.sheet), "charged", ["count"]);
+          applySolvedInstallments(state.sheet, solved, "charged");
+        }
+      }
       if (key === "section") {
         if (value === "card") {
           state.sheet.payment = "card";
@@ -1825,17 +1957,31 @@ async function saveSheet(event) {
       const alias = String(draft.alias || "").trim();
       if (!alias) throw new Error("Escolha o apelido que vai aparecer na fatura.");
       if (!draft.cardLabel) throw new Error("Escolha o cartão.");
+      if (!draft.invoiceMonthId) throw new Error("Escolha o mês da fatura.");
       let amountCents = draft.described;
       let installmentCount = 1;
+      let amountMode = "installment";
       if (draft.billing === "installments") {
+        const charged = parseMoney(draft.chargedAmount || "");
         installmentCount = Number(draft.installmentCount);
-        amountCents = parseMoney(draft.installmentAmount || "");
+        const per = parseMoney(draft.installmentAmount || "");
         if (!Number.isInteger(installmentCount) || installmentCount < 2 || installmentCount > 48) {
           throw new Error("Informe de 2 a 48 parcelas.");
         }
-        if (amountCents === null || amountCents <= 0) throw new Error("Informe o valor da parcela.");
+        if (per === null || per <= 0) throw new Error("Informe o valor da parcela.");
+        if (charged === null || charged <= 0) throw new Error("Informe o valor cobrado no cartão.");
+        const quote = quoteInstallments(charged, installmentCount, per);
+        if (!quote || quote.kind === "mismatch") {
+          throw new Error("O valor cobrado não fecha com a quantidade e o valor da parcela.");
+        }
+        if (quote.kind === "remainder") {
+          amountCents = charged;
+          amountMode = "total";
+        } else {
+          amountCents = per;
+        }
       } else if (draft.amountChoice === "other") {
-        amountCents = parseMoney(draft.otherAmount || "");
+        amountCents = parseMoney(draft.chargedAmount || "");
         if (amountCents === null || amountCents <= 0) throw new Error("Informe o valor cobrado no cartão.");
       } else if (!amountCents || amountCents <= 0) {
         throw new Error("Este gasto está sem valor. Informe outro valor.");
@@ -1843,11 +1989,18 @@ async function saveSheet(event) {
       setWorking(true, "Lançando na fatura...");
       state.data = await request(`/api/expenses/${draft.id}/card-payment`, {
         method: "POST",
-        body: { cardLabel: draft.cardLabel, alias, amountCents, installmentCount },
+        body: {
+          cardLabel: draft.cardLabel,
+          alias,
+          amountCents,
+          installmentCount,
+          invoiceMonthId: draft.invoiceMonthId,
+          amountMode,
+        },
       });
       state.notice = installmentCount > 1
-        ? `Lancei ${installmentCount} parcelas na fatura, com o apelido “${alias}”.`
-        : `Lancei “${alias}” na fatura do cartão.`;
+        ? `Lancei ${installmentCount} parcelas ${faturaWhen(draft.invoiceMonthId, true)}, com o apelido “${alias}”.`
+        : `Lancei “${alias}” ${faturaWhen(draft.invoiceMonthId)}.`;
       state.sheet = null;
       return;
     } else if (draft.mode === "share") {
