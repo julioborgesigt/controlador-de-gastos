@@ -17,21 +17,11 @@ Para instalar na tela inicial do celular, abra o endereço publicado no navegado
 
 ## Publicar no Cloudflare
 
-O app é um Worker com [D1](https://developers.cloudflare.com/d1/) e arquivos estáticos. Na primeira visita ele cria as tabelas e carrega a planilha.
+O GitHub publica esta branch sozinho quando os segredos `CLOUDFLARE_API_TOKEN` e `CLOUDFLARE_ACCOUNT_ID` existem no repositório. O banco D1 é criado na primeira publicação. O endereço fica:
 
-```bash
-npm install
-npx wrangler login
-npm run db:create
-```
+`https://controlador-de-gastos-planilha.<seu-subdominio>.workers.dev`
 
-Copie o `database_id` que o comando mostrar para `wrangler.jsonc`, no lugar de `00000000-0000-0000-0000-000000000000`. Depois:
-
-```bash
-npm run deploy
-```
-
-O endereço fica em `*.workers.dev`. Abra no celular e crie o PIN.
+Abra no celular e crie o PIN. Na primeira visita o app cria as tabelas e carrega a planilha.
 
 Para rodar neste computador:
 
@@ -42,7 +32,7 @@ npm run dev
 Se esquecer o PIN, apague o segredo e as sessões e crie outro na próxima visita:
 
 ```bash
-npx wrangler d1 execute controlador-de-gastos --remote --command "DELETE FROM settings WHERE key IN ('pin_hash','pin_salt','login_failures'); DELETE FROM sessions;"
+npx wrangler d1 execute controlador-de-gastos-planilha --remote --command "DELETE FROM settings WHERE key IN ('pin_hash','pin_salt','login_failures'); DELETE FROM sessions;"
 ```
 
 O repositório está público e inclui os valores da planilha. Se esses números não devem ficar visíveis no GitHub, mude o repositório para privado.
