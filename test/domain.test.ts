@@ -183,9 +183,16 @@ test("parcela do cartão avança no mês seguinte e o gasto fixo lançado pelo u
   card.installment = "10/10";
   assert.equal(carryForward(card), null);
 
-  const fixed: Expense = { ...card, section: "fixed", installment: null, source: "user", payment: "pix" };
+  const fixed: Expense = { ...card, section: "fixed", installment: null, source: "user", payment: "pix", onCard: false, cardLabel: null };
   assert.equal(carryForward(fixed)?.section, "fixed");
   assert.equal(carryForward({ ...fixed, source: "sheet" }), null);
+
+  const paidOnCard: Expense = { ...fixed, onCard: true, payment: "card", cardLabel: "Nubank", paid: true };
+  const nextMonth = carryForward(paidOnCard);
+  assert.equal(nextMonth?.onCard, false);
+  assert.equal(nextMonth?.payment, "pix");
+  assert.equal(nextMonth?.cardLabel, null);
+  assert.equal(nextMonth?.paid, false);
 });
 
 test("cartão novo exige nome e o gasto no cartão fica vinculado a um cartão cadastrado", () => {

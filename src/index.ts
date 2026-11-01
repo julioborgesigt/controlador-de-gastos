@@ -40,10 +40,13 @@ import {
   ensureReady,
   findUserByCpf,
   findUserById,
+  clearRecurringCardCharge,
+  clearRecurringCardLines,
   getExpense,
   getMonth,
   getSetting,
   insertCardPurchase,
+  payRecurringOnCard,
   listCards,
   listOutgoingShares,
   listPasskeys,
@@ -522,11 +525,47 @@ app.patch("/api/expenses/:id", async (c) => {
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
 });
 
+app.post("/api/expenses/:id/card-payment", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const current = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
+  if (!current) return c.json({ error: "Gasto não encontrado." }, 404);
+  const body = await readJson(c);
+  const cards = await listCards(c.env.DB, writer.scope.ownerId);
+  const card = resolveCardLabel(cards, typeof body.cardLabel === "string" ? body.cardLabel : null, true);
+  if (!card.ok) return c.json({ error: card.error }, 400);
+  if (!isCents(body.amountCents) || body.amountCents <= 0) return c.json({ error: "Informe um valor maior que zero." }, 400);
+  if (typeof body.installmentCount !== "number" || !Number.isInteger(body.installmentCount)) {
+    return c.json({ error: "Informe a quantidade de parcelas." }, 400);
+  }
+  const paid = await payRecurringOnCard(c.env.DB, {
+    ownerId: writer.scope.ownerId,
+    expenseId: current.id,
+    cardLabel: card.cardLabel || "",
+    alias: typeof body.alias === "string" ? body.alias : "",
+    amountCents: body.amountCents,
+    totalCount: body.installmentCount,
+  });
+  if (!paid.ok) return c.json({ error: paid.error }, 400);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
+});
+
+app.delete("/api/expenses/:id/card-payment", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const cleared = await clearRecurringCardCharge(c.env.DB, writer.scope.ownerId, c.req.param("id"));
+  if (!cleared.ok) return c.json({ error: cleared.error }, 404);
+  const current = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
+  if (!current) return c.json({ error: "Gasto não encontrado." }, 404);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
+});
+
 app.delete("/api/expenses/:id", async (c) => {
   const writer = await requireWriter(c);
   if (!writer.ok) return c.json({ error: writer.error }, writer.status);
   const current = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
   if (!current) return c.json({ error: "Gasto não encontrado." }, 404);
+  if (current.section === "fixed") await clearRecurringCardLines(c.env.DB, writer.scope.ownerId, current.id);
   await c.env.DB.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(writer.scope.ownerId, current.id).run();
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
 });
