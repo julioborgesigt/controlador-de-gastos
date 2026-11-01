@@ -58,6 +58,22 @@ CREATE TABLE IF NOT EXISTS users (
   password_salt TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS passkeys (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  public_key TEXT NOT NULL,
+  counter INTEGER NOT NULL,
+  transports TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_passkeys_user ON passkeys (user_id);
+CREATE TABLE IF NOT EXISTS passkey_challenges (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  challenge TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  expires_at TEXT NOT NULL
+);
 `;
 
 type MonthRow = {
@@ -257,6 +273,109 @@ export async function updatePassword(
     .prepare("UPDATE users SET password_hash = ?, password_salt = ? WHERE id = ?")
     .bind(passwordHash, passwordSalt, userId)
     .run();
+}
+
+export type PasskeyRecord = {
+  id: string;
+  userId: string;
+  publicKey: string;
+  counter: number;
+  transports: string[];
+  createdAt: string;
+};
+
+export async function listPasskeys(db: D1Database, userId: string): Promise<PasskeyRecord[]> {
+  const result = await db
+    .prepare("SELECT id, user_id, public_key, counter, transports, created_at FROM passkeys WHERE user_id = ? ORDER BY created_at")
+    .bind(userId)
+    .all<{ id: string; user_id: string; public_key: string; counter: number; transports: string | null; created_at: string }>();
+  return (result.results ?? []).map(mapPasskey);
+}
+
+export async function getPasskey(db: D1Database, id: string): Promise<PasskeyRecord | null> {
+  const row = await db
+    .prepare("SELECT id, user_id, public_key, counter, transports, created_at FROM passkeys WHERE id = ?")
+    .bind(id)
+    .first<{ id: string; user_id: string; public_key: string; counter: number; transports: string | null; created_at: string }>();
+  return row ? mapPasskey(row) : null;
+}
+
+export async function countPasskeys(db: D1Database, userId: string): Promise<number> {
+  const row = await db.prepare("SELECT COUNT(*) AS n FROM passkeys WHERE user_id = ?").bind(userId).first<{ n: number }>();
+  return row?.n ?? 0;
+}
+
+export async function insertPasskey(
+  db: D1Database,
+  input: { id: string; userId: string; publicKey: string; counter: number; transports: string[] },
+): Promise<void> {
+  await db
+    .prepare(
+      "INSERT INTO passkeys (id, user_id, public_key, counter, transports, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(input.id, input.userId, input.publicKey, input.counter, input.transports.join(","), new Date().toISOString())
+    .run();
+}
+
+export async function updatePasskeyCounter(db: D1Database, id: string, counter: number): Promise<void> {
+  await db.prepare("UPDATE passkeys SET counter = ? WHERE id = ?").bind(counter, id).run();
+}
+
+export async function deletePasskey(db: D1Database, id: string, userId: string): Promise<boolean> {
+  const result = await db.prepare("DELETE FROM passkeys WHERE id = ? AND user_id = ?").bind(id, userId).run();
+  return (result.meta.changes ?? 0) > 0;
+}
+
+export async function deleteUserPasskeys(db: D1Database, userId: string): Promise<number> {
+  const count = await countPasskeys(db, userId);
+  if (count > 0) await db.prepare("DELETE FROM passkeys WHERE user_id = ?").bind(userId).run();
+  return count;
+}
+
+export async function savePasskeyChallenge(
+  db: D1Database,
+  input: { userId: string | null; challenge: string; kind: "register" | "login" },
+): Promise<void> {
+  const now = new Date().toISOString();
+  await db.prepare("DELETE FROM passkey_challenges WHERE expires_at < ?").bind(now).run();
+  await db
+    .prepare("INSERT INTO passkey_challenges (id, user_id, challenge, kind, expires_at) VALUES (?, ?, ?, ?, ?)")
+    .bind(crypto.randomUUID(), input.userId, input.challenge, input.kind, new Date(Date.now() + 5 * 60 * 1000).toISOString())
+    .run();
+}
+
+export async function matchPasskeyChallenge(
+  db: D1Database,
+  challenge: string,
+  kind: "register" | "login",
+  userId?: string,
+): Promise<boolean> {
+  const row = await db
+    .prepare("SELECT id, user_id, expires_at FROM passkey_challenges WHERE challenge = ? AND kind = ?")
+    .bind(challenge, kind)
+    .first<{ id: string; user_id: string | null; expires_at: string }>();
+  if (!row || Date.parse(row.expires_at) <= Date.now()) return false;
+  if (userId && row.user_id !== userId) return false;
+  await db.prepare("DELETE FROM passkey_challenges WHERE id = ?").bind(row.id).run();
+  return true;
+}
+
+function mapPasskey(row: {
+  id: string;
+  user_id: string;
+  public_key: string;
+  counter: number;
+  transports: string | null;
+  created_at: string;
+}): PasskeyRecord {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    publicKey: row.public_key,
+    counter: row.counter,
+    transports: row.transports ? row.transports.split(",").filter(Boolean) : [],
+    createdAt: row.created_at,
+  };
 }
 
 function mapAccount(row: { id: string; cpf: string; email: string; password_hash: string; password_salt: string }): Account {

@@ -6,6 +6,7 @@ const state = {
   authed: false,
   authView: "login",
   auth: { cpf: "", email: "", password: "", confirmation: "" },
+  passkeys: [],
   monthId: sessionStorage.getItem("monthId") || "",
   view: "resumo",
   data: null,
@@ -135,6 +136,9 @@ function authScreen() {
     authInput("password", "Senha", state.auth.password, { key: "password", type: "password", autocomplete: registering ? "new-password" : "current-password", placeholder: "Mínimo de 8 caracteres" }),
     registering ? authInput("confirmation", "Confirmar senha", state.auth.confirmation, { key: "confirmation", type: "password", autocomplete: "new-password" }) : "",
     el("button", { class: "primary", type: "submit" }, registering ? "Criar conta" : "Entrar"),
+    !registering && window.PublicKeyCredential
+      ? el("button", { class: "secondary", type: "button", onclick: loginWithPasskey }, "Entrar com digital")
+      : "",
     el("p", { class: "auth-switch" }, [
       el("button", {
         class: "linkish",
@@ -209,6 +213,142 @@ async function submitAuth(event) {
     setWorking(false);
     render();
   }
+}
+
+async function loginWithPasskey() {
+  state.error = "";
+  setWorking(true, "Aguardando a digital...");
+  try {
+    const options = await request("/api/passkeys/login/options", { method: "POST", body: {} });
+    const credential = await navigator.credentials.get({ publicKey: publicKeyRequestOptions(options) });
+    if (!credential) throw new DOMException("cancelada", "NotAllowedError");
+    await request("/api/passkeys/login", { method: "POST", body: credentialToJSON(credential) });
+    state.authed = true;
+    state.needsSetup = false;
+    await loadMonth(state.monthId);
+  } catch (error) {
+    state.error = passkeyMessage(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
+}
+
+async function registerPasskey() {
+  state.error = "";
+  setWorking(true, "Aguardando a digital...");
+  try {
+    const options = await request("/api/passkeys/register/options", { method: "POST", body: {} });
+    const credential = await navigator.credentials.create({ publicKey: publicKeyCreationOptions(options) });
+    if (!credential) throw new DOMException("cancelada", "NotAllowedError");
+    const data = await request("/api/passkeys/register", { method: "POST", body: credentialToJSON(credential) });
+    state.passkeys = data.passkeys || [];
+    state.notice = "Digital cadastrada neste celular.";
+  } catch (error) {
+    state.error = passkeyMessage(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
+}
+
+async function removePasskey(id) {
+  if (!window.confirm("Remover a digital deste celular?")) return;
+  state.error = "";
+  setWorking(true, "Removendo...");
+  try {
+    const data = await request(`/api/passkeys/${encodeURIComponent(id)}`, { method: "DELETE" });
+    state.passkeys = data.passkeys || [];
+    state.notice = "Digital removida deste celular.";
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
+}
+
+function passkeyMessage(error) {
+  if (error && error.name === "NotAllowedError") {
+    return "A digital foi cancelada ou não há chave cadastrada neste celular.";
+  }
+  return messageOf(error);
+}
+
+function passkeyWhen(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString("pt-BR", { timeZone: "America/Fortaleza", dateStyle: "short", timeStyle: "short" });
+}
+
+function publicKeyCreationOptions(options) {
+  if (window.PublicKeyCredential?.parseCreationOptionsFromJSON) {
+    return PublicKeyCredential.parseCreationOptionsFromJSON(options);
+  }
+  return {
+    ...options,
+    challenge: base64UrlToBuffer(options.challenge),
+    user: { ...options.user, id: base64UrlToBuffer(options.user.id) },
+    excludeCredentials: (options.excludeCredentials || []).map((item) => ({ ...item, id: base64UrlToBuffer(item.id) })),
+  };
+}
+
+function publicKeyRequestOptions(options) {
+  if (window.PublicKeyCredential?.parseRequestOptionsFromJSON) {
+    return PublicKeyCredential.parseRequestOptionsFromJSON(options);
+  }
+  return {
+    ...options,
+    challenge: base64UrlToBuffer(options.challenge),
+    allowCredentials: (options.allowCredentials || []).map((item) => ({ ...item, id: base64UrlToBuffer(item.id) })),
+  };
+}
+
+function credentialToJSON(credential) {
+  if (typeof credential.toJSON === "function") return credential.toJSON();
+  const response = credential.response;
+  if (response.attestationObject) {
+    return {
+      id: credential.id,
+      rawId: bufferToBase64Url(credential.rawId),
+      type: credential.type,
+      authenticatorAttachment: credential.authenticatorAttachment,
+      clientExtensionResults: credential.getClientExtensionResults(),
+      response: {
+        clientDataJSON: bufferToBase64Url(response.clientDataJSON),
+        attestationObject: bufferToBase64Url(response.attestationObject),
+        transports: typeof response.getTransports === "function" ? response.getTransports() : [],
+      },
+    };
+  }
+  return {
+    id: credential.id,
+    rawId: bufferToBase64Url(credential.rawId),
+    type: credential.type,
+    authenticatorAttachment: credential.authenticatorAttachment,
+    clientExtensionResults: credential.getClientExtensionResults(),
+    response: {
+      clientDataJSON: bufferToBase64Url(response.clientDataJSON),
+      authenticatorData: bufferToBase64Url(response.authenticatorData),
+      signature: bufferToBase64Url(response.signature),
+      userHandle: response.userHandle ? bufferToBase64Url(response.userHandle) : undefined,
+    },
+  };
+}
+
+function base64UrlToBuffer(value) {
+  const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+  const binary = atob(padded);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
+  return bytes.buffer;
+}
+
+function bufferToBase64Url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
 function screen(child) {
@@ -855,9 +995,19 @@ function openIncomeExtra() {
   render();
 }
 
-function openPassword() {
-  state.sheet = { mode: "password", current: "", next: "", confirmation: "" };
+async function openPassword() {
   state.error = "";
+  setWorking(true, "Abrindo...");
+  try {
+    const data = await request("/api/passkeys");
+    state.passkeys = data.passkeys || [];
+  } catch (error) {
+    state.passkeys = [];
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+  }
+  state.sheet = { mode: "password", current: "", next: "", confirmation: "" };
   render();
 }
 
@@ -866,6 +1016,7 @@ function sheet() {
   const panel = el("form", { class: "sheet" }, [el("div", { class: "handle" })]);
   panel.addEventListener("submit", saveSheet);
   if (state.error) panel.append(el("p", { class: "error" }, state.error));
+  if (state.notice) panel.append(el("p", { class: "note" }, state.notice));
   if (draft.mode === "month-income") {
     panel.append(
       el("h2", {}, draft.label),
@@ -899,7 +1050,19 @@ function sheet() {
     );
   } else if (draft.mode === "password") {
     panel.append(
-      el("h2", {}, "Trocar senha"),
+      el("h2", {}, "Digital deste celular"),
+      el("p", { class: "muted" }, "Use a digital já cadastrada no Android para abrir o app neste aparelho. A senha continua valendo."),
+      window.PublicKeyCredential
+        ? el("button", { class: "secondary", type: "button", onclick: registerPasskey }, "Cadastrar digital")
+        : el("p", { class: "note" }, "Este navegador não oferece chave de acesso com digital."),
+      el("div", { class: "list" }, (state.passkeys || []).map((passkey) => el("article", { class: "item" }, [
+        el("div", { class: "item-copy" }, [
+          el("strong", {}, "Digital"),
+          el("small", {}, passkeyWhen(passkey.createdAt)),
+        ]),
+        el("button", { class: "linkish danger", type: "button", onclick: () => removePasskey(passkey.id) }, "Remover"),
+      ]))),
+      el("h2", { class: "subhead" }, "Trocar senha"),
       field("Senha atual", "current", "", "password"),
       field("Nova senha", "next", "", "password"),
       field("Confirmar nova senha", "confirmation", "", "password"),
@@ -1058,10 +1221,14 @@ async function saveSheet(event) {
     } else if (draft.mode === "password") {
       if (draft.next !== draft.confirmation) throw new Error("A confirmação da senha não confere.");
       setWorking(true, "Salvando...");
-      await request("/api/password", {
+      const data = await request("/api/password", {
         method: "POST",
         body: { currentPassword: draft.current, nextPassword: draft.next, passwordConfirmation: draft.confirmation },
       });
+      state.passkeys = [];
+      if (data.passkeysRemoved) {
+        state.notice = "Senha trocada. As digitais cadastradas foram removidas. Cadastre de novo neste celular se quiser entrar com a digital.";
+      }
     } else if (draft.mode === "card") {
       if (!draft.name.trim()) throw new Error("Dê um nome ao cartão.");
       setWorking(true, "Salvando...");
@@ -1249,7 +1416,7 @@ async function request(path, options = {}) {
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
   const data = await response.json().catch(() => ({}));
-  if (response.status === 401 && path !== "/api/login" && path !== "/api/register") {
+  if (response.status === 401 && path !== "/api/login" && path !== "/api/register" && path !== "/api/passkeys/login") {
     state.authed = false;
     state.authView = "login";
     render();

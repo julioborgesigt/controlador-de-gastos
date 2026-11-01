@@ -1,6 +1,6 @@
 # Controle de gastos
 
-Um único app de celular para o orçamento de novembro de 2026 a outubro de 2027. Os números da planilha já vêm carregados. O que você lançar fica no banco da Cloudflare. A entrada é por CPF e senha; na criação da conta também pedimos o e-mail, guardado para códigos e avisos futuros.
+Um único app de celular para o orçamento de novembro de 2026 a outubro de 2027. Os números da planilha já vêm carregados. O que você lançar fica no banco da Cloudflare. A entrada é por CPF e senha; na criação da conta também pedimos o e-mail, guardado para códigos e avisos futuros. Neste celular dá para cadastrar a digital do Android e entrar sem digitar a senha.
 
 - A casa continua no total de gastos fixos mesmo quando o gasto foi para o cartão. O app avisa que aquele valor já está na fatura e não soma de novo.
 - Dá para nomear um gasto extra e dizer se foi Pix, débito, dinheiro ou cartão.

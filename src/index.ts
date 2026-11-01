@@ -15,6 +15,8 @@ import {
   sessionExpiry,
   sha256,
 } from "./auth.ts";
+import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
+import { loginOptions, loginWithPasskey, registerPasskey, registrationOptions } from "./passkeys.ts";
 import {
   cardLinkRequired,
   countsTowardPayment,
@@ -31,6 +33,8 @@ import {
   countUsers,
   createCard,
   createUser,
+  deletePasskey,
+  deleteUserPasskeys,
   ensureReady,
   findUserByCpf,
   findUserById,
@@ -39,6 +43,7 @@ import {
   getSetting,
   insertCardPurchase,
   listCards,
+  listPasskeys,
   monthPayload,
   setMonthIncome,
   setSetting,
@@ -145,9 +150,55 @@ app.post("/api/password", async (c) => {
   if (!safeEqual(actual, user.passwordHash)) return c.json({ error: "Senha atual incorreta." }, 401);
   const salt = randomBytes(16);
   await updatePassword(c.env.DB, user.id, await hashSecret(next.password, salt), toHex(salt));
+  const passkeysRemoved = (await deleteUserPasskeys(c.env.DB, user.id)) > 0;
   await c.env.DB.prepare("DELETE FROM sessions WHERE user_id = ?").bind(user.id).run();
   await startSession(c, user.id);
+  return c.json({ ok: true, passkeysRemoved });
+});
+
+app.get("/api/passkeys", async (c) => {
+  const user = await currentAccount(c);
+  if (!user) return c.json({ error: AUTH_ERROR }, 401);
+  return c.json({ passkeys: publicPasskeys(await listPasskeys(c.env.DB, user.id)) });
+});
+
+app.post("/api/passkeys/register/options", async (c) => {
+  const user = await currentAccount(c);
+  if (!user) return c.json({ error: AUTH_ERROR }, 401);
+  const created = await registrationOptions(c.env.DB, user, c.req.url);
+  if (!created.ok) return c.json({ error: created.error }, 400);
+  return c.json(created.options);
+});
+
+app.post("/api/passkeys/register", async (c) => {
+  const user = await currentAccount(c);
+  if (!user) return c.json({ error: AUTH_ERROR }, 401);
+  const body = await readJson(c);
+  if (!isRegistrationResponse(body)) return c.json({ error: "Resposta da digital inválida." }, 400);
+  const saved = await registerPasskey(c.env.DB, user.id, body, c.req.url);
+  if (!saved.ok) return c.json({ error: saved.error }, 400);
+  return c.json({ passkeys: publicPasskeys(await listPasskeys(c.env.DB, user.id)) }, 201);
+});
+
+app.post("/api/passkeys/login/options", async (c) => {
+  return c.json(await loginOptions(c.env.DB, c.req.url));
+});
+
+app.post("/api/passkeys/login", async (c) => {
+  const body = await readJson(c);
+  if (!isAuthenticationResponse(body)) return c.json({ error: "Resposta da digital inválida." }, 400);
+  const logged = await loginWithPasskey(c.env.DB, body, c.req.url);
+  if (!logged.ok) return c.json({ error: logged.error }, 401);
+  await startSession(c, logged.userId);
   return c.json({ ok: true });
+});
+
+app.delete("/api/passkeys/:id", async (c) => {
+  const user = await currentAccount(c);
+  if (!user) return c.json({ error: AUTH_ERROR }, 401);
+  const removed = await deletePasskey(c.env.DB, c.req.param("id"), user.id);
+  if (!removed) return c.json({ error: "Digital não encontrada." }, 404);
+  return c.json({ passkeys: publicPasskeys(await listPasskeys(c.env.DB, user.id)) });
 });
 
 app.get("/api/months/:id", async (c) => {
@@ -431,6 +482,37 @@ function parseExpenseBody(body: JsonBody): { ok: true; value: ExpenseDraft } | {
       ...normalized,
     },
   };
+}
+
+function publicPasskeys(rows: Array<{ id: string; createdAt: string }>) {
+  return rows.map((row) => ({ id: row.id, createdAt: row.createdAt }));
+}
+
+function isRegistrationResponse(value: unknown): value is RegistrationResponseJSON {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  const response = record.response;
+  if (!response || typeof response !== "object") return false;
+  const attestation = response as Record<string, unknown>;
+  return record.type === "public-key"
+    && typeof record.id === "string"
+    && typeof record.rawId === "string"
+    && typeof attestation.clientDataJSON === "string"
+    && typeof attestation.attestationObject === "string";
+}
+
+function isAuthenticationResponse(value: unknown): value is AuthenticationResponseJSON {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  const response = record.response;
+  if (!response || typeof response !== "object") return false;
+  const assertion = response as Record<string, unknown>;
+  return record.type === "public-key"
+    && typeof record.id === "string"
+    && typeof record.rawId === "string"
+    && typeof assertion.clientDataJSON === "string"
+    && typeof assertion.authenticatorData === "string"
+    && typeof assertion.signature === "string";
 }
 
 function isSection(value: unknown): value is Section {
