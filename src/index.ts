@@ -33,6 +33,8 @@ import {
   copyFromPreviousMonth,
   countUsers,
   createCard,
+  deleteCard,
+  renameCard,
   createUser,
   deletePasskey,
   deleteShare,
@@ -427,6 +429,25 @@ app.post("/api/cards", async (c) => {
   const created = await createCard(c.env.DB, writer.scope.ownerId, parsed.name);
   if (!created.ok) return c.json({ error: created.error }, 409);
   return c.json({ cards: await listCards(c.env.DB, writer.scope.ownerId) }, 201);
+});
+
+app.patch("/api/cards/:id", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const body = await readJson(c);
+  const parsed = parseCardName(body.name);
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+  const renamed = await renameCard(c.env.DB, writer.scope.ownerId, c.req.param("id"), parsed.name);
+  if (!renamed.ok) return c.json({ error: renamed.error }, renamed.error === "Cartão não encontrado." ? 404 : 409);
+  return c.json({ cards: await listCards(c.env.DB, writer.scope.ownerId) });
+});
+
+app.delete("/api/cards/:id", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const removed = await deleteCard(c.env.DB, writer.scope.ownerId, c.req.param("id"));
+  if (!removed.ok) return c.json({ error: removed.error }, removed.error === "Cartão não encontrado." ? 404 : 409);
+  return c.json({ cards: await listCards(c.env.DB, writer.scope.ownerId) });
 });
 
 app.post("/api/expenses", async (c) => {

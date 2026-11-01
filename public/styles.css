@@ -248,6 +248,18 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   box-shadow: var(--shadow);
 }
 
+.card-manage {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.card-manage .item-main { padding: 0; }
+
+.card-manage .item-actions,
+.section-head + .item-actions { padding: 0; }
+
 .jump small, .item small, .metric small { display: block; color: var(--muted); font-size: 13px; line-height: 1.35; }
 
 .section-head { margin: 8px 2px 12px; }
