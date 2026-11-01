@@ -9,6 +9,7 @@ import {
   expensesForCard,
   isFixedOnCard,
   normalizeExpense,
+  expenseCountForCard,
   parseCardName,
   planCardPurchase,
   resolveCardLabel,
@@ -193,6 +194,17 @@ test("parcela do cartão avança no mês seguinte e o gasto fixo lançado pelo u
   assert.equal(nextMonth?.payment, "pix");
   assert.equal(nextMonth?.cardLabel, null);
   assert.equal(nextMonth?.paid, false);
+});
+
+test("cartão só pode ser excluído quando nenhum gasto aponta para ele", () => {
+  const labels = [
+    { label: "Nubank", count: 2 },
+    { label: " nubank ", count: 1 },
+    { label: "Neon", count: 0 },
+  ];
+  assert.equal(expenseCountForCard(labels, "Nubank"), 3);
+  assert.equal(expenseCountForCard(labels, "Inter"), 0);
+  assert.equal(expenseCountForCard(labels, "Neon"), 0);
 });
 
 test("cartão novo exige nome e o gasto no cartão fica vinculado a um cartão cadastrado", () => {

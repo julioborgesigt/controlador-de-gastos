@@ -27,6 +27,7 @@ const state = {
 
 let overlayPushed = false;
 let suppressHistory = false;
+let allowLeave = false;
 
 const views = [
   ["resumo", "Resumo"],
@@ -186,21 +187,63 @@ function syncOverlayHistory() {
   }
 }
 
+function armStay() {
+  if (allowLeave) return;
+  if (history.state && (history.state.stay || history.state.overlay)) return;
+  history.pushState({ stay: 1 }, "");
+}
+
+function leavePage() {
+  allowLeave = true;
+  state.confirm = null;
+  state.sheet = null;
+  state.accountMenu = false;
+  overlayPushed = false;
+  suppressHistory = true;
+  history.go(-history.length);
+}
+
 window.addEventListener("popstate", () => {
+  if (allowLeave) {
+    suppressHistory = false;
+    overlayPushed = false;
+    state.confirm = null;
+    state.sheet = null;
+    state.accountMenu = false;
+    render();
+    return;
+  }
   if (suppressHistory) {
     suppressHistory = false;
     return;
   }
-  if (!overlayPushed) return;
-  overlayPushed = false;
-  if (state.confirm) state.confirm = null;
-  else if (state.accountMenu) state.accountMenu = false;
-  else {
-    state.sheet = null;
-    state.error = "";
+  if (overlayPushed) {
+    overlayPushed = false;
+    if (state.confirm) state.confirm = null;
+    else if (state.accountMenu) state.accountMenu = false;
+    else {
+      state.sheet = null;
+      state.error = "";
+    }
+    render();
+    return;
   }
+  if (state.cardFocus) {
+    armStay();
+    state.cardFocus = null;
+    state.showEmpty = false;
+    render();
+    return;
+  }
+  armStay();
+  state.accountMenu = false;
+  state.sheet = null;
+  state.error = "";
+  state.confirm = "leave";
   render();
 });
+
+armStay();
 
 let sheetGuardBound = false;
 let sheetTouchY = 0;
@@ -851,11 +894,29 @@ function askConfirm(kind) {
 
 function confirmCopy() {
   const month = state.data?.month?.label || "este mês";
+  if (state.confirm === "leave") {
+    return {
+      title: "Sair do app?",
+      body: "Você volta para a tela anterior do navegador.",
+      action: "Sair",
+      cancel: "Ficar",
+    };
+  }
+  if (state.confirm === "delete-card") {
+    const name = state.confirmCard?.name || "este cartão";
+    return {
+      title: "Excluir cartão",
+      body: `Excluir “${name}”? Só dá para excluir um cartão que não tem gastos lançados.`,
+      action: "Excluir",
+      cancel: "Cancelar",
+    };
+  }
   if (state.confirm === "settle") {
     return {
       title: "Quitar o que falta",
       body: `Marca como pagos a fatura, o Pix e os extras ainda em aberto em ${month}. Um recorrente já lançado no cartão continua na lista e não é cobrado outra vez. Se não restar valor a pagar, o mês fica quitado.`,
       action: "Quitar",
+      cancel: "Cancelar",
     };
   }
   if (state.confirm === "reopen") {
@@ -863,12 +924,14 @@ function confirmCopy() {
       title: "Reabrir mês",
       body: `Desmarca os pagamentos de ${month}. A fatura, o Pix e os extras voltam a ficar em aberto.`,
       action: "Reabrir",
+      cancel: "Cancelar",
     };
   }
   return {
     title: "Trazer lançamentos",
     body: `Copia para ${month} os gastos fixos e as parcelas que ainda continuam no mês anterior. O que já existe aqui, com o mesmo nome e o mesmo tipo, não é duplicado. Os novos lançamentos entram em aberto.`,
     action: "Trazer",
+    cancel: "Cancelar",
   };
 }
 
@@ -888,7 +951,7 @@ function confirmDialog() {
       el("h2", { id: "confirm-title" }, copy.title),
       el("p", {}, copy.body),
       el("div", { class: "actions" }, [
-        el("button", { class: "secondary", type: "button", onclick: () => { state.confirm = null; render(); } }, "Cancelar"),
+        el("button", { class: "secondary", type: "button", onclick: () => { state.confirm = null; render(); } }, copy.cancel),
         el("button", { class: "primary", type: "button", onclick: runConfirm }, copy.action),
       ]),
     ]),
@@ -899,6 +962,14 @@ function confirmDialog() {
 async function runConfirm() {
   const kind = state.confirm;
   state.confirm = null;
+  if (kind === "leave") {
+    leavePage();
+    return;
+  }
+  if (kind === "delete-card") {
+    await removeCard(state.confirmCard);
+    return;
+  }
   if (kind === "copy") await copyPrevious();
   else if (kind === "settle") await settle("pay-remaining");
   else if (kind === "reopen") await settle("reopen");
@@ -927,7 +998,7 @@ function cardsHome(data) {
       el("h2", {}, money(data.totals.faturaCents)),
       el("p", { class: "muted" }, blurb("card", data.totals)),
     ]),
-    el("p", { class: "note" }, "Toque num cartão para ver o detalhamento. Dá para editar ou excluir cada gasto."),
+    el("p", { class: "note" }, "Toque num cartão para ver o detalhamento. Dá para editar o cartão. Excluir só quando ele não tiver gastos."),
     editable() ? el("div", { class: "stack-actions" }, [
       el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto Cartão"),
       el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
@@ -935,7 +1006,7 @@ function cardsHome(data) {
   ];
   if (!cards.length) children.push(el("p", { class: "muted" }, "Nenhum cartão ainda."));
   for (const card of cards) {
-    children.push(cardJump(card.name, cardInvoiceCents(data.expenses, card.name), expensesForCardName(data.expenses, card.name), () => openCard(card.id)));
+    children.push(cardManageRow(card, cardInvoiceCents(data.expenses, card.name), expensesForCardName(data.expenses, card.name)));
   }
   const loose = unassignedCardExpenses(data.expenses, cards);
   if (loose.some(shownExpense)) {
@@ -978,6 +1049,7 @@ function cardDetail(data) {
         ? "Gastos vinculados a este cartão. O recorrente que já virou lançamento aparece pelo apelido."
         : "Estes gastos ainda não têm um cartão cadastrado."),
     ]),
+    editable() && card ? cardTools(card) : "",
     editable() ? el("div", { class: "stack-actions" }, [
       el("button", {
         class: "primary",
@@ -1010,6 +1082,66 @@ function cardDetail(data) {
     }, `Mostrar ${hidden} ${hidden === 1 ? "linha sem valor" : "linhas sem valor"}`));
   }
   return el("section", {}, children);
+}
+
+function cardManageRow(card, amount, expenses) {
+  const count = expenses.filter(shownExpense).length;
+  return el("article", { class: "jump card-manage" }, [
+    el("button", { type: "button", class: "item-main", onclick: () => openCard(card.id) }, [
+      el("div", { class: "row-between" }, [el("span", {}, card.name), el("strong", {}, money(amount))]),
+      el("small", {}, count === 0 ? "Nenhum gasto neste mês" : `${count} ${count === 1 ? "gasto" : "gastos"}`),
+    ]),
+    editable() ? cardTools(card) : "",
+  ]);
+}
+
+function cardTools(card) {
+  const blocked = Number(card.expenseCount) > 0;
+  return el("div", { class: "item-actions" }, [
+    el("button", { type: "button", class: "linkish", onclick: () => openEditCard(card) }, "Editar"),
+    blocked
+      ? el("span", { class: "muted" }, "Com gastos, não dá para excluir")
+      : el("button", { type: "button", class: "linkish danger", onclick: () => askDeleteCard(card) }, "Excluir"),
+  ]);
+}
+
+function openEditCard(card) {
+  state.error = "";
+  state.sheet = { mode: "card", id: card.id, name: card.name, previousName: card.name };
+  render();
+}
+
+function askDeleteCard(card) {
+  if (Number(card.expenseCount) > 0) {
+    state.error = "Este cartão tem gastos lançados. A exclusão só fica disponível quando não houver nenhum.";
+    render();
+    return;
+  }
+  state.error = "";
+  state.confirmCard = card;
+  state.confirm = "delete-card";
+  render();
+}
+
+async function removeCard(card) {
+  if (!card?.id) return;
+  state.error = "";
+  setWorking(true, "Excluindo...");
+  try {
+    const data = await request(`/api/cards/${card.id}`, { method: "DELETE" });
+    state.data.cards = data.cards;
+    if (state.cardFocus === card.id) state.cardFocus = null;
+    state.notice = `Cartão “${card.name}” excluído.`;
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
+}
+
+function sameCardName(left, right) {
+  return String(left || "").trim().toLocaleLowerCase("pt-BR") === String(right || "").trim().toLocaleLowerCase("pt-BR");
 }
 
 function cardJump(name, amount, expenses, onclick) {
@@ -1596,7 +1728,7 @@ function openCardExpense(cardName = "") {
 }
 
 function openCreateCard() {
-  state.sheet = { mode: "card", name: "" };
+  state.sheet = { mode: "card", id: "", name: "", previousName: "" };
   render();
 }
 
@@ -1872,7 +2004,7 @@ function sheet() {
     );
   } else if (draft.mode === "card") {
     panel.append(
-      el("h2", {}, "Novo cartão"),
+      el("h2", {}, draft.id ? "Editar cartão" : "Novo cartão"),
       field("Nome", "name", draft.name, "text", "Nubank, Neon ou outro"),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
@@ -2145,7 +2277,17 @@ async function saveSheet(event) {
     } else if (draft.mode === "card") {
       if (!draft.name.trim()) throw new Error("Dê um nome ao cartão.");
       setWorking(true, "Salvando...");
-      const data = await request("/api/cards", { method: "POST", body: { name: draft.name } });
+      const data = await request(draft.id ? `/api/cards/${draft.id}` : "/api/cards", {
+        method: draft.id ? "PATCH" : "POST",
+        body: { name: draft.name },
+      });
+      const saved = (data.cards || []).find((card) => card.id === draft.id);
+      const nextName = saved?.name || draft.name.trim();
+      if (draft.previousName) {
+        for (const expense of state.data.expenses || []) {
+          if (sameCardName(expense.cardLabel, draft.previousName)) expense.cardLabel = nextName;
+        }
+      }
       state.data.cards = data.cards;
     } else {
       if (draft.cardExpense && draft.mode === "create") {

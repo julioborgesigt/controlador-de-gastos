@@ -226,6 +226,15 @@ export function parseCardName(value: unknown): { ok: true; name: string } | { ok
   return { ok: true, name };
 }
 
+export function expenseCountForCard(
+  labels: readonly { label: string | null; count: number }[],
+  cardName: string,
+): number {
+  const key = cardKey(cardName);
+  if (!key) return 0;
+  return labels.reduce((sum, item) => sum + (cardKey(item.label) === key ? item.count : 0), 0);
+}
+
 export function cardKey(value: string | null | undefined): string | null {
   const cleaned = cleanCardLabel(value ?? null);
   return cleaned ? cleaned.toLocaleLowerCase("pt-BR") : null;

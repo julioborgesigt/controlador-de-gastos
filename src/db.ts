@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { carryForward, cardKey, computeTotals, monthLabel, monthSortOrder, planCardPurchase, previousMonthId } from "./domain.ts";
+import { carryForward, cardKey, computeTotals, expenseCountForCard, monthLabel, monthSortOrder, planCardPurchase, previousMonthId } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -543,7 +543,7 @@ export function mapExpense(row: ExpenseRow): Expense {
   };
 }
 
-export type CardAccount = { id: string; name: string; sortOrder: number };
+export type CardAccount = { id: string; name: string; sortOrder: number; expenseCount: number };
 
 export async function listCards(db: D1Database, ownerId: string): Promise<CardAccount[]> {
   const result = await db
@@ -554,7 +554,65 @@ export async function listCards(db: D1Database, ownerId: string): Promise<CardAc
       name: string;
       sort_order: number;
     }>();
-  return (result.results ?? []).map((card) => ({ id: card.id, name: card.name, sortOrder: card.sort_order }));
+  const labels = await cardLabelCounts(db, ownerId);
+  return (result.results ?? []).map((card) => ({
+    id: card.id,
+    name: card.name,
+    sortOrder: card.sort_order,
+    expenseCount: expenseCountForCard(labels, card.name),
+  }));
+}
+
+async function cardLabelCounts(db: D1Database, ownerId: string): Promise<Array<{ label: string | null; count: number }>> {
+  const result = await db
+    .prepare("SELECT card_label AS label, COUNT(*) AS count FROM expenses WHERE owner_id = ? AND card_label IS NOT NULL GROUP BY card_label")
+    .bind(ownerId)
+    .all<{ label: string | null; count: number }>();
+  return result.results ?? [];
+}
+
+export async function renameCard(
+  db: D1Database,
+  ownerId: string,
+  cardId: string,
+  name: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const cards = await listCards(db, ownerId);
+  const current = cards.find((card) => card.id === cardId);
+  if (!current) return { ok: false, error: "Cartão não encontrado." };
+  const key = cardKey(name);
+  if (key && cards.some((card) => card.id !== cardId && cardKey(card.name) === key)) {
+    return { ok: false, error: "Já existe um cartão com esse nome." };
+  }
+  if (current.name === name) return { ok: true };
+  try {
+    await db.prepare("UPDATE cards SET name = ? WHERE owner_id = ? AND id = ?").bind(name, ownerId, cardId).run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "";
+    if (message.includes("UNIQUE")) return { ok: false, error: "Já existe um cartão com esse nome." };
+    throw error;
+  }
+  const labels = await cardLabelCounts(db, ownerId);
+  for (const item of labels) {
+    if (cardKey(item.label) !== cardKey(current.name) || !item.label || item.label === name) continue;
+    await db.prepare("UPDATE expenses SET card_label = ? WHERE owner_id = ? AND card_label = ?").bind(name, ownerId, item.label).run();
+  }
+  return { ok: true };
+}
+
+export async function deleteCard(
+  db: D1Database,
+  ownerId: string,
+  cardId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const cards = await listCards(db, ownerId);
+  const current = cards.find((card) => card.id === cardId);
+  if (!current) return { ok: false, error: "Cartão não encontrado." };
+  if (current.expenseCount > 0) {
+    return { ok: false, error: "Este cartão tem gastos lançados. A exclusão só fica disponível quando não houver nenhum." };
+  }
+  await db.prepare("DELETE FROM cards WHERE owner_id = ? AND id = ?").bind(ownerId, cardId).run();
+  return { ok: true };
 }
 
 export async function createCard(db: D1Database, ownerId: string, name: string): Promise<{ ok: true } | { ok: false; error: string }> {
