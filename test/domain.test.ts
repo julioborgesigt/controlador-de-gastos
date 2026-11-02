@@ -8,6 +8,7 @@ import {
   computeTotals,
   expensesForCard,
   isFixedOnCard,
+  livingCostMonths,
   normalizeExpense,
   expenseCountForCard,
   listMonthRange,
@@ -155,6 +156,8 @@ test("gasto extra no cartão aumenta a fatura e o extra no Pix fica fora dela", 
 test("normaliza pagamento para não somar gasto fixo duas vezes", () => {
   const fixed = normalizeExpense({ section: "fixed", payment: "pix", onCard: true, cardLabel: " Neon " });
   assert.deepEqual(fixed, { section: "fixed", payment: "card", onCard: true, cardLabel: "Neon" });
+  const cash = normalizeExpense({ section: "fixed", payment: "cash", onCard: false, cardLabel: "Nubank" });
+  assert.deepEqual(cash, { section: "fixed", payment: "cash", onCard: false, cardLabel: null });
 
   const extra = normalizeExpense({ section: "extra", payment: "card", onCard: true, cardLabel: "Nubank" });
   assert.equal(extra.onCard, false);
@@ -196,6 +199,13 @@ test("parcela do cartão avança no mês seguinte e o gasto fixo lançado pelo u
   assert.equal(nextMonth?.payment, "pix");
   assert.equal(nextMonth?.cardLabel, null);
   assert.equal(nextMonth?.paid, false);
+});
+
+test("custo de vida no cartão começa na primeira fatura escolhida", () => {
+  const months = ["2026-11", "2026-12", "2027-01", "2027-02"];
+  assert.deepEqual(livingCostMonths(months, "2027-01"), ["2027-01", "2027-02"]);
+  assert.deepEqual(livingCostMonths(months, "2026-10"), months);
+  assert.deepEqual(livingCostMonths(months, "2027-03"), []);
 });
 
 test("período gerenciado aceita uma faixa de até 48 meses", () => {

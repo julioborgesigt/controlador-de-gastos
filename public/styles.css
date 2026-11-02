@@ -388,7 +388,19 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   border-color: transparent;
 }
 
-.item.open { box-shadow: inset 4px 0 0 #c2410c; }
+.item-end {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  align-self: flex-start;
+  gap: 8px;
+  padding: 6px 4px 0 8px;
+  flex: none;
+}
+
+.item-end .badge { margin-top: 0; }
+
+.item-end .amount { padding-right: 0; }
 
 .item.paid { background: #f4faf6; }
 
@@ -436,6 +448,33 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .badge.open { background: #fff1e8; color: #9a3412; }
 
+.cost-split {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.cost-split div {
+  background: white;
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.cost-split small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.cost-split strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
 .note {
   background: #f3f6fa;
   border-radius: 8px;
@@ -467,6 +506,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   color: var(--muted);
   font-size: 11px;
   font-weight: 600;
+  line-height: 1.15;
+  white-space: normal;
   padding: 0 2px;
 }
 
