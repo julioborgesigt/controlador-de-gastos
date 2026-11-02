@@ -2063,10 +2063,10 @@ function expenseRow(expense, section, options = {}) {
   if (expense.payment !== "card" || onInvoice) meta.push(paymentLabel(expense.payment));
   if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Cartão ${expense.cardLabel}` : "Cartão");
   if (expense.installment) meta.push(expense.installment);
-  if (expense.paid) meta.push("Pago");
-  const check = expense.paid
-    ? el("span", { class: "check on", "aria-hidden": "true" }, "✓")
-    : el("span", { class: "check spacer", "aria-hidden": "true" }, "");
+  const check = el("span", {
+    class: `check ${expense.paid ? "on" : "off"}`,
+    "aria-label": expense.paid ? "Pago" : "Em aberto",
+  }, expense.paid ? "✓" : "");
   const invoiceToggle = editable() && section === "fixed"
     ? el("button", {
       type: "button",
@@ -2077,12 +2077,13 @@ function expenseRow(expense, section, options = {}) {
   const edit = () => {
     if (editable()) openEdit(expense, { cardExpense: lockedCard });
   };
-  const front = el("article", { class: `item${onInvoice && section === "card" ? " aside" : ""}` }, [
+  const front = el("article", { class: `item${expense.paid ? " paid" : " open"}${onInvoice && section === "card" ? " aside" : ""}` }, [
     check,
     el("div", { class: "item-copy" }, [
       el("button", { type: "button", class: "item-main", onclick: edit }, [
         el("strong", {}, expense.name),
         el("small", {}, meta.filter(Boolean).join(" · ")),
+        el("span", { class: expense.paid ? "badge paid" : "badge open" }, expense.paid ? "Pago" : "Em aberto"),
       ]),
       invoiceToggle,
       onInvoice && section === "card" ? el("span", { class: "badge" }, "Já contabilizado, não soma de novo") : "",
@@ -2104,6 +2105,41 @@ function expenseRow(expense, section, options = {}) {
   });
 }
 
+function recurringMonthIds(draft) {
+  const months = state.data?.months || [];
+  if (draft.repeat !== "period") return months.map((month) => month.id);
+  const start = months.findIndex((month) => month.id === draft.repeatStart);
+  const end = months.findIndex((month) => month.id === draft.repeatEnd);
+  if (start < 0 || end < 0 || end < start) return [];
+  return months.slice(start, end + 1).map((month) => month.id);
+}
+
+function managedMonthSelect(draft, key, label) {
+  const months = state.data?.months || [];
+  const select = el("select", { id: key }, months.map((month) => el("option", { value: month.id }, month.label)));
+  select.value = draft[key] || months[0]?.id || "";
+  select.addEventListener("change", () => {
+    draft[key] = select.value;
+  });
+  return el("div", { class: "field" }, [el("label", { for: key }, label), select]);
+}
+
+function recurringSpan(draft) {
+  return el("div", { class: "field" }, [
+    el("label", {}, "Lançar em"),
+    segmented("repeat", [["all", "Todos os meses"], ["period", "Um período"]], draft.repeat || "all"),
+    el("p", { class: "muted" }, draft.repeat === "period"
+      ? "A conta entra em cada mês do intervalo, em aberto."
+      : "Por padrão, a conta entra em todos os meses do período, em aberto."),
+    draft.repeat === "period"
+      ? el("div", { class: "pair" }, [
+        managedMonthSelect(draft, "repeatStart", "Do mês"),
+        managedMonthSelect(draft, "repeatEnd", "Até o mês"),
+      ])
+      : "",
+  ]);
+}
+
 function openCreate(section, payment) {
   state.sheet = {
     mode: "create",
@@ -2121,6 +2157,9 @@ function openCreate(section, payment) {
     installmentsPaid: "0",
     amountMode: "installment",
     invoiceMonthId: section === "extra" ? state.monthId : "",
+    repeat: "all",
+    repeatStart: state.monthId,
+    repeatEnd: (state.data?.months || []).at(-1)?.id || state.monthId,
     paid: false,
     source: "user",
   };
@@ -2506,6 +2545,7 @@ function sheet() {
         ])
         : "",
       cardSpend ? "" : field(amountLabel(draft), "amount", draft.amount, "decimal"),
+      recurring && draft.mode === "create" ? recurringSpan(draft) : "",
       cardSpend || recurring || surprise
         ? ""
         : el("div", { class: "field" }, [
@@ -2774,6 +2814,10 @@ async function saveSheet(event) {
       if (onCardPurchase && (!Number.isInteger(totalCount) || !Number.isInteger(paidCount))) {
         throw new Error("Informe as parcelas em números inteiros.");
       }
+      const recurringMonths = draft.mode === "create" && draft.section === "fixed" && !draft.cardExpense
+        ? recurringMonthIds(draft)
+        : null;
+      if (recurringMonths && !recurringMonths.length) throw new Error("Escolha um período em que o fim não seja antes do início.");
       const surpriseCard = draft.mode === "create" && !draft.cardExpense && draft.section === "extra" && draft.payment === "card";
       const startMonthId = surpriseCard ? (draft.invoiceMonthId || "") : state.monthId;
       if (surpriseCard && !startMonthId) throw new Error("Escolha a fatura em que o valor entra.");
@@ -2798,7 +2842,15 @@ async function saveSheet(event) {
           : (remaining > 1 ? `Lancei ${remaining} parcelas a partir deste mês.` : "");
       }
       if (draft.mode === "create") {
-        state.data = await request("/api/expenses", { method: "POST", body: { ...body, monthId: startMonthId } });
+        state.data = await request("/api/expenses", {
+          method: "POST",
+          body: { ...body, monthId: startMonthId, monthIds: recurringMonths || undefined },
+        });
+        if (recurringMonths && recurringMonths.length > 1) {
+          state.notice = draft.repeat === "all"
+            ? `Lancei a conta em todos os ${recurringMonths.length} meses.`
+            : `Lancei a conta em ${recurringMonths.length} meses.`;
+        }
         if (surpriseCard && startMonthId !== state.monthId) await loadMonth(state.monthId);
       } else {
         state.data = await request(`/api/expenses/${draft.id}`, { method: "PATCH", body });

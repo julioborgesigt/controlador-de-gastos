@@ -388,6 +388,17 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   border-color: transparent;
 }
 
+.item.open { box-shadow: inset 4px 0 0 #c2410c; }
+
+.item.paid { background: #f4faf6; }
+
+.item.paid .item-main strong {
+  color: var(--muted);
+  text-decoration: line-through;
+}
+
+.item.paid .amount { color: var(--muted); font-weight: 550; }
+
 .item.aside { background: #f4f7fb; }
 
 .amount.aside { color: var(--terra); }
@@ -421,7 +432,9 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .badge.pix { background: var(--teal-soft); color: var(--teal); }
 
-.badge.paid { background: #eef4e8; color: var(--good); }
+.badge.paid { background: #e5f6ee; color: var(--good); }
+
+.badge.open { background: #fff1e8; color: #9a3412; }
 
 .note {
   background: #f3f6fa;
