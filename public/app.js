@@ -1296,7 +1296,7 @@ function cardDetail(data) {
         state.showEmpty = false;
         render();
       },
-    }, "Todos os cartões"),
+    }, [backArrow(), "Todos os cartões"]),
     el("div", { class: "section-head" }, [
       el("p", { class: "eyebrow" }, data.month.label),
       el("h2", {}, card ? card.name : "Sem cartão"),
@@ -1355,10 +1355,31 @@ function cardTools(card) {
   const blocked = Number(card.expenseCount) > 0;
   return el("div", { class: "item-actions" }, [
     el("button", { type: "button", class: "linkish", onclick: () => openEditCard(card) }, "Editar"),
-    blocked
-      ? el("span", { class: "muted" }, "Com gastos, não dá para excluir")
-      : el("button", { type: "button", class: "linkish danger", onclick: () => askDeleteCard(card) }, "Excluir"),
+    el("button", {
+      type: "button",
+      class: "linkish danger",
+      disabled: blocked ? "" : null,
+      title: blocked ? "Este cartão tem gastos lançados." : "Excluir cartão",
+      onclick: () => askDeleteCard(card),
+    }, "Excluir"),
   ]);
+}
+
+function backArrow() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "18");
+  svg.setAttribute("height", "18");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.8");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M15 6l-6 6 6 6");
+  svg.append(path);
+  return svg;
 }
 
 function openEditCard(card) {
