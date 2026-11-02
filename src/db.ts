@@ -218,6 +218,7 @@ async function ensureOwnership(db: D1Database): Promise<void> {
   await ensureColumn(db, "income_extras", "owner_id", "ALTER TABLE income_extras ADD COLUMN owner_id TEXT");
   await ensureColumn(db, "months", "owner_id", "ALTER TABLE months ADD COLUMN owner_id TEXT");
   await ensureColumn(db, "sessions", "scope_owner_id", "ALTER TABLE sessions ADD COLUMN scope_owner_id TEXT");
+  await ensureColumn(db, "cards", "due_day", "ALTER TABLE cards ADD COLUMN due_day INTEGER");
   await db.prepare("DROP INDEX IF EXISTS idx_cards_name").run();
   await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_owner_name ON cards (owner_id, name COLLATE NOCASE)").run();
   await db.prepare(
@@ -542,22 +543,24 @@ export function mapExpense(row: ExpenseRow): Expense {
   };
 }
 
-export type CardAccount = { id: string; name: string; sortOrder: number; expenseCount: number };
+export type CardAccount = { id: string; name: string; sortOrder: number; expenseCount: number; dueDay: number | null };
 
 export async function listCards(db: D1Database, ownerId: string): Promise<CardAccount[]> {
   const result = await db
-    .prepare("SELECT id, name, sort_order FROM cards WHERE owner_id = ? ORDER BY sort_order, name")
+    .prepare("SELECT id, name, sort_order, due_day FROM cards WHERE owner_id = ? ORDER BY sort_order, name")
     .bind(ownerId)
     .all<{
       id: string;
       name: string;
       sort_order: number;
+      due_day: number | null;
     }>();
   const labels = await cardLabelCounts(db, ownerId);
   return (result.results ?? []).map((card) => ({
     id: card.id,
     name: card.name,
     sortOrder: card.sort_order,
+    dueDay: card.due_day ?? null,
     expenseCount: expenseCountForCard(labels, card.name),
   }));
 }
@@ -614,7 +617,36 @@ export async function deleteCard(
   return { ok: true };
 }
 
-export async function createCard(db: D1Database, ownerId: string, name: string): Promise<{ ok: true } | { ok: false; error: string }> {
+export async function setCardDueDay(
+  db: D1Database,
+  ownerId: string,
+  cardId: string,
+  dueDay: number | null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const cards = await listCards(db, ownerId);
+  if (!cards.some((card) => card.id === cardId)) return { ok: false, error: "Cartão não encontrado." };
+  await db.prepare("UPDATE cards SET due_day = ? WHERE owner_id = ? AND id = ?").bind(dueDay, ownerId, cardId).run();
+  return { ok: true };
+}
+
+export async function getTheme(db: D1Database, ownerId: string): Promise<"light" | "dark"> {
+  return (await getSetting(db, themeKey(ownerId))) === "dark" ? "dark" : "light";
+}
+
+export async function setTheme(db: D1Database, ownerId: string, theme: "light" | "dark"): Promise<void> {
+  await setSetting(db, themeKey(ownerId), theme);
+}
+
+function themeKey(ownerId: string): string {
+  return `theme:${ownerId}`;
+}
+
+export async function createCard(
+  db: D1Database,
+  ownerId: string,
+  name: string,
+  dueDay: number | null = null,
+): Promise<{ ok: true } | { ok: false; error: string }> {
   const cards = await listCards(db, ownerId);
   const key = cardKey(name);
   if (key && cards.some((card) => cardKey(card.name) === key)) {
@@ -623,8 +655,8 @@ export async function createCard(db: D1Database, ownerId: string, name: string):
   const sortOrder = cards.reduce((max, card) => Math.max(max, card.sortOrder), -1) + 1;
   try {
     await db
-      .prepare("INSERT INTO cards (id, owner_id, name, sort_order, created_at) VALUES (?, ?, ?, ?, ?)")
-      .bind(crypto.randomUUID(), ownerId, name, sortOrder, new Date().toISOString())
+      .prepare("INSERT INTO cards (id, owner_id, name, sort_order, due_day, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .bind(crypto.randomUUID(), ownerId, name, sortOrder, dueDay, new Date().toISOString())
       .run();
   } catch (error) {
     const message = error instanceof Error ? error.message : "";
@@ -668,6 +700,7 @@ export async function monthPayload(db: D1Database, ownerId: string, monthId: str
     incomeExtras,
     baseIncomeCents: baseIncome === null ? null : Number(baseIncome),
     totals,
+    theme: await getTheme(db, ownerId),
   };
 }
 

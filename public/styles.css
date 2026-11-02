@@ -537,7 +537,62 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   padding: 0 2px;
 }
 
-.nav button.active { background: #eef1f5; color: var(--ink); }
+.nav button.active { background: color-mix(in srgb, var(--ink) 8%, var(--card)); color: var(--ink); }
+
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #121418;
+  --ink: #f2f4f7;
+  --muted: #aeb6c2;
+  --card: #1c2128;
+  --line: #343c47;
+  --terra: #9ec0ef;
+  --terra-soft: #243044;
+  --teal: #5dceb0;
+  --teal-soft: #17362e;
+  --navy: #9ec0ef;
+  --good: #5dceb0;
+  --bad: #f0b4ae;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+}
+
+html[data-theme="dark"] input,
+html[data-theme="dark"] select,
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] .secondary,
+html[data-theme="dark"] .nav,
+html[data-theme="dark"] .choice button,
+html[data-theme="dark"] .switch,
+html[data-theme="dark"] .month-picks button,
+html[data-theme="dark"] .toggle,
+html[data-theme="dark"] .check.off,
+html[data-theme="dark"] .linkish.back,
+html[data-theme="dark"] .menu,
+html[data-theme="dark"] .cost-split div {
+  background: var(--card);
+}
+
+html[data-theme="dark"] .note { background: #222831; }
+
+html[data-theme="dark"] .item.paid { background: #17362e; }
+
+html[data-theme="dark"] .badge.paid { background: #17362e; color: var(--good); }
+
+html[data-theme="dark"] .badge.open { background: #3a271c; color: #fdba74; }
+
+html[data-theme="dark"] .nav button.active { background: #2a313b; }
+
+html[data-theme="dark"] .primary,
+html[data-theme="dark"] .choice button.on,
+html[data-theme="dark"] .switch.on,
+html[data-theme="dark"] .month-picks button.on,
+html[data-theme="dark"] .chip.active,
+html[data-theme="dark"] .mark,
+html[data-theme="dark"] .profile,
+html[data-theme="dark"] .working {
+  background: #f2f4f7;
+  color: #121418;
+}
 
 .nav svg { display: block; margin: 0 auto 2px; }
 
