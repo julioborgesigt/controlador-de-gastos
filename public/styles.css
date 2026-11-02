@@ -59,6 +59,39 @@ button:disabled { opacity: 0.45; cursor: default; }
 
 .screen.boot { align-items: center; text-align: center; }
 
+.boot-mark {
+  position: relative;
+  width: 88px;
+  height: 88px;
+  display: grid;
+  place-items: center;
+}
+
+.boot-ring {
+  position: absolute;
+  inset: 0;
+  width: 88px;
+  height: 88px;
+  transform: rotate(-90deg);
+}
+
+.boot-ring-track,
+.boot-ring-value {
+  fill: none;
+  stroke-width: 3;
+}
+
+.boot-ring-track { stroke: var(--line); }
+
+.boot-ring-value {
+  stroke: var(--ink);
+  stroke-linecap: round;
+  --ring: 238.76;
+  stroke-dasharray: var(--ring);
+  stroke-dashoffset: calc(var(--ring) * (1 - var(--progress, 0)));
+  transition: stroke-dashoffset 320ms ease;
+}
+
 .screen.boot .lede { margin-top: 18px; max-width: 280px; }
 
 .screen.boot .primary { width: min(280px, 100%); }
@@ -637,12 +670,27 @@ body.sheet-open {
   box-shadow: 0 -8px 24px rgba(16, 24, 40, 0.12);
 }
 
+.sheet { transition: transform 180ms ease; }
+
+.sheet.dragging { transition: none; }
+
+.sheet-grab {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: -4px -18px 8px;
+  padding: 12px 18px 16px;
+  background: var(--card);
+  touch-action: none;
+  cursor: grab;
+}
+
 .handle {
   width: 46px;
   height: 5px;
   border-radius: 99px;
   background: var(--line);
-  margin: 4px auto 12px;
+  margin: 0 auto;
 }
 
 .field { margin-bottom: 14px; }
@@ -743,14 +791,26 @@ body.sheet-open {
 
 body.is-working { cursor: progress; }
 
-body.is-working #app { pointer-events: none; }
+body.is-working #app {
+  filter: blur(10px);
+  pointer-events: none;
+}
+
+body.is-working::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 29;
+  background: rgba(23, 26, 31, 0.16);
+  pointer-events: none;
+}
 
 .working {
   position: fixed;
-  z-index: 30;
-  top: calc(12px + var(--safe-top));
+  z-index: 40;
+  top: 50%;
   left: 50%;
-  transform: translateX(-50%);
+  transform: translate(-50%, -50%);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -758,7 +818,7 @@ body.is-working #app { pointer-events: none; }
   background: var(--ink);
   color: white;
   border-radius: 8px;
-  padding: 10px 16px;
+  padding: 12px 18px;
   font-weight: 600;
   box-shadow: var(--shadow);
 }
@@ -767,8 +827,8 @@ body.is-working #app { pointer-events: none; }
   width: 16px;
   height: 16px;
   flex: none;
-  border: 2px solid rgba(255, 250, 243, 0.35);
-  border-top-color: #fffaf3;
+  border: 2px solid color-mix(in srgb, currentColor 35%, transparent);
+  border-top-color: currentColor;
   border-radius: 50%;
   animation: spin 0.7s linear infinite;
 }
@@ -780,6 +840,7 @@ body.is-working #app { pointer-events: none; }
 @media (prefers-reduced-motion: reduce) {
   * { scroll-behavior: auto !important; }
   .spinner { animation: none; border-top-color: white; }
+  .boot-ring-value { transition: none; }
 }
 
 .account { position: relative; }
