@@ -95,7 +95,9 @@ app.get("/api/health", (c) => c.json({ ok: true }));
 
 app.get("/api/session", async (c) => {
   const needsSetup = (await countUsers(c.env.DB)) === 0;
-  const authenticated = await isAuthenticated(c.env.DB, getCookie(c, COOKIE));
+  const token = getCookie(c, COOKIE);
+  const authenticated = await isAuthenticated(c.env.DB, token);
+  if (token && !authenticated) deleteCookie(c, COOKIE, { path: "/" });
   return c.json({ needsSetup, authenticated });
 });
 
@@ -879,7 +881,10 @@ async function currentAccount(c: AppContext) {
     expires_at: string;
     user_id: string | null;
   }>();
-  if (!row?.user_id || Date.parse(row.expires_at) <= Date.now()) return null;
+  if (!row?.user_id || Date.parse(row.expires_at) <= Date.now()) {
+    deleteCookie(c, COOKIE, { path: "/" });
+    return null;
+  }
   return findUserById(c.env.DB, row.user_id);
 }
 
@@ -917,7 +922,10 @@ async function requireScope(c: AppContext): Promise<Scope | null> {
     user_id: string | null;
     scope_owner_id: string | null;
   }>();
-  if (!row?.user_id || Date.parse(row.expires_at) <= Date.now()) return null;
+  if (!row?.user_id || Date.parse(row.expires_at) <= Date.now()) {
+    deleteCookie(c, COOKIE, { path: "/" });
+    return null;
+  }
   let ownerId = row.scope_owner_id || row.user_id;
   let access = await accessTo(c.env.DB, row.user_id, ownerId);
   if (!access) {
