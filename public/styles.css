@@ -369,15 +369,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   text-align: center;
 }
 
-.swipe-act.pay { background: var(--good); }
+.swipe-act.pay { background: #0f6e56; color: white; }
 
-.swipe-act.send { background: var(--navy); }
+.swipe-act.send,
+.swipe-act.edit { background: #1f4e8a; color: white; }
 
-.swipe-act.undo { background: var(--muted); }
+.swipe-act.undo { background: #5e6772; color: white; }
 
-.swipe-act.edit { background: var(--navy); }
-
-.swipe-act.delete { background: var(--bad); }
+.swipe-act.delete { background: #b42318; color: white; }
 
 .swipe-front {
   position: relative;
@@ -917,7 +916,9 @@ body.is-working::before {
   width: min(420px, 100%);
   max-height: min(80dvh, 520px);
   overflow: auto;
-  background: white;
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
   border-radius: 12px;
   padding: 18px;
   box-shadow: 0 16px 40px rgba(16, 24, 40, 0.18);

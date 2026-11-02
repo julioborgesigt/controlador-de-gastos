@@ -878,15 +878,18 @@ function monthChip(month) {
 }
 
 async function changeMonth(monthId) {
-  if (monthId === state.monthId) return;
+  if (monthId === state.monthId || state.busy) return;
   state.error = "";
+  setWorking(true, "Abrindo...");
   try {
     await loadMonth(monthId);
     state.showEmpty = false;
   } catch (error) {
     state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
   }
-  render();
 }
 
 function viewBody(data) {
