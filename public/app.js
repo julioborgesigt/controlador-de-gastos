@@ -2014,8 +2014,14 @@ function sheet() {
   } else {
     const needsCard = draft.cardExpense || draft.section === "card" || draft.payment === "card" || draft.onCard;
     const cardSpend = draft.cardExpense && draft.mode === "create";
+    const recurring = draft.section === "fixed" && !cardSpend;
+    const heading = cardSpend
+      ? "Gasto no cartão"
+      : recurring
+        ? (draft.mode === "create" ? "Novo gasto recorrente" : "Editar gasto recorrente")
+        : (draft.mode === "create" ? "Novo gasto" : "Editar gasto");
     panel.append(
-      el("h2", {}, cardSpend ? "Gasto no cartão" : draft.mode === "create" ? "Novo gasto" : "Editar gasto"),
+      el("h2", {}, heading),
       cardSpend
         ? el("div", { class: "field" }, [
           el("label", {}, "O valor informado é"),
@@ -2029,7 +2035,7 @@ function sheet() {
         ])
         : field("Nome", "name", draft.name, "text"),
       cardSpend ? "" : field(amountLabel(draft), "amount", draft.amount, "decimal"),
-      cardSpend
+      cardSpend || recurring
         ? ""
         : el("div", { class: "field" }, [
           el("label", {}, "Tipo"),
@@ -2039,20 +2045,9 @@ function sheet() {
             ["card", "Fatura"],
           ], draft.section),
         ]),
-      cardSpend
+      cardSpend || recurring
         ? ""
-        : draft.section === "fixed" && draft.mode === "edit"
-          ? el("div", { class: "field" }, [
-            el("button", {
-              type: "button",
-              class: "secondary",
-              onclick: () => {
-                const expense = state.data?.expenses?.find((item) => item.id === draft.id);
-                if (expense) openCardPay(expense);
-              },
-            }, "Pago com cartão"),
-          ])
-          : draft.section === "extra"
+        : draft.section === "extra"
             ? el("div", { class: "field" }, [
               el("label", {}, "Como foi pago"),
               segmented("payment", [["pix", "Pix"], ["debit", "Débito"], ["cash", "Dinheiro"], ["card", "Cartão"]], draft.payment),
