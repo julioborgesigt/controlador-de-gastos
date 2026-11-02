@@ -35,6 +35,7 @@ const state = {
   accountMenu: false,
   confirm: null,
   needsPeriod: false,
+  devicePrompt: false,
   periodDraft: null,
   confirmReset: null,
   resetReadyAt: 0,
@@ -196,6 +197,13 @@ function render() {
   }
   if (state.needsPeriod || state.setupGuide) {
     root.append(periodGate());
+    state.viewKey = viewKey;
+    if (document.body.classList.contains("sheet-open")) unlockPage(0);
+    syncOverlayHistory();
+    return;
+  }
+  if (state.devicePrompt) {
+    root.append(devicePromptScreen());
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     syncOverlayHistory();
@@ -634,6 +642,7 @@ async function openBudget() {
     return;
   }
   state.needsPeriod = false;
+  maybeAskDevice();
   if (!state.monthId) state.monthId = period.startMonthId || "";
   const cached = readMonthCache(state.monthId);
   if (cached) {
@@ -979,7 +988,7 @@ function confirmCopy() {
   if (state.confirm === "reset") {
     return {
       title: "Confirmar exclusão",
-      body: state.confirmReset?.body || "Apagar esses dados?",
+      body: state.confirmReset?.text || "Apagar esses dados?",
       action: "Confirmar",
       cancel: "Cancelar",
     };
@@ -1157,6 +1166,75 @@ async function toggleTheme() {
   }
 }
 
+function rememberDevicePrompt() {
+  try { localStorage.setItem("devicePrompt", "1"); } catch { /* segue sem gravar */ }
+}
+
+function maybeAskDevice() {
+  if (!window.PublicKeyCredential) return;
+  try {
+    if (localStorage.getItem("devicePrompt") === "1") return;
+  } catch {
+    return;
+  }
+  state.devicePrompt = true;
+}
+
+function devicePromptScreen() {
+  return el("main", { class: "screen auth" }, [
+    el("h1", {}, "Cadastrar este dispositivo?"),
+    el("p", { class: "lede" }, "Se for um celular ou outro aparelho com leitor biométrico, você entra depois usando só a digital, sem digitar CPF e senha."),
+    state.error ? el("p", { class: "error" }, state.error) : "",
+    el("button", {
+      class: "primary",
+      type: "button",
+      disabled: state.busy ? "" : null,
+      onclick: () => offerDevice(() => {
+        state.devicePrompt = false;
+        rememberDevicePrompt();
+        render();
+      }),
+    }, state.busy ? "Aguardando..." : "Cadastrar digital"),
+    el("button", {
+      class: "secondary",
+      type: "button",
+      onclick: () => {
+        state.devicePrompt = false;
+        state.error = "";
+        rememberDevicePrompt();
+        render();
+      },
+    }, "Agora não"),
+  ]);
+}
+
+async function offerDevice(after) {
+  if (!window.PublicKeyCredential) {
+    state.error = "Este aparelho não tem leitor biométrico. Dá para continuar com CPF e senha.";
+    render();
+    return;
+  }
+  state.error = "";
+  setWorking(true, "Aguardando a digital...");
+  render();
+  try {
+    const options = await request("/api/passkeys/register/options", { method: "POST", body: {} });
+    const credential = await navigator.credentials.create({ publicKey: publicKeyCreationOptions(options) });
+    if (!credential) throw new DOMException("cancelada", "NotAllowedError");
+    const data = await request("/api/passkeys/register", { method: "POST", body: credentialToJSON(credential) });
+    state.passkeys = data.passkeys || [];
+    state.notice = "Digital cadastrada neste aparelho.";
+    rememberDevicePrompt();
+  } catch (error) {
+    state.error = passkeyMessage(error);
+    setWorking(false);
+    render();
+    return;
+  }
+  setWorking(false);
+  await after();
+}
+
 function ensureSetup() {
   if (!state.setup) {
     const period = defaultPeriodDraft();
@@ -1202,12 +1280,14 @@ function periodGate() {
     "Você usa cartão?",
     "Qual é a renda mensal base?",
     "Como prefere ver o app?",
+    "Cadastrar este dispositivo?",
   ];
   const notes = [
     "Escolha o primeiro e o último mês. Dá para alterar depois, no seu perfil.",
     "Se usar, cadastre cada um com um apelido e o dia de vencimento da fatura.",
     "Só o valor que entra todo mês, sem décimo, férias ou outros extras.",
     "Dá para trocar o modo claro ou escuro depois, no seu perfil.",
+    "Se for um celular ou outro aparelho com leitor biométrico, você entra depois só com a digital, sem digitar CPF e senha.",
   ];
   const body = [];
   if (draft.step === 0) body.push(periodFields(draft));
@@ -1248,19 +1328,30 @@ function periodGate() {
     }));
   }
   return el("main", { class: "screen auth" }, [
-    el("p", { class: "eyebrow" }, `Passo ${draft.step + 1} de 4`),
+    el("p", { class: "eyebrow" }, `Passo ${draft.step + 1} de 5`),
     el("h1", {}, titles[draft.step] || titles[0]),
     el("p", { class: "lede" }, notes[draft.step] || ""),
     state.error ? el("p", { class: "error" }, state.error) : "",
     ...body,
     el("div", { class: "actions" }, [
       draft.step > 0 ? el("button", { class: "secondary", type: "button", onclick: () => { draft.step -= 1; state.error = ""; render(); } }, "Voltar") : "",
-      el("button", {
+      draft.step === 4 ? el("button", {
+        class: "primary",
+        type: "button",
+        disabled: state.busy ? "" : null,
+        onclick: () => offerDevice(() => { rememberDevicePrompt(); saveSetup(draft); }),
+      }, state.busy ? "Aguardando..." : "Cadastrar digital") : "",
+      draft.step === 4 ? el("button", {
+        class: "secondary",
+        type: "button",
+        onclick: () => { state.error = ""; rememberDevicePrompt(); saveSetup(draft); },
+      }, "Agora não") : "",
+      draft.step === 4 ? "" : el("button", {
         class: "primary",
         type: "button",
         disabled: state.busy ? "" : null,
         onclick: () => advanceSetup(draft),
-      }, state.busy ? "Salvando..." : draft.step === 3 ? "Concluir" : "Continuar"),
+      }, state.busy ? "Salvando..." : "Continuar"),
     ]),
   ]);
 }
@@ -1293,7 +1384,7 @@ function advanceSetup(draft) {
     render();
     return;
   }
-  if (draft.step < 3) {
+  if (draft.step < 4) {
     draft.step += 1;
     render();
     return;
@@ -1435,7 +1526,7 @@ function describeReset(draft) {
   }
   return {
     body: { scope: "all", focusMonthId: state.monthId },
-    text: "Isso apaga os gastos e as receitas extras desde o início do período. Os meses continuam, zerados.",
+    text: "Isso apaga todos os gastos, as receitas, os cartões e o período. Em seguida você sai da conta. Ao entrar de novo, o formulário de primeiro login aparece outra vez.",
   };
 }
 
@@ -1462,7 +1553,20 @@ async function executeReset() {
   state.error = "";
   setWorking(true, "Apagando...");
   try {
-    state.data = await request("/api/reset", { method: "POST", body: detail.body });
+    const data = await request("/api/reset", { method: "POST", body: detail.body });
+    if (data.wiped) {
+      state.confirmReset = null;
+      state.setup = null;
+      state.setupGuide = false;
+      state.devicePrompt = false;
+      state.monthId = "";
+      sessionStorage.removeItem("monthId");
+      clearMonthCache();
+      applyTheme("light");
+      await logout();
+      return;
+    }
+    state.data = data;
     state.monthId = state.data.month.id;
     sessionStorage.setItem("monthId", state.monthId);
     rememberMonth(state.data);
@@ -2798,7 +2902,9 @@ function sheet() {
     const years = [...new Set(months.map((month) => month.id.slice(0, 4)))];
     panel.append(
       el("h2", {}, "Resetar meus dados"),
-      el("p", { class: "muted" }, "Apaga os gastos e as receitas extras. Os meses do período continuam, zerados."),
+      el("p", { class: "muted" }, draft.scope === "all"
+        ? "Desde o início apaga gastos, receitas, cartões e o período. Você sai da conta e, ao entrar de novo, refaz o formulário de primeiro login."
+        : "Apaga os gastos e as receitas extras do ano ou do mês escolhido. O período e os cartões continuam."),
       el("div", { class: "field" }, [
         el("label", {}, "Apagar"),
         segmented("scope", [["all", "Desde o início"], ["year", "Um ano"], ["month", "Um mês"]], draft.scope),
