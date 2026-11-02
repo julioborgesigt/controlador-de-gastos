@@ -1361,15 +1361,19 @@ function placeSwipe(front, x) {
 
 function swipeRow(front, { pay, leads, actions, card }) {
   const leadActions = leads || (pay ? [{ ...pay, tone: pay.undo ? "undo" : "pay", commit: true }] : []);
-  const leadBox = el("div", { class: "swipe-lead" }, leadActions.map((action) => el("button", {
-    type: "button",
-    class: `swipe-act ${action.tone || "pay"}`,
-    onclick: (event) => {
-      event.stopPropagation();
-      closeSwipe(front);
-      action.run();
-    },
-  }, action.label)));
+  const leadBox = el("div", { class: "swipe-lead" }, leadActions.map((action) => {
+    const lines = String(action.label).split("\n");
+    return el("button", {
+      type: "button",
+      class: `swipe-act ${action.tone || "pay"}`,
+      "aria-label": lines.join(" "),
+      onclick: (event) => {
+        event.stopPropagation();
+        closeSwipe(front);
+        action.run();
+      },
+    }, lines.map((line) => el("span", {}, line)));
+  }));
   const trail = el("div", { class: "swipe-trail" }, (actions || []).map((action) => el("button", {
     type: "button",
     class: `swipe-act ${action.tone}`,
@@ -2101,12 +2105,12 @@ function expenseRow(expense, section, options = {}) {
   const leads = living
     ? [
       {
-        label: expense.paid ? "Desfazer" : expense.payment === "cash" ? "Pago em espécie" : "Pago no Pix",
+        label: expense.paid ? "Desfazer" : expense.payment === "cash" ? "Pago\nem espécie" : "Pago\nno Pix",
         tone: expense.paid ? "undo" : "pay",
         commit: expense.paid,
         run: () => patchExpense(expense, { paid: !expense.paid }),
       },
-      expense.paid ? null : { label: "Enviar pro cartão", tone: "send", run: () => openCardPay(expense) },
+      expense.paid ? null : { label: "Enviar pro\ncartão", tone: "send", run: () => openCardPay(expense) },
     ].filter(Boolean)
     : null;
   return swipeRow(front, {
