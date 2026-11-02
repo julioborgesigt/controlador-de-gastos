@@ -13,6 +13,7 @@ import {
   expenseCountForCard,
   listMonthRange,
   parseCardName,
+  parseDueDay,
   resetTargets,
   planCardPurchase,
   resolveCardLabel,
@@ -244,6 +245,10 @@ test("cartão só pode ser excluído quando nenhum gasto aponta para ele", () =>
 test("cartão novo exige nome e o gasto no cartão fica vinculado a um cartão cadastrado", () => {
   assert.deepEqual(parseCardName("  Inter  "), { ok: true, name: "Inter" });
   assert.equal(parseCardName("   ").ok, false);
+  assert.deepEqual(parseDueDay(10), { ok: true, dueDay: 10 });
+  assert.deepEqual(parseDueDay(""), { ok: true, dueDay: null });
+  assert.equal(parseDueDay(0).ok, false);
+  assert.equal(parseDueDay(32).ok, false);
 
   const cards = [{ name: "Nubank" }, { name: "Neon" }];
   const extra = normalizeExpense({ section: "extra", payment: "card", onCard: false, cardLabel: " nubank " });

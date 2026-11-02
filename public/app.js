@@ -1,5 +1,16 @@
 import { quoteInstallments, solveInstallmentTriple } from "./installment-link.js";
 
+function applyTheme(theme) {
+  const next = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  document.documentElement.style.colorScheme = next;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", next === "dark" ? "#121418" : "#f5f6f8");
+  try { localStorage.setItem("theme", next); } catch { /* o tema segue só nesta sessão */ }
+}
+
+applyTheme(localStorage.getItem("theme"));
+
 const root = document.querySelector("#app");
 
 const state = {
@@ -64,6 +75,7 @@ async function boot() {
     const session = await request("/api/session");
     if (generation !== bootGeneration) return;
     state.needsSetup = session.needsSetup;
+    if (session.theme) applyTheme(session.theme);
     if (session.needsSetup) state.authView = "register";
     if (!session.authenticated) {
       state.authed = false;
@@ -119,6 +131,7 @@ async function loadMonth(monthId) {
     }
   }
   state.data = data;
+  if (data.theme) applyTheme(data.theme);
   state.monthId = data.month.id;
   sessionStorage.setItem("monthId", data.month.id);
   rememberMonth(data);
@@ -181,7 +194,7 @@ function render() {
     syncOverlayHistory();
     return;
   }
-  if (state.needsPeriod) {
+  if (state.needsPeriod || state.setupGuide) {
     root.append(periodGate());
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
@@ -909,6 +922,7 @@ function accountMenu() {
     ]),
     state.spaces.length > 1 ? menuItem("Trocar acesso", () => { state.accountMenu = false; state.choosing = true; render(); }) : "",
     state.data?.access?.own === true ? menuItem("Período gerenciado", openPeriod) : "",
+    state.data?.access?.own === true ? menuItem(document.documentElement.dataset.theme === "dark" ? "Usar modo claro" : "Usar modo escuro", toggleTheme) : "",
     state.data?.access?.own === true ? menuItem("Resetar meus dados", openReset, "danger") : "",
     state.data?.access?.permission === "own" ? menuItem("Compartilhar dados", () => { state.accountMenu = false; openShares(); }) : "",
     menuItem("Alterar senha", () => { state.accountMenu = false; openPassword(); }),
@@ -1121,20 +1135,232 @@ function periodFields(draft) {
   ]);
 }
 
+function cardDueDay(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const day = Number(text);
+  if (!Number.isInteger(day) || day < 1 || day > 31) throw new Error("O vencimento é um dia de 1 a 31.");
+  return day;
+}
+
+async function toggleTheme() {
+  const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
+  applyTheme(next);
+  state.accountMenu = false;
+  state.error = "";
+  render();
+  try {
+    await request("/api/theme", { method: "POST", body: { theme: next } });
+  } catch (error) {
+    state.error = messageOf(error);
+    render();
+  }
+}
+
+function ensureSetup() {
+  if (!state.setup) {
+    const period = defaultPeriodDraft();
+    state.setup = {
+      step: 0,
+      ...period,
+      hasCards: "no",
+      cards: [{ name: "", dueDay: "10" }],
+      income: "",
+      theme: document.documentElement.dataset.theme === "dark" ? "dark" : "light",
+    };
+  }
+  return state.setup;
+}
+
+function setupChoice(label, current, options, onpick) {
+  return el("div", { class: "field" }, [
+    el("label", {}, label),
+    el("div", { class: "choice" }, options.map(([value, text]) => el("button", {
+      type: "button",
+      class: current === value ? "on" : "",
+      onclick: () => onpick(value),
+    }, text))),
+  ]);
+}
+
+function setupInput(id, label, value, oninput, placeholder, mode) {
+  const input = el("input", {
+    id,
+    value,
+    placeholder,
+    inputmode: mode === "decimal" ? "decimal" : mode === "numeric" ? "numeric" : "text",
+  });
+  input.addEventListener("input", () => oninput(input.value));
+  return el("div", { class: "field" }, [el("label", { for: id }, label), input]);
+}
+
 function periodGate() {
-  const draft = state.periodDraft || defaultPeriodDraft();
-  state.periodDraft = draft;
-  return el("main", { class: "screen" }, [
-    el("h1", {}, "Qual período você quer gerenciar?"),
-    el("p", { class: "lede" }, "Escolha o primeiro e o último mês. O período escolhido poderá ser alterado depois, no seu perfil."),
+  if (state.setupGuide) return setupGuide();
+  const draft = ensureSetup();
+  const titles = [
+    "Qual período você quer planejar?",
+    "Você usa cartão?",
+    "Qual é a renda mensal base?",
+    "Como prefere ver o app?",
+  ];
+  const notes = [
+    "Escolha o primeiro e o último mês. Dá para alterar depois, no seu perfil.",
+    "Se usar, cadastre cada um com um apelido e o dia de vencimento da fatura.",
+    "Só o valor que entra todo mês, sem décimo, férias ou outros extras.",
+    "Dá para trocar o modo claro ou escuro depois, no seu perfil.",
+  ];
+  const body = [];
+  if (draft.step === 0) body.push(periodFields(draft));
+  if (draft.step === 1) {
+    body.push(setupChoice("Cartão", draft.hasCards, [["no", "Não uso"], ["yes", "Tenho cartão"]], (value) => {
+      draft.hasCards = value;
+      render();
+    }));
+    if (draft.hasCards === "yes") {
+      draft.cards.forEach((card, index) => {
+        body.push(el("div", { class: "pair" }, [
+          setupInput(`card-name-${index}`, "Apelido", card.name, (value) => { card.name = value; }, "Nubank, Neon..."),
+          setupInput(`card-due-${index}`, "Vencimento", card.dueDay, (value) => { card.dueDay = value; }, "10", "numeric"),
+        ]));
+      });
+      body.push(el("div", { class: "actions" }, [
+        draft.cards.length > 1 ? el("button", {
+          class: "secondary",
+          type: "button",
+          onclick: () => { draft.cards.pop(); render(); },
+        }, "Remover o último") : "",
+        el("button", {
+          class: "secondary",
+          type: "button",
+          onclick: () => { draft.cards.push({ name: "", dueDay: "10" }); render(); },
+        }, "Adicionar outro cartão"),
+      ]));
+    }
+  }
+  if (draft.step === 2) {
+    body.push(setupInput("base-setup", "Renda base", draft.income, (value) => { draft.income = value; }, "8000,00", "decimal"));
+  }
+  if (draft.step === 3) {
+    body.push(setupChoice("Aparência", draft.theme, [["light", "Modo claro"], ["dark", "Modo escuro"]], (value) => {
+      draft.theme = value;
+      applyTheme(value);
+      render();
+    }));
+  }
+  return el("main", { class: "screen auth" }, [
+    el("p", { class: "eyebrow" }, `Passo ${draft.step + 1} de 4`),
+    el("h1", {}, titles[draft.step] || titles[0]),
+    el("p", { class: "lede" }, notes[draft.step] || ""),
     state.error ? el("p", { class: "error" }, state.error) : "",
-    periodFields(draft),
+    ...body,
+    el("div", { class: "actions" }, [
+      draft.step > 0 ? el("button", { class: "secondary", type: "button", onclick: () => { draft.step -= 1; state.error = ""; render(); } }, "Voltar") : "",
+      el("button", {
+        class: "primary",
+        type: "button",
+        disabled: state.busy ? "" : null,
+        onclick: () => advanceSetup(draft),
+      }, state.busy ? "Salvando..." : draft.step === 3 ? "Concluir" : "Continuar"),
+    ]),
+  ]);
+}
+
+function advanceSetup(draft) {
+  state.error = "";
+  try {
+    if (draft.step === 0) {
+      const start = `${draft.startYear}-${draft.startMonth}`;
+      const end = `${draft.endYear}-${draft.endMonth}`;
+      if (end < start) throw new Error("O último mês precisa ser igual ou posterior ao primeiro.");
+    }
+    if (draft.step === 1 && draft.hasCards === "yes") {
+      const names = new Set();
+      for (const card of draft.cards) {
+        const name = card.name.trim().toLocaleLowerCase("pt-BR");
+        if (!name) throw new Error("Dê um apelido ao cartão.");
+        if (names.has(name)) throw new Error("Cada cartão precisa de um apelido diferente.");
+        names.add(name);
+        cardDueDay(card.dueDay);
+        if (!String(card.dueDay || "").trim()) throw new Error("Informe o dia de vencimento, de 1 a 31.");
+      }
+    }
+    if (draft.step === 2) {
+      const amount = parseMoney(draft.income || "");
+      if (amount === null || amount < 0) throw new Error("Informe a renda base. Exemplo: 8000,00. Use 0 se preferir deixar para depois.");
+    }
+  } catch (error) {
+    state.error = messageOf(error);
+    render();
+    return;
+  }
+  if (draft.step < 3) {
+    draft.step += 1;
+    render();
+    return;
+  }
+  saveSetup(draft);
+}
+
+async function saveSetup(draft) {
+  state.error = "";
+  setWorking(true, "Salvando...");
+  try {
+    const startMonthId = `${draft.startYear}-${draft.startMonth}`;
+    const endMonthId = `${draft.endYear}-${draft.endMonth}`;
+    state.data = await request("/api/period", { method: "POST", body: { startMonthId, endMonthId } });
+    if (draft.hasCards === "yes") {
+      for (const card of draft.cards) {
+        await request("/api/cards", { method: "POST", body: { name: card.name.trim(), dueDay: cardDueDay(card.dueDay) } });
+      }
+    }
+    const amountCents = parseMoney(draft.income || "0");
+    state.data = await request("/api/income/base", {
+      method: "POST",
+      body: { amountCents, scope: "all", monthId: state.data.month.id },
+    });
+    await request("/api/theme", { method: "POST", body: { theme: draft.theme } });
+    applyTheme(draft.theme);
+    state.needsPeriod = false;
+    state.monthId = state.data.month.id;
+    sessionStorage.setItem("monthId", state.monthId);
+    rememberMonth(state.data);
+    state.setup = null;
+    state.setupGuide = true;
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
+}
+
+function setupGuide() {
+  const guides = [
+    ["Resumo", "O panorama do mês: o que falta pagar, o saldo e o caminho para as outras abas."],
+    ["Cartões", "A fatura de cada cartão. Toque no cartão para ver os lançamentos. O dia de vencimento aparece junto do apelido."],
+    ["Custo de vida", "As contas que voltam todo mês. Puxe para a direita para pagar no Pix ou enviar pro cartão. Puxe para a esquerda para editar ou excluir."],
+    ["Imprevisto", "O que fugiu do plano. Dá para lançar no Pix, em espécie, no débito ou no cartão."],
+    ["Receita", "A renda base e os extras do mês, como décimo terceiro ou um valor avulso."],
+  ];
+  return el("main", { class: "screen auth" }, [
+    el("p", { class: "eyebrow" }, "Como usar"),
+    el("h1", {}, "Cada aba tem um papel"),
+    el("p", { class: "lede" }, "O período, os cartões e a aparência continuam disponíveis no perfil e na aba Cartões."),
+    el("div", { class: "list" }, guides.map(([title, text]) => el("article", { class: "item" }, [
+      el("div", { class: "item-copy" }, [
+        el("strong", {}, title),
+        el("small", {}, text),
+      ]),
+    ]))),
     el("button", {
       class: "primary",
       type: "button",
-      disabled: state.busy ? "" : null,
-      onclick: () => savePeriod(draft, true),
-    }, state.busy ? "Salvando..." : "Começar"),
+      onclick: () => {
+        state.setupGuide = false;
+        state.notice = "Configuração pronta.";
+        render();
+      },
+    }, "Começar a usar"),
   ]);
 }
 
@@ -1558,7 +1784,7 @@ function cardManageRow(card, amount, expenses) {
   const front = el("article", { class: "jump card-manage" }, [
     el("button", { type: "button", class: "item-main", onclick: () => openCard(card.id) }, [
       el("div", { class: "row-between" }, [el("span", {}, card.name), el("strong", {}, money(amount))]),
-      el("small", {}, count === 0 ? "Nenhum gasto neste mês" : `${count} ${count === 1 ? "gasto" : "gastos"}`),
+      el("small", {}, [card.dueDay ? `Vence dia ${card.dueDay}` : "", count === 0 ? "Nenhum gasto neste mês" : `${count} ${count === 1 ? "gasto" : "gastos"}`].filter(Boolean).join(" · ")),
     ]),
   ]);
   if (!editable()) return front;
@@ -1610,7 +1836,7 @@ function backArrow() {
 
 function openEditCard(card) {
   state.error = "";
-  state.sheet = { mode: "card", id: card.id, name: card.name, previousName: card.name };
+  state.sheet = { mode: "card", id: card.id, name: card.name, dueDay: card.dueDay ? String(card.dueDay) : "", previousName: card.name };
   render();
 }
 
@@ -2313,7 +2539,7 @@ function openCardExpense(cardName = "") {
 }
 
 function openCreateCard() {
-  state.sheet = { mode: "card", id: "", name: "", previousName: "" };
+  state.sheet = { mode: "card", id: "", name: "", dueDay: "", previousName: "" };
   render();
 }
 
@@ -2625,7 +2851,8 @@ function sheet() {
   } else if (draft.mode === "card") {
     panel.append(
       el("h2", {}, draft.id ? "Editar cartão" : "Novo cartão"),
-      field("Nome", "name", draft.name, "text", "Nubank, Neon ou outro"),
+      field("Apelido", "name", draft.name, "text", "Nubank, Neon ou outro"),
+      field("Dia de vencimento", "dueDay", draft.dueDay || "", "numeric", "10"),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
         el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : "Salvar"),
@@ -2905,11 +3132,12 @@ async function saveSheet(event) {
         state.notice = "Senha trocada. As digitais cadastradas foram removidas. Cadastre de novo neste celular se quiser entrar com a digital.";
       }
     } else if (draft.mode === "card") {
-      if (!draft.name.trim()) throw new Error("Dê um nome ao cartão.");
+      if (!draft.name.trim()) throw new Error("Dê um apelido ao cartão.");
+      const dueDay = cardDueDay(draft.dueDay);
       setWorking(true, "Salvando...");
       const data = await request(draft.id ? `/api/cards/${draft.id}` : "/api/cards", {
         method: draft.id ? "PATCH" : "POST",
-        body: { name: draft.name },
+        body: { name: draft.name, dueDay },
       });
       const saved = (data.cards || []).find((card) => card.id === draft.id);
       const nextName = saved?.name || draft.name.trim();

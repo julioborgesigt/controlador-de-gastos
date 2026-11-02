@@ -23,6 +23,7 @@ import {
   livingCostMonths,
   normalizeExpense,
   parseCardName,
+  parseDueDay,
   parseInstallment,
   resolveCardLabel,
   type Payment,
@@ -48,6 +49,9 @@ import {
   getExpense,
   getMonth,
   getSetting,
+  getTheme,
+  setTheme,
+  setCardDueDay,
   insertCardPurchase,
   payRecurringOnCard,
   listCards,
@@ -98,7 +102,12 @@ app.get("/api/session", async (c) => {
   const token = getCookie(c, COOKIE);
   const authenticated = await isAuthenticated(c.env.DB, token);
   if (token && !authenticated) deleteCookie(c, COOKIE, { path: "/" });
-  return c.json({ needsSetup, authenticated });
+  let theme: "light" | "dark" = "light";
+  if (authenticated) {
+    const scope = await requireScope(c);
+    if (scope) theme = await getTheme(c.env.DB, scope.ownerId);
+  }
+  return c.json({ needsSetup, authenticated, theme });
 });
 
 app.post("/api/register", async (c) => {
@@ -477,7 +486,9 @@ app.post("/api/cards", async (c) => {
   const body = await readJson(c);
   const parsed = parseCardName(body.name);
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-  const created = await createCard(c.env.DB, writer.scope.ownerId, parsed.name);
+  const due = parseDueDay(body.dueDay);
+  if (!due.ok) return c.json({ error: due.error }, 400);
+  const created = await createCard(c.env.DB, writer.scope.ownerId, parsed.name, due.dueDay);
   if (!created.ok) return c.json({ error: created.error }, 409);
   return c.json({ cards: await listCards(c.env.DB, writer.scope.ownerId) }, 201);
 });
@@ -490,7 +501,22 @@ app.patch("/api/cards/:id", async (c) => {
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   const renamed = await renameCard(c.env.DB, writer.scope.ownerId, c.req.param("id"), parsed.name);
   if (!renamed.ok) return c.json({ error: renamed.error }, renamed.error === "Cartão não encontrado." ? 404 : 409);
+  if (body.dueDay !== undefined) {
+    const due = parseDueDay(body.dueDay);
+    if (!due.ok) return c.json({ error: due.error }, 400);
+    const dated = await setCardDueDay(c.env.DB, writer.scope.ownerId, c.req.param("id"), due.dueDay);
+    if (!dated.ok) return c.json({ error: dated.error }, 404);
+  }
   return c.json({ cards: await listCards(c.env.DB, writer.scope.ownerId) });
+});
+
+app.post("/api/theme", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const body = await readJson(c);
+  if (body.theme !== "light" && body.theme !== "dark") return c.json({ error: "Escolha o modo claro ou o modo escuro." }, 400);
+  await setTheme(c.env.DB, writer.scope.ownerId, body.theme);
+  return c.json({ theme: body.theme });
 });
 
 app.delete("/api/cards/:id", async (c) => {

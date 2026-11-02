@@ -272,6 +272,15 @@ export function carryForward(expense: Expense): Expense | null {
   return next;
 }
 
+export function parseDueDay(value: unknown): { ok: true; dueDay: number | null } | { ok: false; error: string } {
+  if (value === undefined || value === null || value === "") return { ok: true, dueDay: null };
+  const day = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(day) || day < 1 || day > 31) {
+    return { ok: false, error: "O vencimento é um dia de 1 a 31." };
+  }
+  return { ok: true, dueDay: day };
+}
+
 export function parseCardName(value: unknown): { ok: true; name: string } | { ok: false; error: string } {
   if (typeof value !== "string") return { ok: false, error: "Dê um nome ao cartão." };
   const name = value.trim().replace(/\s+/g, " ").slice(0, 40);
