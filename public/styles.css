@@ -57,6 +57,12 @@ button:disabled { opacity: 0.45; cursor: default; }
   overflow: auto;
 }
 
+.screen.boot { align-items: center; text-align: center; }
+
+.screen.boot .lede { margin-top: 18px; max-width: 280px; }
+
+.screen.boot .primary { width: min(280px, 100%); }
+
 .auth-switch { margin: 8px 0 0; text-align: center; }
 
 .lock-card .secondary { width: 100%; margin-top: 8px; }

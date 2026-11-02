@@ -42,41 +42,75 @@ const views = [
   ["receita", "Receita"],
 ];
 
+let bootGeneration = 0;
+
 boot();
 
 async function boot() {
-  render();
+  const generation = ++bootGeneration;
+  const cached = readMonthCache(state.monthId);
+  if (cached) {
+    state.data = cached;
+    state.monthId = cached.month.id;
+    state.authed = true;
+    state.booting = false;
+    render();
+  } else {
+    state.booting = true;
+    state.data = null;
+    render();
+  }
   try {
     const session = await request("/api/session");
+    if (generation !== bootGeneration) return;
     state.needsSetup = session.needsSetup;
-    state.authed = session.authenticated;
     if (session.needsSetup) state.authView = "register";
-    if (!state.authed) {
+    if (!session.authenticated) {
+      state.authed = false;
+      state.data = null;
+      state.needsPeriod = false;
+      state.choosing = false;
       clearMonthCache();
-    } else {
-      state.spaces = await request("/api/spaces").then((data) => data.spaces || []).catch(() => []);
-      await openBudget();
+      return;
     }
+    state.authed = true;
+    const spacesPromise = request("/api/spaces").then((data) => data.spaces || []).catch(() => []);
+    await openBudget();
+    if (generation !== bootGeneration) return;
+    state.spaces = await spacesPromise;
   } catch (error) {
-    state.error = messageOf(error);
+    if (generation !== bootGeneration) return;
+    const lostSession = error.status === 401;
+    if (!lostSession) state.error = messageOf(error);
+    if (lostSession || !state.data) {
+      state.authed = false;
+      state.data = null;
+      state.needsPeriod = false;
+      clearMonthCache();
+    }
   } finally {
+    if (generation !== bootGeneration) return;
     state.booting = false;
     render();
   }
 }
 
 async function loadMonth(monthId) {
-  const path = monthId ? `/api/months/${monthId}` : "/api/months/2026-11";
+  let id = monthId || state.monthId;
+  if (!id) {
+    const period = await request("/api/period");
+    id = period.startMonthId || "";
+  }
+  if (!id) throw new Error("Defina o período para abrir o mês.");
   let data;
   try {
-    data = await request(path);
+    data = await request(`/api/months/${id}`);
   } catch (error) {
-    if (!monthId && error.status === 404) throw error;
-    if (monthId) {
-      data = await request("/api/months/2026-11");
-    } else {
-      throw error;
-    }
+    if (error.status !== 404) throw error;
+    const period = await request("/api/period").catch(() => null);
+    const fallback = period?.startMonthId && period.startMonthId !== id ? period.startMonthId : "";
+    if (!fallback) throw error;
+    data = await request(`/api/months/${fallback}`);
   }
   if (!monthId && !sessionStorage.getItem("monthId")) {
     const today = currentMonthId();
@@ -128,8 +162,14 @@ function render() {
   const keepPlace = state.viewKey === viewKey;
   root.replaceChildren();
   root.removeAttribute("aria-busy");
-  if (state.booting) {
-    root.append(screen(el("p", { class: "lede" }, "Abrindo o mês...")));
+  if (state.booting && !state.data) {
+    root.append(bootMark());
+    if (document.body.classList.contains("sheet-open")) unlockPage(0);
+    syncOverlayHistory();
+    return;
+  }
+  if (state.authed && !state.data && !state.needsPeriod && !state.choosing) {
+    root.append(bootMark(true));
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     syncOverlayHistory();
     return;
@@ -723,6 +763,14 @@ function screen(child) {
   return el("main", { class: "screen" }, [child]);
 }
 
+function bootMark(retry = false) {
+  return el("main", { class: "screen boot" }, [
+    el("div", { class: "mark" }, "R$"),
+    retry && state.error ? el("p", { class: "lede" }, state.error) : "",
+    retry ? el("button", { class: "primary", type: "button", onclick: () => boot() }, "Tentar de novo") : "",
+  ]);
+}
+
 function shell() {
   const data = state.data;
   const viewingOther = data?.access?.own === false;
@@ -776,17 +824,15 @@ function monthChip(month) {
 }
 
 async function changeMonth(monthId) {
+  if (monthId === state.monthId) return;
   state.error = "";
-  setWorking(true, "Abrindo o mês...");
   try {
     await loadMonth(monthId);
     state.showEmpty = false;
   } catch (error) {
     state.error = messageOf(error);
-  } finally {
-    setWorking(false);
-    render();
   }
+  render();
 }
 
 function viewBody(data) {
@@ -3101,15 +3147,32 @@ function parseMoney(value) {
 }
 
 async function request(path, options = {}) {
-  const response = await fetch(path, {
-    method: options.method || "GET",
-    headers: options.body ? { "content-type": "application/json" } : undefined,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  let response;
+  try {
+    response = await fetch(path, {
+      method: options.method || "GET",
+      headers: options.body ? { "content-type": "application/json" } : undefined,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: options.signal || AbortSignal.timeout(12000),
+    });
+  } catch (error) {
+    if (error?.name === "TimeoutError" || error?.name === "AbortError") {
+      const timedOut = new Error("A conexão demorou. Tente de novo.");
+      timedOut.status = 0;
+      throw timedOut;
+    }
+    throw error;
+  }
   const data = await response.json().catch(() => ({}));
   if (response.status === 401 && path !== "/api/login" && path !== "/api/register" && path !== "/api/passkeys/login") {
+    state.booting = false;
     state.authed = false;
     state.authView = "login";
+    state.needsPeriod = false;
+    state.choosing = false;
+    state.data = null;
+    state.busy = false;
+    clearMonthCache();
     render();
   }
   if (!response.ok) {
