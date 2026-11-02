@@ -340,6 +340,54 @@ export function cardInvoiceCents(expenses: readonly Expense[], cardName: string)
     .reduce((sum, expense) => sum + expense.amountCents, 0);
 }
 
+export function cardOpenExpenses(expenses: readonly Expense[], cardName: string): Expense[] {
+  return expensesForCard(expenses, cardName).filter(
+    (expense) => !isFixedOnCard(expense) && !expense.paid && expense.amountCents > 0,
+  );
+}
+
+export function planCardPayoff(input: {
+  balanceCents: number;
+  downCents: number;
+  count: number;
+  installmentCents: number;
+  startMonthId: string;
+}): { ok: true; downCents: number; financedCents: number; schedule: Array<{ monthId: string; amountCents: number; installment: string }> } | { ok: false; error: string } {
+  if (!Number.isInteger(input.balanceCents) || input.balanceCents <= 0) {
+    return { ok: false, error: "Este cartão não tem valor em aberto." };
+  }
+  if (!Number.isInteger(input.downCents) || input.downCents < 0 || input.downCents >= input.balanceCents) {
+    return { ok: false, error: "A entrada precisa ser menor que a fatura em aberto. Para pagar tudo agora, use Pago no Pix." };
+  }
+  if (!Number.isInteger(input.count) || input.count < 2 || input.count > 48) {
+    return { ok: false, error: "Informe de 2 a 48 parcelas." };
+  }
+  if (!isCalendarMonth(input.startMonthId)) {
+    return { ok: false, error: "Escolha o mês em que o parcelamento começa." };
+  }
+  if (!Number.isInteger(input.installmentCents) || input.installmentCents <= 0) {
+    return { ok: false, error: "Informe o valor da parcela." };
+  }
+  const financedCents = input.balanceCents - input.downCents;
+  const base = Math.floor(financedCents / input.count);
+  const remainder = financedCents - base * input.count;
+  const closes = input.installmentCents * input.count === financedCents
+    || (input.installmentCents === base && remainder > 0 && remainder < input.count);
+  if (!closes) {
+    return { ok: false, error: "O valor das parcelas não fecha com o que falta depois da entrada." };
+  }
+  const schedule = [];
+  for (let index = 0; index < input.count; index += 1) {
+    const last = index === input.count - 1;
+    schedule.push({
+      monthId: addMonths(input.startMonthId, index),
+      amountCents: input.installmentCents + (last && input.installmentCents === base ? remainder : 0),
+      installment: `${index + 1}/${input.count}`,
+    });
+  }
+  return { ok: true, downCents: input.downCents, financedCents, schedule };
+}
+
 export function unassignedCardExpenses(expenses: readonly Expense[], cards: readonly { name: string }[]): Expense[] {
   const keys = new Set(cards.map((card) => cardKey(card.name)).filter((key): key is string => key !== null));
   return expenses.filter((expense) => {

@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { carryForward, cardKey, computeTotals, expenseCountForCard, listMonthRange, monthLabel, monthSortOrder, planCardPurchase, previousMonthId, resetTargets } from "./domain.ts";
+import { carryForward, cardKey, cardOpenExpenses, computeTotals, expenseCountForCard, listMonthRange, monthLabel, monthSortOrder, planCardPayoff, planCardPurchase, previousMonthId, resetTargets } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -749,6 +749,64 @@ export async function copyFromPreviousMonth(db: D1Database, ownerId: string, mon
   }
   if (inserts.length) await db.batch(inserts);
   return inserts.length;
+}
+
+export async function payCardInvoice(
+  db: D1Database,
+  input: {
+    ownerId: string;
+    monthId: string;
+    cardName: string;
+    mode: "pix" | "installments";
+    downCents?: number;
+    count?: number;
+    installmentCents?: number;
+    startMonthId?: string;
+    knownMonths: readonly string[];
+  },
+): Promise<{ ok: true; paidCents: number } | { ok: false; error: string }> {
+  const expenses = await listExpenses(db, input.ownerId, input.monthId);
+  const open = cardOpenExpenses(expenses, input.cardName);
+  const balance = open.reduce((sum, expense) => sum + expense.amountCents, 0);
+  if (balance <= 0) return { ok: false, error: "Este cartão não tem valor em aberto neste mês." };
+  const plan = input.mode === "installments"
+    ? planCardPayoff({
+      balanceCents: balance,
+      downCents: input.downCents ?? 0,
+      count: input.count ?? 0,
+      installmentCents: input.installmentCents ?? 0,
+      startMonthId: input.startMonthId ?? "",
+    })
+    : null;
+  if (plan && !plan.ok) return plan;
+  if (plan?.ok) {
+    const missing = plan.schedule.find((part) => !input.knownMonths.includes(part.monthId));
+    if (missing) {
+      return { ok: false, error: "O parcelamento passa do período gerenciado. Aumente o período ou reduza as parcelas." };
+    }
+  }
+  for (const expense of open) {
+    await db.prepare("UPDATE expenses SET paid = 1 WHERE owner_id = ? AND id = ?").bind(input.ownerId, expense.id).run();
+  }
+  if (plan?.ok) {
+    const createdAt = new Date().toISOString();
+    const name = `Parcelamento ${input.cardName}`.slice(0, 120);
+    for (const part of plan.schedule) {
+      const sort = await db
+        .prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM expenses WHERE owner_id = ? AND month_id = ?")
+        .bind(input.ownerId, part.monthId)
+        .first<{ next: number }>();
+      await db
+        .prepare(
+          `INSERT INTO expenses
+            (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
+           VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, NULL, ?, ?, 'user', ?)`,
+        )
+        .bind(crypto.randomUUID(), input.ownerId, part.monthId, name, part.amountCents, input.cardName, part.installment, sort?.next ?? 1000, createdAt)
+        .run();
+    }
+  }
+  return { ok: true, paidCents: balance };
 }
 
 export async function ensureMonth(db: D1Database, ownerId: string, monthId: string): Promise<void> {

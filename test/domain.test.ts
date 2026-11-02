@@ -3,6 +3,7 @@ import test from "node:test";
 import { clearFailures, lockedMessage, nextFailure, parseCpf, parseEmail, parsePassword } from "../src/auth.ts";
 import {
   cardInvoiceCents,
+  planCardPayoff,
   cardLinkRequired,
   carryForward,
   computeTotals,
@@ -229,6 +230,39 @@ test("reset escolhe todos os meses, um ano ou um mês do período", () => {
   assert.deepEqual(resetTargets(months, { scope: "month", monthId: "2027-01" }), { ok: true, ids: ["2027-01"] });
   assert.equal(resetTargets(months, { scope: "month", monthId: "2028-01" }).ok, false);
   assert.equal(resetTargets([], { scope: "all" }).ok, false);
+});
+
+test("parcelar a fatura do cartão desconta a entrada e fecha as parcelas", () => {
+  const exact = planCardPayoff({
+    balanceCents: 30000,
+    downCents: 6000,
+    count: 3,
+    installmentCents: 8000,
+    startMonthId: "2026-12",
+  });
+  assert.equal(exact.ok, true);
+  if (!exact.ok) return;
+  assert.equal(exact.financedCents, 24000);
+  assert.deepEqual(exact.schedule.map((part) => part.monthId), ["2026-12", "2027-01", "2027-02"]);
+  assert.deepEqual(exact.schedule.map((part) => part.amountCents), [8000, 8000, 8000]);
+
+  const remainder = planCardPayoff({
+    balanceCents: 10000,
+    downCents: 0,
+    count: 3,
+    installmentCents: 3333,
+    startMonthId: "2026-11",
+  });
+  assert.equal(remainder.ok, true);
+  if (!remainder.ok) return;
+  assert.equal(remainder.schedule[2]?.amountCents, 3334);
+  assert.equal(planCardPayoff({
+    balanceCents: 10000,
+    downCents: 10000,
+    count: 2,
+    installmentCents: 1,
+    startMonthId: "2026-11",
+  }).ok, false);
 });
 
 test("cartão só pode ser excluído quando nenhum gasto aponta para ele", () => {
