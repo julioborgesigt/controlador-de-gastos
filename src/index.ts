@@ -54,6 +54,7 @@ import {
   setCardDueDay,
   insertCardPurchase,
   payRecurringOnCard,
+  payCardInvoice,
   listCards,
   listMonths,
   resetOwnerData,
@@ -479,6 +480,34 @@ app.post("/api/months/:id/settle", async (c) => {
     return c.json({ error: "Ação de baixa desconhecida." }, 400);
   }
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, monthId), writer.scope));
+});
+
+app.post("/api/cards/:id/payoff", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const cards = await listCards(c.env.DB, writer.scope.ownerId);
+  const card = cards.find((item) => item.id === c.req.param("id"));
+  if (!card) return c.json({ error: "Cartão não encontrado." }, 404);
+  const body = await readJson(c);
+  if (!isMonthId(body.monthId) || !(await getMonth(c.env.DB, writer.scope.ownerId, body.monthId))) {
+    return c.json({ error: "Mês não encontrado." }, 404);
+  }
+  const mode = body.mode === "pix" || body.mode === "installments" ? body.mode : "";
+  if (!mode) return c.json({ error: "Escolha Pago no Pix ou Pago parcelado." }, 400);
+  const months = await listMonths(c.env.DB, writer.scope.ownerId);
+  const paid = await payCardInvoice(c.env.DB, {
+    ownerId: writer.scope.ownerId,
+    monthId: body.monthId,
+    cardName: card.name,
+    mode,
+    downCents: typeof body.downCents === "number" ? body.downCents : 0,
+    count: typeof body.count === "number" ? body.count : undefined,
+    installmentCents: typeof body.installmentCents === "number" ? body.installmentCents : undefined,
+    startMonthId: typeof body.startMonthId === "string" ? body.startMonthId : undefined,
+    knownMonths: months.map((month) => month.id),
+  });
+  if (!paid.ok) return c.json({ error: paid.error }, 400);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.monthId), writer.scope));
 });
 
 app.post("/api/cards", async (c) => {

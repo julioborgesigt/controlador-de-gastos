@@ -1927,8 +1927,14 @@ function cardManageRow(card, amount, expenses) {
     ]),
   ]);
   if (!editable()) return front;
+  const balance = openCardBalance(expenses);
+  const leads = balance > 0 ? [
+    { label: "Pago\nno Pix", tone: "pay", run: () => payCardPix(card) },
+    { label: "Pago\nparcelado", tone: "send", run: () => openCardPayoff(card, balance) },
+  ] : null;
   return swipeRow(front, {
     card: true,
+    leads,
     actions: [
       { label: "Editar", tone: "edit", run: () => openEditCard(card) },
       {
@@ -2048,6 +2054,65 @@ function expensesForCardName(expenses, cardName) {
   const key = cardKey(cardName);
   if (!key) return [];
   return expenses.filter((expense) => expenseBelongsToCard(expense) && cardKey(expense.cardLabel) === key);
+}
+
+function openCardBalance(expenses) {
+  return expenses
+    .filter((expense) => !fixedOnCard(expense) && !expense.paid && expense.amountCents > 0)
+    .reduce((sum, expense) => sum + expense.amountCents, 0);
+}
+
+function payCardPix(card) {
+  state.error = "";
+  setWorking(true, "Quitando...");
+  request(`/api/cards/${card.id}/payoff`, {
+    method: "POST",
+    body: { mode: "pix", monthId: state.monthId },
+  }).then((data) => {
+    state.data = data;
+    rememberMonth(data);
+    state.notice = `Fatura de ${card.name} paga no Pix.`;
+  }).catch((error) => {
+    state.error = messageOf(error);
+  }).finally(() => {
+    setWorking(false);
+    render();
+  });
+}
+
+function openCardPayoff(card, balance) {
+  const months = state.data?.months || [];
+  const index = months.findIndex((month) => month.id === state.monthId);
+  state.sheet = {
+    mode: "card-payoff",
+    cardId: card.id,
+    cardName: card.name,
+    balance,
+    down: "",
+    count: "2",
+    per: "",
+    startMonthId: months[index + 1]?.id || state.monthId,
+  };
+  state.error = "";
+  render();
+}
+
+function cardPayoffPreview(draft) {
+  const down = parseMoney(draft.down || "") ?? 0;
+  const count = Number(draft.count);
+  const per = parseMoney(draft.per || "");
+  if (down < 0 || down >= draft.balance) return "A entrada fica em branco quando não houver, e precisa ser menor que a fatura.";
+  const financed = draft.balance - down;
+  if (!Number.isInteger(count) || count < 2 || per === null || per <= 0) {
+    return `Falta parcelar ${money(financed)}.`;
+  }
+  const base = Math.floor(financed / count);
+  const remainder = financed - base * count;
+  if (per * count === financed) return `${count} parcelas de ${money(per)} fecham os ${money(financed)}.`;
+  if (per === base && remainder > 0 && remainder < count) {
+    return `${count - 1} parcelas de ${money(per)} e a última de ${money(per + remainder)}.`;
+  }
+  return `As parcelas não fecham com ${money(financed)}.`;
 }
 
 function cardInvoiceCents(expenses, cardName) {
@@ -3025,6 +3090,30 @@ function sheet() {
         ? el("button", { class: "danger", type: "button", onclick: () => undoCardPay(draft.id) }, "Desfazer pagamento no cartão")
         : "",
     );
+  } else if (draft.mode === "card-payoff") {
+    const months = state.data?.months || [];
+    const select = el("select", { id: "startMonthId" });
+    for (const month of months) select.append(el("option", { value: month.id }, month.label));
+    select.value = draft.startMonthId || state.monthId;
+    select.addEventListener("change", () => { state.sheet.startMonthId = select.value; });
+    panel.append(
+      el("h2", {}, "Pago parcelado"),
+      el("p", { class: "muted" }, `${draft.cardName} está com ${money(draft.balance)} em aberto. A fatura deste mês fica paga e o restante volta nas próximas faturas.`),
+      field("Valor da entrada", "down", draft.down, "decimal", "0,00 se não houver"),
+      el("div", { class: "pair" }, [
+        field("Quantidade de parcelas", "count", draft.count, "numeric"),
+        field("Valor da parcela", "per", draft.per, "decimal"),
+      ]),
+      el("div", { class: "field" }, [
+        el("label", { for: "startMonthId" }, "O parcelamento começa em"),
+        select,
+      ]),
+      el("p", { class: "muted", id: "card-payoff-preview" }, cardPayoffPreview(draft)),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
+        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : "Parcelar fatura"),
+      ]),
+    );
   } else if (draft.mode === "card") {
     panel.append(
       el("h2", {}, draft.id ? "Editar cartão" : "Novo cartão"),
@@ -3149,6 +3238,8 @@ function field(labelText, key, value, mode, placeholder = "") {
     if (preview && state.sheet) {
       preview.textContent = state.sheet.mode === "card-pay" ? cardPayPreview(state.sheet) : installmentPreview(state.sheet);
     }
+    const payoff = document.querySelector("#card-payoff-preview");
+    if (payoff && state.sheet?.mode === "card-payoff") payoff.textContent = cardPayoffPreview(state.sheet);
   });
   return el("div", { class: "field" }, [el("label", { for: key }, labelText), input]);
 }
@@ -3308,6 +3399,28 @@ async function saveSheet(event) {
       if (data.passkeysRemoved) {
         state.notice = "Senha trocada. As digitais cadastradas foram removidas. Cadastre de novo neste celular se quiser entrar com a digital.";
       }
+    } else if (draft.mode === "card-payoff") {
+      const downCents = parseMoney(draft.down || "") ?? 0;
+      const count = Number(draft.count);
+      const installmentCents = parseMoney(draft.per || "");
+      if (draft.down && downCents === null) throw new Error("Informe a entrada. Exemplo: 200,00. Deixe em branco se não houver.");
+      if (!Number.isInteger(count) || count < 2 || count > 48) throw new Error("Informe de 2 a 48 parcelas.");
+      if (installmentCents === null || installmentCents <= 0) throw new Error("Informe o valor da parcela.");
+      if (!draft.startMonthId) throw new Error("Escolha o mês em que o parcelamento começa.");
+      setWorking(true, "Parcelando...");
+      state.data = await request(`/api/cards/${draft.cardId}/payoff`, {
+        method: "POST",
+        body: {
+          mode: "installments",
+          monthId: state.monthId,
+          downCents: draft.down ? downCents : 0,
+          count,
+          installmentCents,
+          startMonthId: draft.startMonthId,
+        },
+      });
+      rememberMonth(state.data);
+      state.notice = `Fatura de ${draft.cardName} parcelada em ${count} vezes.`;
     } else if (draft.mode === "card") {
       if (!draft.name.trim()) throw new Error("Dê um apelido ao cartão.");
       const dueDay = cardDueDay(draft.dueDay);
