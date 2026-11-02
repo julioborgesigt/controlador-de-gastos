@@ -20,6 +20,7 @@ import { loginOptions, loginWithPasskey, registerPasskey, registrationOptions } 
 import {
   cardLinkRequired,
   countsTowardPayment,
+  livingCostMonths,
   normalizeExpense,
   parseCardName,
   parseInstallment,
@@ -528,21 +529,29 @@ app.post("/api/expenses", async (c) => {
   }
   const monthIds = recurringMonthIds(body, parsed.value.section);
   if (!monthIds.ok) return c.json({ error: monthIds.error }, 400);
+  const invoiceMonthId = isMonthId(body.invoiceMonthId) ? body.invoiceMonthId : "";
+  const livingCard = parsed.value.section === "fixed" && parsed.value.onCard && invoiceMonthId !== "";
+  const ids = livingCard ? livingCostMonths(monthIds.ids, invoiceMonthId) : monthIds.ids;
+  if (livingCard && !ids.length) {
+    return c.json({ error: "A primeira fatura precisa estar dentro dos meses da conta." }, 400);
+  }
   const createdAt = new Date().toISOString();
-  for (const monthId of monthIds.ids) {
+  for (const monthId of ids) {
     if (!(await getMonth(c.env.DB, writer.scope.ownerId, monthId))) {
       return c.json({ error: "Mês não encontrado." }, 404);
     }
     const sort = await c.env.DB.prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM expenses WHERE owner_id = ? AND month_id = ?")
       .bind(writer.scope.ownerId, monthId)
       .first<{ next: number }>();
+    const fixedId = crypto.randomUUID();
+    const nextSort = sort?.next ?? 1000;
     await c.env.DB.prepare(
       `INSERT INTO expenses
         (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?)`,
     )
       .bind(
-        crypto.randomUUID(),
+        fixedId,
         writer.scope.ownerId,
         monthId,
         parsed.value.name,
@@ -551,13 +560,32 @@ app.post("/api/expenses", async (c) => {
         parsed.value.payment,
         parsed.value.onCard ? 1 : 0,
         parsed.value.cardLabel,
-        parsed.value.paid ? 1 : 0,
+        livingCard ? 1 : parsed.value.paid ? 1 : 0,
         parsed.value.note,
         parsed.value.installment,
-        sort?.next ?? 1000,
+        nextSort,
         createdAt,
       )
       .run();
+    if (livingCard) {
+      await c.env.DB.prepare(
+        `INSERT INTO expenses
+          (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
+         VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, NULL, ?, 'user', ?)`,
+      )
+        .bind(
+          crypto.randomUUID(),
+          writer.scope.ownerId,
+          monthId,
+          parsed.value.name,
+          parsed.value.amountCents,
+          parsed.value.cardLabel,
+          `origem:${fixedId}`,
+          nextSort + 1,
+          createdAt,
+        )
+        .run();
+    }
   }
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.monthId), writer.scope), 201);
 });

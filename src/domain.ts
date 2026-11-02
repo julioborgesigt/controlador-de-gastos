@@ -101,12 +101,17 @@ export function normalizeExpense(input: {
     };
   }
   const onCard = input.onCard || input.payment === "card";
+  const payment: Payment = onCard ? "card" : input.payment === "cash" ? "cash" : "pix";
   return {
     section: "fixed",
-    payment: onCard ? "card" : "pix",
+    payment,
     onCard,
     cardLabel: onCard ? cardLabel : null,
   };
+}
+
+export function livingCostMonths(monthIds: readonly string[], invoiceMonthId: string): string[] {
+  return monthIds.filter((monthId) => monthId >= invoiceMonthId);
 }
 
 export function parseInstallment(value: unknown): { ok: true; value: string | null } | { ok: false; error: string } {
