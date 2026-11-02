@@ -1339,24 +1339,36 @@ function cardDetail(data) {
 }
 
 let openSwipe = null;
+let ignoreSwipeClickUntil = 0;
 
 function closeSwipe(front) {
   if (!front) return;
   front.classList.remove("dragging");
   front.style.transform = "";
   front.dataset.x = "0";
+  front.parentElement?.classList.remove("revealed");
   if (openSwipe === front) openSwipe = null;
 }
 
 function placeSwipe(front, x) {
   front.style.transform = x ? `translateX(${x}px)` : "";
   front.dataset.x = String(x);
+  front.parentElement?.classList.toggle("revealed", x !== 0);
   if (x === 0) {
     if (openSwipe === front) openSwipe = null;
     return;
   }
   if (openSwipe && openSwipe !== front) closeSwipe(openSwipe);
   openSwipe = front;
+}
+
+function runSwipeAction(front, action, event) {
+  if (!action || action.disabled) return;
+  event.preventDefault();
+  event.stopPropagation();
+  ignoreSwipeClickUntil = Date.now() + 700;
+  closeSwipe(front);
+  action.run();
 }
 
 function swipeRow(front, { pay, leads, actions, card }) {
@@ -1367,10 +1379,10 @@ function swipeRow(front, { pay, leads, actions, card }) {
       type: "button",
       class: `swipe-act ${action.tone || "pay"}`,
       "aria-label": lines.join(" "),
+      onpointerup: (event) => runSwipeAction(front, action, event),
       onclick: (event) => {
+        event.preventDefault();
         event.stopPropagation();
-        closeSwipe(front);
-        action.run();
       },
     }, lines.map((line) => el("span", {}, line)));
   }));
@@ -1379,11 +1391,10 @@ function swipeRow(front, { pay, leads, actions, card }) {
     class: `swipe-act ${action.tone}`,
     disabled: action.disabled ? "" : null,
     title: action.title || action.label,
+    onpointerup: (event) => runSwipeAction(front, action, event),
     onclick: (event) => {
+      event.preventDefault();
       event.stopPropagation();
-      if (action.disabled) return;
-      closeSwipe(front);
-      action.run();
     },
   }, action.label)));
   const back = el("div", { class: "swipe-back" }, [
@@ -1400,12 +1411,21 @@ function swipeRow(front, { pay, leads, actions, card }) {
   let axis = "";
   let suppressClick = false;
 
+  function sideGap() {
+    const shellWidth = front.parentElement?.getBoundingClientRect().width || 0;
+    const used = (leadBox.getBoundingClientRect().width || leadActions.length * 76)
+      + (trail.getBoundingClientRect().width || (actions || []).length * 76);
+    return Math.min(16, Math.max(0, Math.floor((shellWidth - used) / 2)));
+  }
+
   function widthOfTrail() {
-    return trail.getBoundingClientRect().width || (actions || []).length * 88;
+    const buttons = trail.getBoundingClientRect().width || (actions || []).length * 76;
+    return buttons ? buttons + sideGap() : 0;
   }
 
   function widthOfLead() {
-    return leadBox.getBoundingClientRect().width || leadActions.length * 84;
+    const buttons = leadBox.getBoundingClientRect().width || leadActions.length * 76;
+    return buttons ? buttons + sideGap() : 0;
   }
 
   function moveTo(x) {
@@ -1447,6 +1467,7 @@ function swipeRow(front, { pay, leads, actions, card }) {
     const trailWidth = widthOfTrail();
     const leadWidth = widthOfLead();
     const solo = leadActions.length === 1 && leadActions[0].commit ? leadActions[0] : null;
+    if (suppressClick) ignoreSwipeClickUntil = Date.now() + 700;
     if (solo && x > 72) {
       closeSwipe(front);
       solo.run();
@@ -1465,12 +1486,23 @@ function swipeRow(front, { pay, leads, actions, card }) {
   front.addEventListener("pointerup", finish);
   front.addEventListener("pointercancel", finish);
   front.addEventListener("click", (event) => {
-    if (!suppressClick && Number(front.dataset.x || 0) === 0) return;
+    if (suppressClick || Date.now() < ignoreSwipeClickUntil) {
+      event.preventDefault();
+      event.stopPropagation();
+      suppressClick = false;
+      return;
+    }
+    if (Number(front.dataset.x || 0) === 0) return;
     event.preventDefault();
     event.stopPropagation();
-    suppressClick = false;
-    if (Number(front.dataset.x || 0) !== 0) closeSwipe(front);
+    closeSwipe(front);
   }, true);
+  back.addEventListener("click", (event) => {
+    if (event.target.closest(".swipe-act")) return;
+    if (Date.now() < ignoreSwipeClickUntil) return;
+    if (Number(front.dataset.x || 0) === 0) return;
+    closeSwipe(front);
+  });
   return shell;
 }
 
@@ -2628,7 +2660,8 @@ function sheet() {
     );
   }
   const overlay = el("div", { class: "overlay", onclick: (event) => {
-    if (event.target === overlay) closeSheet();
+    if (event.target !== overlay || Date.now() < ignoreSwipeClickUntil) return;
+    closeSheet();
   } }, [panel]);
   return overlay;
 }
