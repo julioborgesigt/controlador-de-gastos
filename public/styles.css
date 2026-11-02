@@ -302,7 +302,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .swipe-gap { flex: 1; }
 
-.swipe-trail { display: flex; }
+.swipe-lead, .swipe-trail { display: flex; }
 
 .swipe-act {
   width: 88px;
@@ -312,7 +312,17 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   font-size: 14px;
 }
 
+.swipe-lead .swipe-act {
+  width: 112px;
+  font-size: 13px;
+  line-height: 1.15;
+  padding: 0 8px;
+  white-space: normal;
+}
+
 .swipe-act.pay { background: var(--good); }
+
+.swipe-act.send { background: var(--navy); }
 
 .swipe-act.undo { background: var(--muted); }
 
