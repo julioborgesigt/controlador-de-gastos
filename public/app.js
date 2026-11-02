@@ -1346,14 +1346,12 @@ function closeSwipe(front) {
   front.classList.remove("dragging");
   front.style.transform = "";
   front.dataset.x = "0";
-  front.parentElement?.classList.remove("revealed");
   if (openSwipe === front) openSwipe = null;
 }
 
 function placeSwipe(front, x) {
   front.style.transform = x ? `translateX(${x}px)` : "";
   front.dataset.x = String(x);
-  front.parentElement?.classList.toggle("revealed", x !== 0);
   if (x === 0) {
     if (openSwipe === front) openSwipe = null;
     return;
@@ -1411,21 +1409,12 @@ function swipeRow(front, { pay, leads, actions, card }) {
   let axis = "";
   let suppressClick = false;
 
-  function sideGap() {
-    const shellWidth = front.parentElement?.getBoundingClientRect().width || 0;
-    const used = (leadBox.getBoundingClientRect().width || leadActions.length * 76)
-      + (trail.getBoundingClientRect().width || (actions || []).length * 76);
-    return Math.min(16, Math.max(0, Math.floor((shellWidth - used) / 2)));
-  }
-
   function widthOfTrail() {
-    const buttons = trail.getBoundingClientRect().width || (actions || []).length * 76;
-    return buttons ? buttons + sideGap() : 0;
+    return trail.getBoundingClientRect().width || (actions || []).length * 88;
   }
 
   function widthOfLead() {
-    const buttons = leadBox.getBoundingClientRect().width || leadActions.length * 76;
-    return buttons ? buttons + sideGap() : 0;
+    return leadBox.getBoundingClientRect().width || leadActions.length * 84;
   }
 
   function moveTo(x) {
@@ -1483,8 +1472,12 @@ function swipeRow(front, { pay, leads, actions, card }) {
     }
     closeSwipe(front);
   }
-  front.addEventListener("pointerup", finish);
-  front.addEventListener("pointercancel", finish);
+  function endDrag(event) {
+    try { front.releasePointerCapture(event.pointerId); } catch { /* a captura já terminou */ }
+    finish();
+  }
+  front.addEventListener("pointerup", endDrag);
+  front.addEventListener("pointercancel", endDrag);
   front.addEventListener("click", (event) => {
     if (suppressClick || Date.now() < ignoreSwipeClickUntil) {
       event.preventDefault();

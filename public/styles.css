@@ -286,12 +286,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 .swipe {
   position: relative;
   overflow: hidden;
-  border-radius: 12px;
+  border-radius: 0;
 }
 
 .card-swipe { margin-bottom: 10px; }
 
-.card-swipe > .jump { margin-bottom: 0; }
+.card-swipe > .jump { margin-bottom: 0; border-radius: 0; }
 
 .swipe-back {
   position: absolute;
@@ -310,13 +310,11 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 .swipe-trail { right: 0; }
 
 .swipe-act {
-  width: 76px;
+  width: 88px;
   border: 0;
   color: white;
   font-weight: 650;
-  font-size: 12px;
-  line-height: 1.15;
-  padding: 0 4px;
+  font-size: 14px;
   touch-action: manipulation;
 }
 
@@ -325,11 +323,12 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 76px;
+  width: 84px;
+  font-size: 12px;
+  line-height: 1.15;
+  padding: 0 4px;
   text-align: center;
 }
-
-.swipe.revealed .swipe-front { pointer-events: none; }
 
 .swipe-act.pay { background: var(--good); }
 
@@ -352,7 +351,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .item {
   width: 100%;
-  border-radius: 12px;
+  border-radius: 0;
   padding: 8px;
   gap: 4px;
 }
