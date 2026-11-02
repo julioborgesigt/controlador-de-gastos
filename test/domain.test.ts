@@ -10,7 +10,9 @@ import {
   isFixedOnCard,
   normalizeExpense,
   expenseCountForCard,
+  listMonthRange,
   parseCardName,
+  resetTargets,
   planCardPurchase,
   resolveCardLabel,
   unassignedCardExpenses,
@@ -194,6 +196,28 @@ test("parcela do cartão avança no mês seguinte e o gasto fixo lançado pelo u
   assert.equal(nextMonth?.payment, "pix");
   assert.equal(nextMonth?.cardLabel, null);
   assert.equal(nextMonth?.paid, false);
+});
+
+test("período gerenciado aceita uma faixa de até 48 meses", () => {
+  const range = listMonthRange("2026-11", "2027-10");
+  assert.equal(range.ok, true);
+  if (!range.ok) return;
+  assert.equal(range.months.length, 12);
+  assert.equal(range.months[0], "2026-11");
+  assert.equal(range.months[11], "2027-10");
+  assert.equal(listMonthRange("2027-02", "2026-11").ok, false);
+  assert.equal(listMonthRange("2026-01", "2030-02").ok, false);
+  assert.equal(listMonthRange("2026-13", "2026-14").ok, false);
+});
+
+test("reset escolhe todos os meses, um ano ou um mês do período", () => {
+  const months = ["2026-11", "2026-12", "2027-01"];
+  assert.deepEqual(resetTargets(months, { scope: "all" }), { ok: true, ids: months });
+  const year = resetTargets(months, { scope: "year", year: 2026 });
+  assert.deepEqual(year, { ok: true, ids: ["2026-11", "2026-12"] });
+  assert.deepEqual(resetTargets(months, { scope: "month", monthId: "2027-01" }), { ok: true, ids: ["2027-01"] });
+  assert.equal(resetTargets(months, { scope: "month", monthId: "2028-01" }).ok, false);
+  assert.equal(resetTargets([], { scope: "all" }).ok, false);
 });
 
 test("cartão só pode ser excluído quando nenhum gasto aponta para ele", () => {

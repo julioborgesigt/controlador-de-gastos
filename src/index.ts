@@ -50,6 +50,9 @@ import {
   insertCardPurchase,
   payRecurringOnCard,
   listCards,
+  listMonths,
+  resetOwnerData,
+  setManagedPeriod,
   listOutgoingShares,
   listPasskeys,
   listSpaces,
@@ -269,6 +272,51 @@ app.delete("/api/shares/:id", async (c) => {
   const removed = await deleteShare(c.env.DB, writer.scope.ownerId, c.req.param("id"));
   if (!removed) return c.json({ error: "Compartilhamento não encontrado." }, 404);
   return c.json({ shares: await listOutgoingShares(c.env.DB, writer.scope.ownerId) });
+});
+
+app.get("/api/period", async (c) => {
+  const scope = await requireScope(c);
+  if (!scope) return c.json({ error: AUTH_ERROR }, 401);
+  const months = await listMonths(c.env.DB, scope.ownerId);
+  if (!months.length) return c.json({ configured: false, startMonthId: null, endMonthId: null });
+  return c.json({ configured: true, startMonthId: months[0].id, endMonthId: months[months.length - 1].id });
+});
+
+app.post("/api/period", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  if (writer.scope.permission !== "own") return c.json({ error: "Só o dono dos dados define o período." }, 403);
+  const body = await readJson(c);
+  if (!isMonthId(body.startMonthId) || !isMonthId(body.endMonthId)) {
+    return c.json({ error: "Escolha o mês e o ano de início e de fim." }, 400);
+  }
+  const saved = await setManagedPeriod(c.env.DB, writer.scope.ownerId, body.startMonthId, body.endMonthId);
+  if (!saved.ok) return c.json({ error: saved.error }, 400);
+  const payload = await monthPayload(c.env.DB, writer.scope.ownerId, saved.startMonthId);
+  if (!payload) return c.json({ error: "Mês não encontrado." }, 404);
+  return c.json(withAccess(payload, writer.scope));
+});
+
+app.post("/api/reset", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  if (writer.scope.permission !== "own") return c.json({ error: "Só o dono dos dados pode apagá-los." }, 403);
+  const body = await readJson(c);
+  const scope = body.scope === "all" || body.scope === "year" || body.scope === "month" ? body.scope : "";
+  const year = typeof body.year === "number" ? body.year : Number(body.year);
+  const reset = await resetOwnerData(c.env.DB, writer.scope.ownerId, {
+    scope,
+    year: Number.isInteger(year) ? year : undefined,
+    monthId: typeof body.monthId === "string" ? body.monthId : undefined,
+  });
+  if (!reset.ok) return c.json({ error: reset.error }, 400);
+  const focus = isMonthId(body.focusMonthId) && (await getMonth(c.env.DB, writer.scope.ownerId, body.focusMonthId))
+    ? body.focusMonthId
+    : reset.ids[0];
+  if (!focus) return c.json({ error: "Não há período para apagar." }, 400);
+  const payload = await monthPayload(c.env.DB, writer.scope.ownerId, focus);
+  if (!payload) return c.json({ error: "Mês não encontrado." }, 404);
+  return c.json(withAccess(payload, writer.scope));
 });
 
 app.get("/api/months/:id", async (c) => {

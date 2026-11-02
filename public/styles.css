@@ -35,6 +35,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 button { cursor: pointer; }
 
+button:disabled { opacity: 0.45; cursor: default; }
+
 #app { min-height: 100dvh; }
 
 .screen, .shell {
