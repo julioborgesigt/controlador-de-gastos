@@ -23,6 +23,11 @@ const state = {
   sheet: null,
   accountMenu: false,
   confirm: null,
+  needsPeriod: false,
+  periodDraft: null,
+  confirmReset: null,
+  resetReadyAt: 0,
+  resetTimer: 0,
 };
 
 let overlayPushed = false;
@@ -49,21 +54,8 @@ async function boot() {
     if (!state.authed) {
       clearMonthCache();
     } else {
-      const cached = readMonthCache(state.monthId);
-      if (cached) {
-        state.data = cached;
-        state.monthId = cached.month.id;
-        state.booting = false;
-        render();
-      }
-      await Promise.all([
-        request("/api/spaces").then((data) => {
-          state.spaces = data.spaces || [];
-        }).catch(() => {
-          state.spaces = [];
-        }),
-        loadMonth(state.monthId),
-      ]);
+      state.spaces = await request("/api/spaces").then((data) => data.spaces || []).catch(() => []);
+      await openBudget();
     }
   } catch (error) {
     state.error = messageOf(error);
@@ -144,6 +136,13 @@ function render() {
   }
   if (!state.authed) {
     root.append(authScreen());
+    state.viewKey = viewKey;
+    if (document.body.classList.contains("sheet-open")) unlockPage(0);
+    syncOverlayHistory();
+    return;
+  }
+  if (state.needsPeriod) {
+    root.append(periodGate());
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     syncOverlayHistory();
@@ -572,6 +571,27 @@ function bufferToBase64Url(buffer) {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
 }
 
+async function openBudget() {
+  const period = await request("/api/period");
+  if (!period.configured) {
+    state.needsPeriod = true;
+    state.periodDraft = state.periodDraft || defaultPeriodDraft();
+    state.data = null;
+    clearMonthCache();
+    return;
+  }
+  state.needsPeriod = false;
+  if (!state.monthId) state.monthId = period.startMonthId || "";
+  const cached = readMonthCache(state.monthId);
+  if (cached) {
+    state.data = cached;
+    state.monthId = cached.month.id;
+    state.booting = false;
+    render();
+  }
+  await loadMonth(state.monthId);
+}
+
 async function enterApp() {
   const data = await request("/api/spaces");
   state.spaces = data.spaces || [];
@@ -581,7 +601,7 @@ async function enterApp() {
     return;
   }
   state.choosing = false;
-  await loadMonth(state.monthId);
+  await openBudget();
 }
 
 async function chooseSpace(ownerId) {
@@ -592,7 +612,9 @@ async function chooseSpace(ownerId) {
     state.spaces = data.spaces || state.spaces;
     state.choosing = false;
     state.sheet = null;
-    await loadMonth(state.monthId);
+    state.monthId = "";
+    clearMonthCache();
+    await openBudget();
   } catch (error) {
     state.error = messageOf(error);
   } finally {
@@ -842,6 +864,8 @@ function accountMenu() {
       cpf ? el("small", {}, cpf) : "",
     ]),
     state.spaces.length > 1 ? menuItem("Trocar acesso", () => { state.accountMenu = false; state.choosing = true; render(); }) : "",
+    state.data?.access?.own === true ? menuItem("Período gerenciado", openPeriod) : "",
+    state.data?.access?.own === true ? menuItem("Resetar meus dados", openReset, "danger") : "",
     state.data?.access?.permission === "own" ? menuItem("Compartilhar dados", () => { state.accountMenu = false; openShares(); }) : "",
     menuItem("Alterar senha", () => { state.accountMenu = false; openPassword(); }),
     menuItem("Cadastrar digital", () => { state.accountMenu = false; openPasskeys(); }),
@@ -894,6 +918,14 @@ function askConfirm(kind) {
 
 function confirmCopy() {
   const month = state.data?.month?.label || "este mês";
+  if (state.confirm === "reset") {
+    return {
+      title: "Confirmar exclusão",
+      body: state.confirmReset?.body || "Apagar esses dados?",
+      action: "Confirmar",
+      cancel: "Cancelar",
+    };
+  }
   if (state.confirm === "logout") {
     return {
       title: "Sair da conta?",
@@ -945,30 +977,238 @@ function confirmCopy() {
 
 function confirmDialog() {
   const copy = confirmCopy();
+  const wait = state.confirm === "reset" ? resetSecondsLeft() : 0;
   const overlay = el("div", {
     class: "overlay center",
     role: "presentation",
     onclick: (event) => {
-      if (event.target === overlay) {
-        state.confirm = null;
-        render();
-      }
+      if (event.target === overlay) closeConfirm();
     },
   }, [
     el("div", { class: "dialog", role: "alertdialog", "aria-modal": "true", "aria-labelledby": "confirm-title" }, [
       el("h2", { id: "confirm-title" }, copy.title),
       el("p", {}, copy.body),
       el("div", { class: "actions" }, [
-        el("button", { class: "secondary", type: "button", onclick: () => { state.confirm = null; render(); } }, copy.cancel),
-        el("button", { class: "primary", type: "button", onclick: runConfirm }, copy.action),
+        el("button", { class: "secondary", type: "button", onclick: closeConfirm }, copy.cancel),
+        el("button", {
+          class: "primary",
+          type: "button",
+          disabled: wait > 0 ? "" : null,
+          onclick: wait > 0 ? () => {} : runConfirm,
+        }, wait > 0 ? `Confirmar em ${wait}s` : copy.action),
       ]),
     ]),
   ]);
   return overlay;
 }
 
+function closeConfirm() {
+  clearTimeout(state.resetTimer);
+  state.confirm = null;
+  render();
+}
+
+function resetSecondsLeft() {
+  return Math.max(0, Math.ceil((state.resetReadyAt - Date.now()) / 1000));
+}
+
+function pulseResetConfirm() {
+  clearTimeout(state.resetTimer);
+  if (state.confirm !== "reset") return;
+  if (resetSecondsLeft() <= 0) return;
+  const left = resetSecondsLeft();
+  const delay = state.resetReadyAt - Date.now() - (left - 1) * 1000;
+  state.resetTimer = setTimeout(() => {
+    if (state.confirm !== "reset") return;
+    render();
+    pulseResetConfirm();
+  }, Math.max(200, delay));
+}
+
+const MONTH_NAMES = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+
+function defaultPeriodDraft() {
+  const now = new Date();
+  const end = new Date(now.getFullYear(), now.getMonth() + 11, 1);
+  return {
+    startMonth: String(now.getMonth() + 1).padStart(2, "0"),
+    startYear: String(now.getFullYear()),
+    endMonth: String(end.getMonth() + 1).padStart(2, "0"),
+    endYear: String(end.getFullYear()),
+  };
+}
+
+function periodParts(monthId) {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthId || "");
+  if (!match) return defaultPeriodDraft();
+  return { month: match[2], year: match[1] };
+}
+
+function periodYears(draft) {
+  const now = new Date().getFullYear();
+  const years = new Set();
+  for (let year = now - 5; year <= now + 6; year += 1) years.add(String(year));
+  if (draft?.startYear) years.add(String(draft.startYear));
+  if (draft?.endYear) years.add(String(draft.endYear));
+  return [...years].sort();
+}
+
+function periodSelect(draft, key, label, values, labels) {
+  const select = el("select", { id: key }, values.map((value, index) => el("option", { value }, labels[index])));
+  select.value = draft[key];
+  select.addEventListener("change", () => {
+    draft[key] = select.value;
+  });
+  return el("div", { class: "field" }, [el("label", { for: key }, label), select]);
+}
+
+function periodFields(draft) {
+  const months = MONTH_NAMES.map((_, index) => String(index + 1).padStart(2, "0"));
+  const years = periodYears(draft);
+  return el("div", {}, [
+    el("div", { class: "pair" }, [
+      periodSelect(draft, "startMonth", "Mês inicial", months, MONTH_NAMES),
+      periodSelect(draft, "startYear", "Ano inicial", years, years),
+    ]),
+    el("div", { class: "pair" }, [
+      periodSelect(draft, "endMonth", "Mês final", months, MONTH_NAMES),
+      periodSelect(draft, "endYear", "Ano final", years, years),
+    ]),
+  ]);
+}
+
+function periodGate() {
+  const draft = state.periodDraft || defaultPeriodDraft();
+  state.periodDraft = draft;
+  return el("main", { class: "screen" }, [
+    el("h1", {}, "Qual período você quer gerenciar?"),
+    el("p", { class: "lede" }, "Escolha o primeiro e o último mês. O período escolhido poderá ser alterado depois, no seu perfil."),
+    state.error ? el("p", { class: "error" }, state.error) : "",
+    periodFields(draft),
+    el("button", {
+      class: "primary",
+      type: "button",
+      disabled: state.busy ? "" : null,
+      onclick: () => savePeriod(draft, true),
+    }, state.busy ? "Salvando..." : "Começar"),
+  ]);
+}
+
+function openPeriod() {
+  state.accountMenu = false;
+  state.error = "";
+  const months = state.data?.months || [];
+  const start = periodParts(months[0]?.id);
+  const end = periodParts(months[months.length - 1]?.id || months[0]?.id);
+  state.sheet = {
+    mode: "period",
+    startMonth: start.month,
+    startYear: start.year,
+    endMonth: end.month,
+    endYear: end.year,
+  };
+  render();
+}
+
+function openReset() {
+  state.accountMenu = false;
+  state.error = "";
+  const months = state.data?.months || [];
+  const current = months.some((month) => month.id === state.monthId) ? state.monthId : months[0]?.id || "";
+  state.sheet = {
+    mode: "reset",
+    scope: "all",
+    year: current.slice(0, 4),
+    monthId: current,
+  };
+  render();
+}
+
+async function savePeriod(draft, first) {
+  const startMonthId = `${draft.startYear}-${draft.startMonth}`;
+  const endMonthId = `${draft.endYear}-${draft.endMonth}`;
+  state.error = "";
+  setWorking(true, "Salvando...");
+  try {
+    state.data = await request("/api/period", { method: "POST", body: { startMonthId, endMonthId } });
+    state.needsPeriod = false;
+    state.sheet = null;
+    state.monthId = state.data.month.id;
+    sessionStorage.setItem("monthId", state.monthId);
+    rememberMonth(state.data);
+    state.notice = first
+      ? "Período definido. Você pode alterá-lo depois, no seu perfil."
+      : "Período atualizado.";
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
+}
+
+function describeReset(draft) {
+  if (draft.scope === "year") {
+    if (!draft.year) return null;
+    return {
+      body: { scope: "year", year: Number(draft.year), focusMonthId: state.monthId },
+      text: `Isso apaga os gastos e as receitas extras de ${draft.year}. Os meses continuam, zerados.`,
+    };
+  }
+  if (draft.scope === "month") {
+    const month = (state.data?.months || []).find((item) => item.id === draft.monthId);
+    if (!month) return null;
+    return {
+      body: { scope: "month", monthId: month.id, focusMonthId: state.monthId },
+      text: `Isso apaga os gastos e as receitas extras de ${month.label}. O mês continua, zerado.`,
+    };
+  }
+  return {
+    body: { scope: "all", focusMonthId: state.monthId },
+    text: "Isso apaga os gastos e as receitas extras desde o início do período. Os meses continuam, zerados.",
+  };
+}
+
+function askReset() {
+  const detail = describeReset(state.sheet || {});
+  if (!detail) {
+    state.error = "Escolha o período que será apagado.";
+    render();
+    return;
+  }
+  state.confirmReset = detail;
+  state.sheet = null;
+  state.accountMenu = false;
+  clearTimeout(state.resetTimer);
+  state.resetReadyAt = Date.now() + 5000;
+  state.confirm = "reset";
+  render();
+  pulseResetConfirm();
+}
+
+async function executeReset() {
+  const detail = state.confirmReset;
+  if (!detail) return;
+  state.error = "";
+  setWorking(true, "Apagando...");
+  try {
+    state.data = await request("/api/reset", { method: "POST", body: detail.body });
+    state.monthId = state.data.month.id;
+    sessionStorage.setItem("monthId", state.monthId);
+    rememberMonth(state.data);
+    state.notice = "Dados apagados.";
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
+}
+
 async function runConfirm() {
   const kind = state.confirm;
+  if (kind === "reset" && resetSecondsLeft() > 0) return;
+  clearTimeout(state.resetTimer);
   state.confirm = null;
   if (kind === "leave") {
     leavePage();
@@ -976,6 +1216,10 @@ async function runConfirm() {
   }
   if (kind === "logout") {
     await logout();
+    return;
+  }
+  if (kind === "reset") {
+    await executeReset();
     return;
   }
   if (kind === "delete-card") {
@@ -1989,6 +2233,37 @@ function sheet() {
         el("button", { class: "primary", type: "submit" }, "Trocar"),
       ]),
     );
+  } else if (draft.mode === "period") {
+    panel.append(
+      el("h2", {}, "Período gerenciado"),
+      el("p", { class: "muted" }, "O período escolhido poderá ser alterado depois, aqui no seu perfil."),
+      periodFields(draft),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
+        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : "Salvar"),
+      ]),
+    );
+  } else if (draft.mode === "reset") {
+    const months = state.data?.months || [];
+    const years = [...new Set(months.map((month) => month.id.slice(0, 4)))];
+    panel.append(
+      el("h2", {}, "Resetar meus dados"),
+      el("p", { class: "muted" }, "Apaga os gastos e as receitas extras. Os meses do período continuam, zerados."),
+      el("div", { class: "field" }, [
+        el("label", {}, "Apagar"),
+        segmented("scope", [["all", "Desde o início"], ["year", "Um ano"], ["month", "Um mês"]], draft.scope),
+      ]),
+      draft.scope === "year"
+        ? periodSelect(draft, "year", "Ano", years, years)
+        : "",
+      draft.scope === "month"
+        ? periodSelect(draft, "monthId", "Mês", months.map((month) => month.id), months.map((month) => month.label))
+        : "",
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
+        el("button", { class: "primary", type: "button", onclick: askReset }, "Apagar"),
+      ]),
+    );
   } else if (draft.mode === "card-pay") {
     const described = money(draft.described || 0);
     panel.append(
@@ -2284,6 +2559,9 @@ async function saveSheet(event) {
         });
         state.notice = count > 1 ? `Receita extra lançada em ${count} meses.` : "";
       }
+    } else if (draft.mode === "period") {
+      await savePeriod(draft, false);
+      return;
     } else if (draft.mode === "password") {
       if (draft.next !== draft.confirmation) throw new Error("A confirmação da senha não confere.");
       setWorking(true, "Salvando...");

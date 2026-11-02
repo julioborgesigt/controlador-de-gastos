@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { carryForward, cardKey, computeTotals, expenseCountForCard, monthLabel, monthSortOrder, planCardPurchase, previousMonthId } from "./domain.ts";
+import { carryForward, cardKey, computeTotals, expenseCountForCard, listMonthRange, monthLabel, monthSortOrder, planCardPurchase, previousMonthId, resetTargets } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -335,7 +335,6 @@ export async function createUser(
     if (message.includes("UNIQUE")) return { ok: false, error: "Já existe uma conta com este CPF ou e-mail." };
     throw error;
   }
-  await provisionUser(db, id);
   return { ok: true, id };
 }
 
@@ -734,6 +733,62 @@ export async function ensureMonth(db: D1Database, ownerId: string, monthId: stri
 
 function baseIncomeKey(ownerId: string): string {
   return `base_income_cents:${ownerId}`;
+}
+
+export async function setManagedPeriod(
+  db: D1Database,
+  ownerId: string,
+  startMonthId: string,
+  endMonthId: string,
+): Promise<{ ok: true; startMonthId: string } | { ok: false; error: string }> {
+  const range = listMonthRange(startMonthId, endMonthId);
+  if (!range.ok) return range;
+  const existing = await listMonths(db, ownerId);
+  const keep = new Set(range.months);
+  for (const month of existing) {
+    if (keep.has(month.id)) continue;
+    const expenses = await db
+      .prepare("SELECT COUNT(*) AS n FROM expenses WHERE owner_id = ? AND month_id = ?")
+      .bind(ownerId, month.id)
+      .first<{ n: number }>();
+    const extras = await db
+      .prepare("SELECT COUNT(*) AS n FROM income_extras WHERE owner_id = ? AND month_id = ?")
+      .bind(ownerId, month.id)
+      .first<{ n: number }>();
+    if (Number(expenses?.n) > 0 || Number(extras?.n) > 0 || month.incomeLocked) {
+      return { ok: false, error: `Há dados em ${month.label}. Apague esses dados antes de tirar o mês do período.` };
+    }
+  }
+  for (const month of existing) {
+    if (keep.has(month.id)) continue;
+    await db.prepare("DELETE FROM expenses WHERE owner_id = ? AND month_id = ?").bind(ownerId, month.id).run();
+    await db.prepare("DELETE FROM income_extras WHERE owner_id = ? AND month_id = ?").bind(ownerId, month.id).run();
+    await db.prepare("DELETE FROM months WHERE owner_id = ? AND id = ?").bind(ownerId, month.id).run();
+  }
+  for (const monthId of range.months) await ensureMonth(db, ownerId, monthId);
+  return { ok: true, startMonthId: range.months[0] };
+}
+
+export async function resetOwnerData(
+  db: D1Database,
+  ownerId: string,
+  input: { scope: string; year?: number; monthId?: string },
+): Promise<{ ok: true; ids: string[] } | { ok: false; error: string }> {
+  const months = await listMonths(db, ownerId);
+  const targets = resetTargets(months.map((month) => month.id), input);
+  if (!targets.ok) return targets;
+  const base = await getSetting(db, baseIncomeKey(ownerId));
+  const income = base === null ? 0 : Number(base);
+  const incomeCents = Number.isFinite(income) ? income : 0;
+  for (const monthId of targets.ids) {
+    await db.prepare("DELETE FROM expenses WHERE owner_id = ? AND month_id = ?").bind(ownerId, monthId).run();
+    await db.prepare("DELETE FROM income_extras WHERE owner_id = ? AND month_id = ?").bind(ownerId, monthId).run();
+    await db
+      .prepare("UPDATE months SET income_cents = ?, income_locked = 0, settled = 0 WHERE owner_id = ? AND id = ?")
+      .bind(incomeCents, ownerId, monthId)
+      .run();
+  }
+  return { ok: true, ids: targets.ids };
 }
 
 export async function insertCardPurchase(
