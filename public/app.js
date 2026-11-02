@@ -1405,7 +1405,7 @@ function swipeRow(front, { pay, leads, actions, card }) {
   }
 
   function widthOfLead() {
-    return leadBox.getBoundingClientRect().width || leadActions.length * 112;
+    return leadBox.getBoundingClientRect().width || leadActions.length * 84;
   }
 
   function moveTo(x) {
