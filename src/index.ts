@@ -322,6 +322,7 @@ app.post("/api/reset", async (c) => {
     monthId: typeof body.monthId === "string" ? body.monthId : undefined,
   });
   if (!reset.ok) return c.json({ error: reset.error }, 400);
+  if (reset.wiped) return c.json({ wiped: true });
   const focus = isMonthId(body.focusMonthId) && (await getMonth(c.env.DB, writer.scope.ownerId, body.focusMonthId))
     ? body.focusMonthId
     : reset.ids[0];

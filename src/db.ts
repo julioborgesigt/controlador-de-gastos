@@ -806,7 +806,15 @@ export async function resetOwnerData(
   db: D1Database,
   ownerId: string,
   input: { scope: string; year?: number; monthId?: string },
-): Promise<{ ok: true; ids: string[] } | { ok: false; error: string }> {
+): Promise<{ ok: true; ids: string[]; wiped?: boolean } | { ok: false; error: string }> {
+  if (input.scope === "all") {
+    await db.prepare("DELETE FROM expenses WHERE owner_id = ?").bind(ownerId).run();
+    await db.prepare("DELETE FROM income_extras WHERE owner_id = ?").bind(ownerId).run();
+    await db.prepare("DELETE FROM months WHERE owner_id = ?").bind(ownerId).run();
+    await db.prepare("DELETE FROM cards WHERE owner_id = ?").bind(ownerId).run();
+    await db.prepare("DELETE FROM settings WHERE key = ? OR key = ?").bind(baseIncomeKey(ownerId), themeKey(ownerId)).run();
+    return { ok: true, ids: [], wiped: true };
+  }
   const months = await listMonths(db, ownerId);
   const targets = resetTargets(months.map((month) => month.id), input);
   if (!targets.ok) return targets;
