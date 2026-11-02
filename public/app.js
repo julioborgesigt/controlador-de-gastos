@@ -1337,8 +1337,10 @@ function amountLabel(draft) {
 function cardPurchaseFields(draft) {
   if (draft.mode !== "create" || (draft.section !== "card" && draft.payment !== "card")) return "";
   return el("div", {}, [
-    field("Quantidade de parcelas", "installmentCount", draft.installmentCount || "1", "numeric"),
-    field("Parcelas já pagas", "installmentsPaid", draft.installmentsPaid || "0", "numeric"),
+    el("div", { class: "pair" }, [
+      field("Quantidade de parcelas", "installmentCount", draft.installmentCount || "1", "numeric"),
+      field("Parcelas já pagas", "installmentsPaid", draft.installmentsPaid || "0", "numeric"),
+    ]),
     el("div", { class: "field" }, [
       el("label", {}, "O valor informado é"),
       segmented("amountMode", [["installment", "Da parcela"], ["total", "Da compra toda"]], draft.amountMode || "installment"),
@@ -2056,6 +2058,12 @@ function sheet() {
           field(draft.amountMode === "total" ? "Valor da compra" : "Valor da parcela", "amount", draft.amount, "decimal"),
         ])
         : field("Nome", "name", draft.name, "text"),
+      surprise
+        ? el("div", { class: "field" }, [
+          el("label", {}, "Como foi pago"),
+          segmented("payment", [["pix", "Pix"], ["debit", "Débito"], ["cash", "Dinheiro"], ["card", "Cartão"]], draft.payment),
+        ])
+        : "",
       cardSpend ? "" : field(amountLabel(draft), "amount", draft.amount, "decimal"),
       cardSpend || recurring || surprise
         ? ""
@@ -2067,14 +2075,6 @@ function sheet() {
             ["card", "Fatura"],
           ], draft.section),
         ]),
-      cardSpend || recurring
-        ? ""
-        : draft.section === "extra"
-            ? el("div", { class: "field" }, [
-              el("label", {}, "Como foi pago"),
-              segmented("payment", [["pix", "Pix"], ["debit", "Débito"], ["cash", "Dinheiro"], ["card", "Cartão"]], draft.payment),
-            ])
-            : "",
       cardSpend
         ? el("div", { class: "pair" }, [
           field("Quantidade de parcelas", "installmentCount", draft.installmentCount || "1", "numeric"),
