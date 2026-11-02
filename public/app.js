@@ -33,7 +33,7 @@ const views = [
   ["resumo", "Resumo"],
   ["cartoes", "Cartões"],
   ["casa", "Recorrente"],
-  ["extras", "Extras"],
+  ["extras", "Imprevisto"],
   ["receita", "Receita"],
 ];
 
@@ -350,7 +350,7 @@ function authScreen() {
     el("h1", {}, registering ? "Criar conta" : "Entrar"),
     el("p", { class: "lede" }, registering
       ? "Informe CPF, e-mail e senha. O e-mail fica guardado para códigos e avisos futuros."
-      : "Entre com CPF e senha para ver a fatura, os recorrentes e os gastos extras."),
+      : "Entre com CPF e senha para ver a fatura, os recorrentes e os imprevistos."),
     state.error ? el("p", { class: "error" }, state.error) : "",
     authInput("cpf", "CPF", state.auth.cpf, { key: "cpf", inputmode: "numeric", autocomplete: "username", placeholder: "000.000.000-00", mask: "cpf" }),
     registering ? authInput("email", "E-mail", state.auth.email, { key: "email", type: "email", autocomplete: "email", placeholder: "voce@email.com" }) : "",
@@ -797,12 +797,12 @@ function summary(data) {
       ]),
     ]),
     jump("cartoes", "Fatura do cartão", money(totals.faturaCents), totals.extrasCardCents
-      ? `${money(totals.invoiceCents)} previstos + ${money(totals.extrasCardCents)} em extras`
+      ? `${money(totals.invoiceCents)} previstos + ${money(totals.extrasCardCents)} em imprevistos`
       : "Nubank, Neon e linhas da fatura"),
     jump("casa", "Gastos recorrentes", money(totals.fixedCents), totals.fixedOnCardCents
       ? `${money(totals.fixedOnCardCents)} já foram para o cartão`
       : "Contas que voltam todo mês"),
-    jump("extras", "Gastos extras", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
+    jump("extras", "Imprevisto", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
     editable() && totals.remainingCents > 0
       ? el("button", { class: "primary", type: "button", onclick: () => askConfirm("settle") }, "Quitar o que falta")
       : editable() && month.settled
@@ -845,7 +845,7 @@ function accountMenu() {
     state.data?.access?.permission === "own" ? menuItem("Compartilhar dados", () => { state.accountMenu = false; openShares(); }) : "",
     menuItem("Alterar senha", () => { state.accountMenu = false; openPassword(); }),
     menuItem("Cadastrar digital", () => { state.accountMenu = false; openPasskeys(); }),
-    menuItem("Sair", logout, "danger"),
+    menuItem("Sair", () => askConfirm("logout"), "danger"),
   ]);
 }
 
@@ -894,6 +894,14 @@ function askConfirm(kind) {
 
 function confirmCopy() {
   const month = state.data?.month?.label || "este mês";
+  if (state.confirm === "logout") {
+    return {
+      title: "Sair da conta?",
+      body: "Você volta para a tela de entrada. Dá para entrar de novo com CPF e senha.",
+      action: "Sair",
+      cancel: "Ficar",
+    };
+  }
   if (state.confirm === "leave") {
     return {
       title: "Sair do app?",
@@ -914,7 +922,7 @@ function confirmCopy() {
   if (state.confirm === "settle") {
     return {
       title: "Quitar o que falta",
-      body: `Marca como pagos a fatura, o Pix e os extras ainda em aberto em ${month}. Um recorrente já lançado no cartão continua na lista e não é cobrado outra vez. Se não restar valor a pagar, o mês fica quitado.`,
+      body: `Marca como pagos a fatura, o Pix e os imprevistos ainda em aberto em ${month}. Um recorrente já lançado no cartão continua na lista e não é cobrado outra vez. Se não restar valor a pagar, o mês fica quitado.`,
       action: "Quitar",
       cancel: "Cancelar",
     };
@@ -922,7 +930,7 @@ function confirmCopy() {
   if (state.confirm === "reopen") {
     return {
       title: "Reabrir mês",
-      body: `Desmarca os pagamentos de ${month}. A fatura, o Pix e os extras voltam a ficar em aberto.`,
+      body: `Desmarca os pagamentos de ${month}. A fatura, o Pix e os imprevistos voltam a ficar em aberto.`,
       action: "Reabrir",
       cancel: "Cancelar",
     };
@@ -964,6 +972,10 @@ async function runConfirm() {
   state.confirm = null;
   if (kind === "leave") {
     leavePage();
+    return;
+  }
+  if (kind === "logout") {
+    await logout();
     return;
   }
   if (kind === "delete-card") {
@@ -1206,7 +1218,7 @@ function sectionList(data, section) {
   const all = data.expenses.filter((expense) => belongs(expense, section));
   const visible = all.filter((expense) => state.showEmpty || expense.amountCents !== 0 || expense.source === "user");
   const hidden = all.length - visible.length;
-  const heading = section === "card" ? "Cartões" : section === "fixed" ? "Recorrente" : "Extras";
+  const heading = section === "card" ? "Cartões" : section === "fixed" ? "Recorrente" : "Imprevisto";
   const total = section === "card" ? totals.faturaCents : section === "fixed" ? totals.fixedCents : totals.extrasCardCents + totals.extrasPixCents;
   const children = [
     el("div", { class: "section-head" }, [
@@ -1219,18 +1231,18 @@ function sectionList(data, section) {
     children.push(el("p", { class: "note" }, "Pago com cartão pergunta o cartão, o valor e o parcelamento. O apelido entra na fatura."));
   }
   if (section === "extra") {
-    children.push(el("p", { class: "note" }, "Dê um nome ao gasto extra e diga se ele saiu no Pix, débito, dinheiro ou cartão."));
+    children.push(el("p", { class: "note" }, "Dê um nome ao imprevisto e diga se ele saiu no Pix, débito, dinheiro ou cartão. No cartão, escolha a fatura."));
   }
   if (editable()) {
     children.push(el("button", {
       class: "primary add-top",
       type: "button",
       onclick: () => openCreate(section, "pix"),
-    }, section === "fixed" ? "Adicionar gasto recorrente" : "Adicionar gasto"));
+    }, section === "fixed" ? "Adicionar gasto recorrente" : "Adicionar imprevisto"));
   }
   children.push(el("div", { class: "list" }, visible.map((expense) => expenseRow(expense, section))));
   if (!visible.length) {
-    children.push(el("p", { class: "muted" }, section === "extra" ? "Nenhum extra neste mês." : "Nada com valor neste mês."));
+    children.push(el("p", { class: "muted" }, section === "extra" ? "Nenhum imprevisto neste mês." : "Nada com valor neste mês."));
   }
   if (hidden > 0) {
     children.push(el("button", {
@@ -1440,7 +1452,8 @@ function reflectSegment(key, value) {
 
 function refreshCardPayPreview() {
   const preview = document.querySelector("#installment-preview");
-  if (preview && state.sheet?.mode === "card-pay") preview.textContent = cardPayPreview(state.sheet);
+  if (!preview || !state.sheet) return;
+  preview.textContent = state.sheet.mode === "card-pay" ? cardPayPreview(state.sheet) : installmentPreview(state.sheet);
 }
 
 function invoiceMonthField(draft) {
@@ -1480,11 +1493,16 @@ function installmentPreview(draft) {
   const total = Number(draft.installmentCount);
   const paid = Number(draft.installmentsPaid);
   const amount = parseMoney(draft.amount || "");
+  const when = draft.invoiceMonthId ? faturaWhen(draft.invoiceMonthId, true) : "";
   if (!Number.isInteger(total) || total < 1 || !Number.isInteger(paid) || paid < 0 || paid >= total || amount === null || amount <= 0) {
-    return "A parcela deste mês é a primeira que ainda falta pagar. As seguintes entram nos próximos meses.";
+    return when
+      ? `O pagamento entra ${when}.`
+      : "A parcela deste mês é a primeira que ainda falta pagar. As seguintes entram nos próximos meses.";
   }
   const per = draft.amountMode === "total" ? Math.floor(amount / total) : amount;
   const remaining = total - paid;
+  if (when && remaining <= 1) return `${money(per)} ${faturaWhen(draft.invoiceMonthId)}.`;
+  if (when) return `${remaining} parcelas de ${money(per)} ${when} (${paid + 1}/${total}).`;
   return `${remaining} ${remaining === 1 ? "parcela" : "parcelas"} de ${money(per)} a partir deste mês (${paid + 1}/${total}).`;
 }
 
@@ -1622,14 +1640,14 @@ function blurb(section, totals) {
       ? `${money(totals.fixedCashCents)} ainda saem no Pix ou boleto. ${money(totals.fixedOnCardCents)} já foram para o cartão.`
       : "Contas que voltam todo mês.";
   }
-  return "Estes gastos não estavam na projeção e valem só para este mês.";
+  return "Imprevistos deste mês, fora da projeção.";
 }
 
 function expenseRow(expense, section, options = {}) {
   const onInvoice = expense.section === "fixed" && expense.onCard;
   const lockedCard = Boolean(options.cardExpense) && expense.section !== "fixed";
   const meta = [];
-  if (expense.section === "extra" && section === "card" && !options.manage) meta.push("Extra");
+  if (expense.section === "extra" && section === "card" && !options.manage) meta.push("Imprevisto");
   if (onInvoice && section === "card") meta.push("Recorrente, já incluído");
   if (expense.payment !== "card" || onInvoice) meta.push(paymentLabel(expense.payment));
   if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Cartão ${expense.cardLabel}` : "Cartão");
@@ -1690,6 +1708,7 @@ function openCreate(section, payment) {
     installmentCount: "1",
     installmentsPaid: "0",
     amountMode: "installment",
+    invoiceMonthId: section === "extra" ? state.monthId : "",
     paid: false,
     source: "user",
   };
@@ -2015,11 +2034,14 @@ function sheet() {
     const needsCard = draft.cardExpense || draft.section === "card" || draft.payment === "card" || draft.onCard;
     const cardSpend = draft.cardExpense && draft.mode === "create";
     const recurring = draft.section === "fixed" && !cardSpend;
+    const surprise = draft.section === "extra" && !cardSpend;
     const heading = cardSpend
       ? "Gasto no cartão"
       : recurring
         ? (draft.mode === "create" ? "Novo gasto recorrente" : "Editar gasto recorrente")
-        : (draft.mode === "create" ? "Novo gasto" : "Editar gasto");
+        : surprise
+          ? (draft.mode === "create" ? "Novo imprevisto" : "Editar imprevisto")
+          : (draft.mode === "create" ? "Novo gasto" : "Editar gasto");
     panel.append(
       el("h2", {}, heading),
       cardSpend
@@ -2035,12 +2057,12 @@ function sheet() {
         ])
         : field("Nome", "name", draft.name, "text"),
       cardSpend ? "" : field(amountLabel(draft), "amount", draft.amount, "decimal"),
-      cardSpend || recurring
+      cardSpend || recurring || surprise
         ? ""
         : el("div", { class: "field" }, [
           el("label", {}, "Tipo"),
           segmented("section", [
-            ["extra", "Extra"],
+            ["extra", "Imprevisto"],
             ["fixed", "Recorrente"],
             ["card", "Fatura"],
           ], draft.section),
@@ -2064,6 +2086,7 @@ function sheet() {
         ? field("Parcela", "installment", draft.installment, "text", "3/10, se houver")
         : "",
       needsCard ? cardSelect(draft) : "",
+      surprise && draft.mode === "create" && draft.payment === "card" ? invoiceMonthField(draft) : "",
       field("Observação", "note", draft.note, "text"),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
@@ -2148,7 +2171,10 @@ function segmented(key, options, current) {
         if (value === "extra") state.sheet.onCard = false;
         if (value === "fixed") state.sheet.payment = state.sheet.onCard ? "card" : "pix";
       }
-      if (key === "payment" && value === "card" && !state.sheet.cardLabel) state.sheet.cardLabel = firstCardName();
+      if (key === "payment" && value === "card") {
+        if (!state.sheet.cardLabel) state.sheet.cardLabel = firstCardName();
+        if (!state.sheet.invoiceMonthId) state.sheet.invoiceMonthId = state.monthId;
+      }
       if (key === "section" && value === "card" && !state.sheet.cardLabel) state.sheet.cardLabel = firstCardName();
       render();
     },
@@ -2304,6 +2330,10 @@ async function saveSheet(event) {
       if (onCardPurchase && (!Number.isInteger(totalCount) || !Number.isInteger(paidCount))) {
         throw new Error("Informe as parcelas em números inteiros.");
       }
+      const surpriseCard = draft.mode === "create" && !draft.cardExpense && draft.section === "extra" && draft.payment === "card";
+      const startMonthId = surpriseCard ? (draft.invoiceMonthId || "") : state.monthId;
+      if (surpriseCard && !startMonthId) throw new Error("Escolha a fatura em que o valor entra.");
+      const invoiceLabel = (state.data?.months || []).find((month) => month.id === startMonthId)?.label || "";
       setWorking(true, "Salvando...");
       const body = {
         name: draft.name,
@@ -2319,10 +2349,13 @@ async function saveSheet(event) {
       };
       if (onCardPurchase) {
         const remaining = totalCount - paidCount;
-        state.notice = remaining > 1 ? `Lancei ${remaining} parcelas a partir deste mês.` : "";
+        state.notice = surpriseCard
+          ? (remaining > 1 ? `Lancei ${remaining} parcelas a partir da fatura de ${invoiceLabel}.` : `Lancei na fatura de ${invoiceLabel}.`)
+          : (remaining > 1 ? `Lancei ${remaining} parcelas a partir deste mês.` : "");
       }
       if (draft.mode === "create") {
-        state.data = await request("/api/expenses", { method: "POST", body: { ...body, monthId: state.monthId } });
+        state.data = await request("/api/expenses", { method: "POST", body: { ...body, monthId: startMonthId } });
+        if (surpriseCard && startMonthId !== state.monthId) await loadMonth(state.monthId);
       } else {
         state.data = await request(`/api/expenses/${draft.id}`, { method: "PATCH", body });
       }
@@ -2414,16 +2447,25 @@ async function settle(mode) {
 
 async function logout() {
   state.accountMenu = false;
-  state.confirm = null;
   state.sheet = null;
+  state.confirm = null;
   clearMonthCache();
-  await request("/api/logout", { method: "POST", body: {} });
-  state.authed = false;
-  state.authView = "login";
-  state.auth.password = "";
-  state.auth.confirmation = "";
-  state.data = null;
+  state.error = "";
+  setWorking(true, "Saindo...");
   render();
+  try {
+    await request("/api/logout", { method: "POST", body: {} });
+    state.authed = false;
+    state.authView = "login";
+    state.auth.password = "";
+    state.auth.confirmation = "";
+    state.data = null;
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    render();
+  }
 }
 
 function closeSheet() {
