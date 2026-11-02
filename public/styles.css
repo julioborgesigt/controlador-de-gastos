@@ -296,13 +296,18 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 .swipe-back {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: stretch;
 }
 
-.swipe-gap { flex: 1; }
+.swipe-lead, .swipe-trail {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  display: flex;
+}
 
-.swipe-lead, .swipe-trail { display: flex; }
+.swipe-lead { left: 0; }
+
+.swipe-trail { right: 0; }
 
 .swipe-act {
   width: 88px;
@@ -317,10 +322,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 112px;
-  font-size: 13px;
-  line-height: 1.2;
-  padding: 0 8px;
+  width: 84px;
+  font-size: 12px;
+  line-height: 1.15;
+  padding: 0 4px;
   text-align: center;
 }
 
