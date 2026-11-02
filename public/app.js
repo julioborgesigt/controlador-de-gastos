@@ -29,6 +29,7 @@ const state = {
   error: "",
   notice: "",
   busy: false,
+  bootProgress: 0.12,
   showEmpty: false,
   cardFocus: null,
   sheet: null,
@@ -70,11 +71,13 @@ async function boot() {
   } else {
     state.booting = true;
     state.data = null;
+    setBootProgress(0.3);
     render();
   }
   try {
     const session = await request("/api/session");
     if (generation !== bootGeneration) return;
+    setBootProgress(0.62);
     state.needsSetup = session.needsSetup;
     if (session.theme) applyTheme(session.theme);
     if (session.needsSetup) state.authView = "register";
@@ -87,8 +90,10 @@ async function boot() {
       return;
     }
     state.authed = true;
+    setBootProgress(0.84);
     const spacesPromise = request("/api/spaces").then((data) => data.spaces || []).catch(() => []);
     await openBudget();
+    setBootProgress(1);
     if (generation !== bootGeneration) return;
     state.spaces = await spacesPromise;
   } catch (error) {
@@ -785,9 +790,36 @@ function screen(child) {
   return el("main", { class: "screen" }, [child]);
 }
 
+function setBootProgress(value) {
+  state.bootProgress = value;
+  document.querySelectorAll(".boot-mark, .boot-ring-value").forEach((node) => {
+    node.style.setProperty("--progress", String(value));
+  });
+}
+
+function bootRing() {
+  const ring = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  ring.setAttribute("class", "boot-ring");
+  ring.setAttribute("viewBox", "0 0 88 88");
+  ring.setAttribute("aria-hidden", "true");
+  for (const name of ["boot-ring-track", "boot-ring-value"]) {
+    const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+    circle.setAttribute("class", name);
+    circle.setAttribute("cx", "44");
+    circle.setAttribute("cy", "44");
+    circle.setAttribute("r", "38");
+    if (name === "boot-ring-value") circle.style.setProperty("--progress", String(state.bootProgress));
+    ring.append(circle);
+  }
+  return ring;
+}
+
 function bootMark(retry = false) {
   return el("main", { class: "screen boot" }, [
-    el("div", { class: "mark" }, "R$"),
+    retry ? el("div", { class: "mark" }, "R$") : el("div", { class: "boot-mark", style: `--progress:${state.bootProgress}` }, [
+      bootRing(),
+      el("div", { class: "mark" }, "R$"),
+    ]),
     retry && state.error ? el("p", { class: "lede" }, state.error) : "",
     retry ? el("button", { class: "primary", type: "button", onclick: () => boot() }, "Tentar de novo") : "",
   ]);
@@ -2780,10 +2812,46 @@ async function openPasskeys() {
   render();
 }
 
+function attachSheetDrag(panel) {
+  const grab = panel.querySelector(".sheet-grab");
+  if (!grab) return;
+  let startY = 0;
+  let lastY = 0;
+  let dragging = false;
+  grab.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    startY = event.clientY;
+    lastY = startY;
+    dragging = true;
+    panel.classList.add("dragging");
+    try { grab.setPointerCapture(event.pointerId); } catch { /* o arraste segue sem captura */ }
+  });
+  grab.addEventListener("pointermove", (event) => {
+    if (!dragging) return;
+    lastY = event.clientY;
+    const dy = Math.max(0, event.clientY - startY);
+    panel.style.transform = dy ? `translateY(${dy}px)` : "";
+  });
+  const end = (event) => {
+    if (!dragging) return;
+    dragging = false;
+    panel.classList.remove("dragging");
+    try { grab.releasePointerCapture(event.pointerId); } catch { /* a captura já terminou */ }
+    const dy = lastY - startY;
+    if (dy > 110) closeSheet();
+    else panel.style.transform = "";
+  };
+  grab.addEventListener("pointerup", end);
+  grab.addEventListener("pointercancel", end);
+}
+
 function sheet() {
   const draft = state.sheet;
-  const panel = el("form", { class: "sheet" }, [el("div", { class: "handle" })]);
+  const panel = el("form", { class: "sheet" }, [
+    el("div", { class: "sheet-grab" }, [el("div", { class: "handle" })]),
+  ]);
   panel.addEventListener("submit", saveSheet);
+  attachSheetDrag(panel);
   if (state.error) panel.append(el("p", { class: "error" }, state.error));
   if (state.notice) panel.append(el("p", { class: "note" }, state.notice));
   if (draft.mode === "share") {

@@ -21,7 +21,13 @@
   <body>
     <div id="app" aria-live="polite" aria-busy="true">
       <main class="screen boot">
-        <div class="mark" aria-hidden="true">R$</div>
+        <div class="boot-mark" style="--progress: 0.12">
+          <svg class="boot-ring" viewBox="0 0 88 88" aria-hidden="true">
+            <circle class="boot-ring-track" cx="44" cy="44" r="38"></circle>
+            <circle class="boot-ring-value" cx="44" cy="44" r="38" style="--progress: 0.2"></circle>
+          </svg>
+          <div class="mark">R$</div>
+        </div>
       </main>
     </div>
     <noscript>Ative o JavaScript para usar o controle de gastos neste celular.</noscript>
