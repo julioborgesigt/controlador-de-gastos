@@ -1359,7 +1359,21 @@ function placeSwipe(front, x) {
   openSwipe = front;
 }
 
-function swipeRow(front, { pay, actions, card }) {
+function swipeRow(front, { pay, leads, actions, card }) {
+  const leadActions = leads || (pay ? [{ ...pay, tone: pay.undo ? "undo" : "pay", commit: true }] : []);
+  const leadBox = el("div", { class: "swipe-lead" }, leadActions.map((action) => {
+    const lines = String(action.label).split("\n");
+    return el("button", {
+      type: "button",
+      class: `swipe-act ${action.tone || "pay"}`,
+      "aria-label": lines.join(" "),
+      onclick: (event) => {
+        event.stopPropagation();
+        closeSwipe(front);
+        action.run();
+      },
+    }, lines.map((line) => el("span", {}, line)));
+  }));
   const trail = el("div", { class: "swipe-trail" }, (actions || []).map((action) => el("button", {
     type: "button",
     class: `swipe-act ${action.tone}`,
@@ -1373,17 +1387,7 @@ function swipeRow(front, { pay, actions, card }) {
     },
   }, action.label)));
   const back = el("div", { class: "swipe-back" }, [
-    pay
-      ? el("button", {
-        type: "button",
-        class: `swipe-act ${pay.undo ? "undo" : "pay"}`,
-        onclick: (event) => {
-          event.stopPropagation();
-          closeSwipe(front);
-          pay.run();
-        },
-      }, pay.label)
-      : "",
+    leadBox,
     el("span", { class: "swipe-gap" }),
     trail,
   ]);
@@ -1395,14 +1399,17 @@ function swipeRow(front, { pay, actions, card }) {
   let dragging = false;
   let axis = "";
   let suppressClick = false;
-  const lead = pay ? 96 : 0;
 
   function widthOfTrail() {
     return trail.getBoundingClientRect().width || (actions || []).length * 88;
   }
 
+  function widthOfLead() {
+    return leadBox.getBoundingClientRect().width || leadActions.length * 112;
+  }
+
   function moveTo(x) {
-    const next = Math.max(-widthOfTrail(), Math.min(lead, x));
+    const next = Math.max(-widthOfTrail(), Math.min(widthOfLead(), x));
     front.style.transform = `translateX(${next}px)`;
     front.dataset.x = String(next);
     return next;
@@ -1438,9 +1445,15 @@ function swipeRow(front, { pay, actions, card }) {
     front.classList.remove("dragging");
     const x = Number(front.dataset.x || 0);
     const trailWidth = widthOfTrail();
-    if (pay && x > 72) {
+    const leadWidth = widthOfLead();
+    const solo = leadActions.length === 1 && leadActions[0].commit ? leadActions[0] : null;
+    if (solo && x > 72) {
       closeSwipe(front);
-      pay.run();
+      solo.run();
+      return;
+    }
+    if (leadWidth && x > leadWidth * 0.35) {
+      placeSwipe(front, leadWidth);
       return;
     }
     if (trailWidth && x < -trailWidth * 0.35) {
@@ -1635,7 +1648,7 @@ function sectionList(data, section) {
     ]),
   ];
   if (section === "fixed") {
-    children.push(el("p", { class: "note" }, "Enviar pro cartão pergunta o cartão, o valor e o parcelamento. O apelido entra na fatura. No cadastro, Pix, espécie ou cartão já definem como a conta é paga."));
+    children.push(el("p", { class: "note" }, "Puxe o card para a direita para pagar no Pix ou enviar pro cartão. Enviar pro cartão pergunta o cartão, o valor e o parcelamento."));
   }
   if (section === "extra") {
     children.push(el("p", { class: "note" }, "Dê um nome ao imprevisto e diga se ele saiu no Pix, débito, espécie ou cartão. No cartão, escolha a fatura."));
@@ -2070,13 +2083,6 @@ function expenseRow(expense, section, options = {}) {
   if (expense.payment !== "card" || onInvoice) meta.push(paymentLabel(expense.payment));
   if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Cartão ${expense.cardLabel}` : "Cartão");
   if (expense.installment) meta.push(expense.installment);
-  const invoiceToggle = editable() && section === "fixed" && !expense.paid && !onInvoice
-    ? el("button", {
-      type: "button",
-      class: "toggle",
-      onclick: () => openCardPay(expense),
-    }, "Enviar pro cartão")
-    : "";
   const edit = () => {
     if (editable()) openEdit(expense, { cardExpense: lockedCard });
   };
@@ -2086,7 +2092,6 @@ function expenseRow(expense, section, options = {}) {
         el("strong", {}, expense.name),
         el("small", {}, meta.filter(Boolean).join(" · ")),
       ]),
-      invoiceToggle,
       onInvoice && section === "card" ? el("span", { class: "badge" }, "Já contabilizado, não soma de novo") : "",
       expense.section === "extra" && expense.payment !== "card" ? el("span", { class: "badge pix" }, paymentLabel(expense.payment)) : "",
     ]),
@@ -2096,8 +2101,21 @@ function expenseRow(expense, section, options = {}) {
     ]),
   ]);
   if (!editable()) return front;
+  const living = section === "fixed" && !onInvoice;
+  const leads = living
+    ? [
+      {
+        label: expense.paid ? "Desfazer" : expense.payment === "cash" ? "Pago\nem espécie" : "Pago\nno Pix",
+        tone: expense.paid ? "undo" : "pay",
+        commit: expense.paid,
+        run: () => patchExpense(expense, { paid: !expense.paid }),
+      },
+      expense.paid ? null : { label: "Enviar pro\ncartão", tone: "send", run: () => openCardPay(expense) },
+    ].filter(Boolean)
+    : null;
   return swipeRow(front, {
-    pay: onInvoice ? null : {
+    leads,
+    pay: living || onInvoice ? null : {
       label: expense.paid ? "Desfazer" : "Pago",
       undo: expense.paid,
       run: () => patchExpense(expense, { paid: !expense.paid }),
