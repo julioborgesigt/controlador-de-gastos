@@ -283,6 +283,52 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .list { display: flex; flex-direction: column; gap: 8px; }
 
+.swipe {
+  position: relative;
+  overflow: hidden;
+  border-radius: 12px;
+}
+
+.card-swipe { margin-bottom: 10px; }
+
+.card-swipe > .jump { margin-bottom: 0; }
+
+.swipe-back {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: stretch;
+}
+
+.swipe-gap { flex: 1; }
+
+.swipe-trail { display: flex; }
+
+.swipe-act {
+  width: 88px;
+  border: 0;
+  color: white;
+  font-weight: 650;
+  font-size: 14px;
+}
+
+.swipe-act.pay { background: var(--good); }
+
+.swipe-act.undo { background: var(--muted); }
+
+.swipe-act.edit { background: var(--navy); }
+
+.swipe-act.delete { background: var(--bad); }
+
+.swipe-front {
+  position: relative;
+  z-index: 1;
+  transition: transform 180ms ease;
+  touch-action: pan-y;
+}
+
+.swipe-front.dragging { transition: none; }
+
 .item {
   width: 100%;
   border-radius: 12px;
