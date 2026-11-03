@@ -36,6 +36,7 @@ const state = {
   sheet: null,
   accountMenu: false,
   confirm: null,
+  expenseInfo: null,
   needsPeriod: false,
   devicePrompt: false,
   periodDraft: null,
@@ -224,8 +225,9 @@ function render() {
   }
   root.append(shell());
   if (state.sheet) root.append(sheet());
+  if (state.expenseInfo) root.append(expenseInfoDialog());
   if (state.confirm) root.append(confirmDialog());
-  if (state.sheet || state.confirm) lockPage(keepPlace ? lockedScroll : 0);
+  if (state.sheet || state.confirm || state.expenseInfo) lockPage(keepPlace ? lockedScroll : 0);
   else unlockPage(keepPlace ? lockedScroll : 0);
   state.viewKey = viewKey;
   queueMicrotask(centerMonthChip);
@@ -233,7 +235,7 @@ function render() {
 }
 
 function overlayIsOpen() {
-  return Boolean(state.sheet || state.confirm || state.accountMenu);
+  return Boolean(state.sheet || state.confirm || state.accountMenu || state.expenseInfo);
 }
 
 function syncOverlayHistory() {
@@ -262,6 +264,7 @@ function armStay() {
 function leavePage() {
   allowLeave = true;
   state.confirm = null;
+  state.expenseInfo = null;
   state.sheet = null;
   state.accountMenu = false;
   overlayPushed = false;
@@ -274,6 +277,7 @@ window.addEventListener("popstate", () => {
     suppressHistory = false;
     overlayPushed = false;
     state.confirm = null;
+    state.expenseInfo = null;
     state.sheet = null;
     state.accountMenu = false;
     render();
@@ -286,6 +290,7 @@ window.addEventListener("popstate", () => {
   if (overlayPushed) {
     overlayPushed = false;
     if (state.confirm) state.confirm = null;
+    else if (state.expenseInfo) state.expenseInfo = null;
     else if (state.accountMenu) state.accountMenu = false;
     else {
       state.sheet = null;
@@ -2105,6 +2110,11 @@ function fixedOnCard(expense) {
   return expense.section === "fixed" && (expense.onCard || expense.payment === "card");
 }
 
+function cardMirror(expense, section) {
+  if (fixedOnCard(expense) && (section === "fixed" || section === "card")) return true;
+  return section === "extra" && expense.section === "extra" && expense.payment === "card";
+}
+
 function expenseBelongsToCard(expense) {
   return expense.section === "card" || (expense.section === "extra" && expense.payment === "card") || fixedOnCard(expense);
 }
@@ -2669,9 +2679,11 @@ function expenseRow(expense, section, options = {}) {
   const edit = () => {
     if (editable()) openEdit(expense, { cardExpense: lockedCard });
   };
-  const front = el("article", { class: `item${expense.paid ? " paid" : " open"}${onInvoice && section === "card" ? " aside" : ""}` }, [
+  const mirror = cardMirror(expense, section);
+  const tone = mirror && !(onInvoice && section === "card") ? " on-card" : onInvoice && section === "card" ? " aside" : expense.paid ? " paid" : " open";
+  const front = el("article", { class: `item${tone}` }, [
     el("div", { class: "item-copy" }, [
-      el("button", { type: "button", class: "item-main", onclick: edit }, [
+      el("button", { type: "button", class: "item-main", onclick: () => openExpenseInfo(expense, section) }, [
         el("strong", {}, expense.name),
         el("small", {}, meta.filter(Boolean).join(" · ")),
       ]),
@@ -2679,7 +2691,9 @@ function expenseRow(expense, section, options = {}) {
       expense.section === "extra" && expense.payment !== "card" ? el("span", { class: "badge pix" }, paymentLabel(expense.payment)) : "",
     ]),
     el("div", { class: "item-end" }, [
-      el("span", { class: expense.paid ? "badge paid" : "badge open" }, expense.paid ? "Pago" : "Em aberto"),
+      mirror
+        ? el("span", { class: "badge on-card" }, "Tá no cartão")
+        : el("span", { class: expense.paid ? "badge paid" : "badge open" }, expense.paid ? "Pago" : "Em aberto"),
       el("span", { class: `amount${onInvoice && section === "card" ? " aside" : ""}` }, expense.amountCents === 0 ? "—" : money(expense.amountCents)),
     ]),
   ]);
@@ -2754,7 +2768,7 @@ function recurringSpan(draft) {
     el("label", {}, "Lançar em"),
     segmented("repeat", [["all", "Todos os meses"], ["period", "Um período"]], draft.repeat || "all"),
     el("p", { class: "muted" }, draft.payment === "card"
-      ? "No cartão, o valor entra na fatura a partir da primeira fatura escolhida e segue até o fim do período. Em Custo de vida a conta fica paga, porque o que falta pagar está na fatura."
+      ? "No cartão, o valor entra na fatura a partir da primeira fatura escolhida e segue até o fim do período. Em Custo de vida ele fica como “Tá no cartão”, só para controle, e não soma de novo."
       : draft.repeat === "period"
         ? "A conta entra em cada mês do intervalo, em aberto."
         : "Por padrão, a conta entra em todos os meses do período, em aberto."),
@@ -2827,6 +2841,60 @@ function openCardExpense(cardName = "") {
 function openCreateCard() {
   state.sheet = { mode: "card", id: "", name: "", dueDay: "", previousName: "" };
   render();
+}
+
+function openExpenseInfo(expense, section) {
+  const mirror = cardMirror(expense, section);
+  state.expenseInfo = {
+    name: expense.name,
+    amount: expense.amountCents === 0 ? "—" : money(expense.amountCents),
+    mirror,
+    cardName: expense.cardLabel || "",
+    registered: expense.createdAt ? passkeyWhen(expense.createdAt) : "",
+    note: visibleNote(expense.note),
+    payment: mirror ? "" : paymentLabel(expense.payment),
+    status: mirror ? "" : (expense.paid ? "Pago" : "Em aberto"),
+    installment: expense.installment || "",
+    canEdit: editable(),
+  };
+  state.error = "";
+  render();
+}
+
+function closeExpenseInfo() {
+  state.expenseInfo = null;
+  render();
+}
+
+function expenseInfoDialog() {
+  const info = state.expenseInfo;
+  const lines = [];
+  if (info.mirror) {
+    const card = info.cardName ? ` no cartão ${info.cardName}` : " no cartão";
+    lines.push(`Este valor foi lançado${card}. Ele aparece nesta aba como um demonstrativo, para o seu controle. Não soma duas vezes: a cobrança entra só na fatura do cartão.`);
+  } else {
+    lines.push([info.payment, info.status, info.installment].filter(Boolean).join(" · "));
+  }
+  if (info.note) lines.push(info.note);
+  if (info.registered) lines.push(`Cadastrado em ${info.registered}.`);
+  if (info.canEdit) lines.push("Para editar ou excluir, arraste o card para a esquerda.");
+  const overlay = el("div", {
+    class: "overlay center",
+    role: "presentation",
+    onclick: (event) => {
+      if (event.target === overlay) closeExpenseInfo();
+    },
+  }, [
+    el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "expense-info-title" }, [
+      el("h2", { id: "expense-info-title" }, info.name),
+      el("p", { class: "money inline" }, info.amount),
+      ...lines.filter(Boolean).map((line) => el("p", {}, line)),
+      el("div", { class: "actions" }, [
+        el("button", { class: "primary", type: "button", onclick: closeExpenseInfo }, "Fechar"),
+      ]),
+    ]),
+  ]);
+  return overlay;
 }
 
 function openEdit(expense, options = {}) {

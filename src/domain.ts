@@ -15,6 +15,7 @@ export type Expense = {
   installment: string | null;
   sortOrder: number;
   source: "sheet" | "user";
+  createdAt?: string;
 };
 
 export type Totals = {

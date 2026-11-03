@@ -107,6 +107,7 @@ type ExpenseRow = {
   installment: string | null;
   sort_order: number;
   source: string;
+  created_at: string;
 };
 
 let ready: Promise<void> | null = null;
@@ -540,6 +541,7 @@ export function mapExpense(row: ExpenseRow): Expense {
     installment: row.installment ?? null,
     sortOrder: row.sort_order,
     source: row.source === "user" ? "user" : "sheet",
+    createdAt: row.created_at,
   };
 }
 
