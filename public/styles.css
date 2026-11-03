@@ -482,6 +482,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .item.aside { background: #f4f7fb; }
 
+.item.on-card { background: #f4f7fb; }
+
+.badge.on-card {
+  background: #e7eef8;
+  color: #1f4e8a;
+  white-space: nowrap;
+}
+
 .amount.aside { color: var(--terra); }
 
 .item-main strong, .item-main small { display: block; }
@@ -619,6 +627,11 @@ html[data-theme="dark"] .note { background: #222831; }
 
 html[data-theme="dark"] .item.paid,
 html[data-theme="dark"] .card-manage.paid { background: #17362e; }
+
+html[data-theme="dark"] .item.on-card,
+html[data-theme="dark"] .item.aside { background: #1c2430; }
+
+html[data-theme="dark"] .badge.on-card { background: #243044; color: #b7d4ff; }
 
 html[data-theme="dark"] .badge.paid { background: #17362e; color: var(--good); }
 
