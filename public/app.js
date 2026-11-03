@@ -60,35 +60,6 @@ const views = [
 let bootGeneration = 0;
 
 boot();
-document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") watchDeploy();
-});
-window.addEventListener("pageshow", (event) => {
-  if (event.persisted) watchDeploy();
-});
-
-let deployCheck = 0;
-
-function currentAppVersion() {
-  return document.querySelector('meta[name="app-version"]')?.getAttribute("content") || "";
-}
-
-async function watchDeploy() {
-  const current = currentAppVersion();
-  if (!current || state.sheet || state.confirm || state.expenseInfo || state.busy) return;
-  const now = Date.now();
-  if (now - deployCheck < 15000) return;
-  deployCheck = now;
-  try {
-    const response = await fetch("/", { cache: "no-store" });
-    if (!response.ok) return;
-    const html = await response.text();
-    const match = html.match(/name="app-version" content="([^"]*)"/);
-    if (match?.[1] && match[1] !== current) location.reload();
-  } catch {
-    /* a página atual continua até a rede voltar */
-  }
-}
 
 async function boot() {
   const generation = ++bootGeneration;

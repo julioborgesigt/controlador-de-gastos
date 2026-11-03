@@ -838,10 +838,7 @@ app.delete("/api/expenses/:id", async (c) => {
 
 app.all("*", async (c) => {
   if (c.req.path.startsWith("/api/")) return c.json({ error: "Caminho não encontrado." }, 404);
-  const path = new URL(c.req.url).pathname;
-  const htmlDocument = path === "/" || path === "/index.html";
-  const assetRequest = htmlDocument ? freshAssetRequest(c.req.raw) : c.req.raw;
-  const asset = await c.env.ASSETS.fetch(assetRequest);
+  const asset = await c.env.ASSETS.fetch(assetRequest(c.req.raw));
   const headers = new Headers(asset.headers);
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("Referrer-Policy", "no-referrer");
@@ -852,32 +849,18 @@ app.all("*", async (c) => {
   );
   headers.set("Cache-Control", "no-store");
   headers.set("CDN-Cache-Control", "no-store");
-  const type = headers.get("content-type") || "";
-  if (asset.ok && htmlDocument && type.includes("text/html")) {
-    const version = await assetVersion(c.env.ASSETS, new URL(c.req.url));
-    const html = (await asset.text()).replace(
-      "<head>",
-      `<head>\n    <meta name="app-version" content="${version}">`,
-    ).replace('src="/app.js"', `src="/app.js?v=${version}"`).replace('href="/styles.css"', `href="/styles.css?v=${version}"`);
-    headers.delete("content-length");
-    return new Response(html, { status: asset.status, statusText: asset.statusText, headers });
-  }
   return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
 });
 
-function freshAssetRequest(request: Request): Request {
-  const headers = new Headers(request.headers);
-  headers.delete("if-none-match");
-  headers.delete("if-modified-since");
-  return new Request(request, { headers });
-}
-
-async function assetVersion(assets: Fetcher, origin: URL): Promise<string> {
-  const script = await assets.fetch(new URL("/app.js", origin));
-  const token = script.headers.get("etag") || script.headers.get("last-modified") || "";
-  await script.body?.cancel();
-  const version = token.replace(/[^A-Za-z0-9]/g, "").slice(0, 40);
-  return version || "local";
+function assetRequest(request: Request): Request {
+  try {
+    const url = new URL(request.url);
+    if (!url.search) return request;
+    url.search = "";
+    return new Request(url, { method: request.method, headers: request.headers });
+  } catch {
+    return request;
+  }
 }
 
 export default {
