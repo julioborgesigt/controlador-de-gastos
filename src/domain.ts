@@ -53,6 +53,7 @@ export type Totals = {
   paidCents: number;
   remainingCents: number;
   balanceCents: number;
+  partialBalanceCents: number;
 };
 
 export function isFixedOnCard(expense: Pick<Expense, "section" | "onCard">): boolean {
@@ -118,6 +119,7 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
   const fixedCashCents = fixedCents - fixedOnCardCents - fixedHeldCents;
   const faturaCents = invoiceCents + extrasCardCents;
   const commitmentsCents = faturaCents + fixedCashCents + extrasPixCents;
+  const partialBalanceCents = incomeCents - commitmentsCents;
 
   return {
     invoiceCents,
@@ -133,7 +135,8 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
     commitmentsCents,
     paidCents,
     remainingCents,
-    balanceCents: incomeCents - commitmentsCents,
+    balanceCents: partialBalanceCents - fixedHeldCents,
+    partialBalanceCents,
   };
 }
 
