@@ -45,6 +45,9 @@ export type Totals = {
   fixedCents: number;
   fixedOnCardCents: number;
   fixedCashCents: number;
+  fixedForecastCents: number;
+  fixedLaunchedCents: number;
+  fixedAllSettled: boolean;
   extrasPixCents: number;
   commitmentsCents: number;
   paidCents: number;
@@ -52,8 +55,8 @@ export type Totals = {
   balanceCents: number;
 };
 
-export function isFixedOnCard(expense: Pick<Expense, "section" | "onCard" | "payment">): boolean {
-  return expense.section === "fixed" && (expense.onCard || expense.payment === "card");
+export function isFixedOnCard(expense: Pick<Expense, "section" | "onCard">): boolean {
+  return expense.section === "fixed" && expense.onCard;
 }
 
 export function countsTowardPayment(expense: Pick<Expense, "section" | "onCard" | "payment" | "amountCents">): boolean {
@@ -65,6 +68,10 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
   let extrasCardCents = 0;
   let fixedCents = 0;
   let fixedOnCardCents = 0;
+  let fixedForecastCents = 0;
+  let fixedLaunchedCents = 0;
+  let fixedHeldCents = 0;
+  let fixedOpen = 0;
   let extrasPixCents = 0;
   let paidCents = 0;
   let remainingCents = 0;
@@ -74,25 +81,41 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
     if (expense.section === "extra" && expense.payment === "card") extrasCardCents += expense.amountCents;
     if (expense.section === "extra" && expense.payment !== "card") extrasPixCents += expense.amountCents;
     const partials = expense.partials ?? [];
+    if (expense.section === "fixed" && !isFixedOnCard(expense) && !expense.paid && !partials.length) {
+      fixedForecastCents += expense.amountCents;
+      fixedCents += expense.amountCents;
+      fixedHeldCents += expense.amountCents;
+      fixedOpen += 1;
+      continue;
+    }
     if (expense.section === "fixed" && !isFixedOnCard(expense) && partials.length) {
       const split = partialSplit(partials);
-      const size = expense.paid ? split.total : Math.max(expense.amountCents, split.total);
-      fixedCents += size;
+      const shown = expense.paid ? split.total : Math.max(expense.amountCents, split.total);
+      fixedForecastCents += expense.amountCents;
+      fixedLaunchedCents += split.total;
+      fixedCents += shown;
       fixedOnCardCents += split.cardPaid;
+      fixedHeldCents += Math.max(0, shown - split.total);
       paidCents += split.cashPaid;
-      if (!expense.paid) remainingCents += Math.max(0, size - split.cardPaid - split.cashPaid);
+      if (!expense.paid) fixedOpen += 1;
       continue;
     }
     if (expense.section === "fixed") {
+      fixedForecastCents += expense.amountCents;
       fixedCents += expense.amountCents;
       if (isFixedOnCard(expense)) fixedOnCardCents += expense.amountCents;
+      if (expense.paid || isFixedOnCard(expense)) fixedLaunchedCents += expense.amountCents;
+      else {
+        fixedHeldCents += expense.amountCents;
+        fixedOpen += 1;
+      }
     }
     if (!countsTowardPayment(expense)) continue;
     if (expense.paid) paidCents += expense.amountCents;
     else remainingCents += expense.amountCents;
   }
 
-  const fixedCashCents = fixedCents - fixedOnCardCents;
+  const fixedCashCents = fixedCents - fixedOnCardCents - fixedHeldCents;
   const faturaCents = invoiceCents + extrasCardCents;
   const commitmentsCents = faturaCents + fixedCashCents + extrasPixCents;
 
@@ -103,6 +126,9 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
     fixedCents,
     fixedOnCardCents,
     fixedCashCents,
+    fixedForecastCents,
+    fixedLaunchedCents,
+    fixedAllSettled: fixedForecastCents > 0 && fixedOpen === 0,
     extrasPixCents,
     commitmentsCents,
     paidCents,
@@ -131,13 +157,12 @@ export function normalizeExpense(input: {
       cardLabel: payment === "card" ? cardLabel : null,
     };
   }
-  const onCard = input.onCard || input.payment === "card";
-  const payment: Payment = onCard ? "card" : input.payment === "cash" ? "cash" : "pix";
+  const payment: Payment = input.onCard || input.payment === "card" ? "card" : input.payment === "cash" ? "cash" : "pix";
   return {
     section: "fixed",
     payment,
-    onCard,
-    cardLabel: onCard ? cardLabel : null,
+    onCard: input.onCard,
+    cardLabel: payment === "card" ? cardLabel : null,
   };
 }
 

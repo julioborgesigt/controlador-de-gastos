@@ -20,7 +20,6 @@ import { loginOptions, loginWithPasskey, registerPasskey, registrationOptions } 
 import {
   cardLinkRequired,
   countsTowardPayment,
-  livingCostMonths,
   normalizeExpense,
   planCardPurchase,
   parseCardName,
@@ -605,25 +604,19 @@ app.post("/api/expenses", async (c) => {
   }
   const monthIds = recurringMonthIds(body, parsed.value.section);
   if (!monthIds.ok) return c.json({ error: monthIds.error }, 400);
-  const invoiceMonthId = isMonthId(body.invoiceMonthId) ? body.invoiceMonthId : "";
-  const livingCard = parsed.value.section === "fixed" && parsed.value.onCard && invoiceMonthId !== "";
-  const ids = livingCard ? livingCostMonths(monthIds.ids, invoiceMonthId) : monthIds.ids;
-  if (livingCard && !ids.length) {
-    return c.json({ error: "A primeira fatura precisa estar dentro dos meses da conta." }, 400);
-  }
   const inserted = await insertRepeatedExpenses(c.env.DB, {
     ownerId: writer.scope.ownerId,
-    monthIds: ids,
+    monthIds: monthIds.ids,
     name: parsed.value.name,
     section: parsed.value.section,
     amountCents: parsed.value.amountCents,
     payment: parsed.value.payment,
-    onCard: parsed.value.onCard,
+    onCard: parsed.value.section === "fixed" ? false : parsed.value.onCard,
     cardLabel: parsed.value.cardLabel,
-    paid: livingCard ? true : parsed.value.paid,
+    paid: parsed.value.section === "fixed" ? false : parsed.value.paid,
     note: parsed.value.note,
     installment: parsed.value.installment,
-    livingCard,
+    livingCard: false,
   });
   if (!inserted.ok) return c.json({ error: inserted.error }, 404);
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.monthId), writer.scope), 201);
@@ -794,19 +787,25 @@ app.post("/api/expenses/:id/settle", async (c) => {
   const writer = await requireWriter(c);
   if (!writer.ok) return c.json({ error: writer.error }, writer.status);
   const expense = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
-  if (!expense || expense.section !== "fixed" || expense.onCard || expense.payment === "card") {
+  if (!expense || expense.section !== "fixed" || expense.onCard) {
     return c.json({ error: "Esta despesa não encerra por aqui." }, 400);
   }
   if (expense.paid) return c.json({ error: "Esta despesa já foi encerrada." }, 400);
   const body = await readJson(c);
-  const amountCents = body.useRegistered === true ? expense.amountCents : body.amountCents;
-  if (!isCents(amountCents) || amountCents <= 0) return c.json({ error: "Informe o valor pago." }, 400);
   const partials = await c.env.DB
-    .prepare("SELECT COUNT(*) AS n FROM partial_payments WHERE owner_id = ? AND expense_id = ?")
+    .prepare("SELECT COALESCE(SUM(amount_cents), 0) AS total, COUNT(*) AS n FROM partial_payments WHERE owner_id = ? AND expense_id = ?")
     .bind(writer.scope.ownerId, expense.id)
-    .first<{ n: number }>();
+    .first<{ total: number; n: number }>();
   const hasPartials = Number(partials?.n) > 0;
-  if (hasPartials) {
+  const already = Number(partials?.total) || 0;
+  if (body.noAddition === true) {
+    if (!hasPartials) return c.json({ error: "Informe o valor pago." }, 400);
+    await c.env.DB.prepare("UPDATE expenses SET paid = 1 WHERE owner_id = ? AND id = ?").bind(writer.scope.ownerId, expense.id).run();
+    return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, expense.monthId), writer.scope));
+  }
+  const amountCents = body.useRegistered === true ? Math.max(0, expense.amountCents - already) : body.amountCents;
+  if (!isCents(amountCents) || amountCents <= 0) return c.json({ error: "Informe o valor pago." }, 400);
+  if (hasPartials || body.useRegistered !== true) {
     await insertPartialPayment(c.env.DB, {
       ownerId: writer.scope.ownerId,
       expenseId: expense.id,

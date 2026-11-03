@@ -73,12 +73,20 @@ function expensesFor(monthIndex: number): Expense[] {
   }));
 }
 
+function unlaunchedFixed(expenses: Expense[]): number {
+  return expenses
+    .filter((expense) => expense.section === "fixed" && !expense.onCard && !expense.paid && !(expense.partials?.length))
+    .reduce((sum, expense) => sum + expense.amountCents, 0);
+}
+
 test("planilha de novembro de 2026 a outubro de 2027 fecha com o app", () => {
   seed.months.forEach((month, index) => {
-    const totals = computeTotals(expensesFor(index), month.incomeCents);
+    const expenses = expensesFor(index);
+    const held = unlaunchedFixed(expenses);
+    const totals = computeTotals(expenses, month.incomeCents);
     const row = expected[index];
-    assert.equal(totals.commitmentsCents, row?.commitments, month.id);
-    assert.equal(totals.balanceCents, row?.balance, month.id);
+    assert.equal(totals.commitmentsCents, (row?.commitments ?? 0) - held, month.id);
+    assert.equal(totals.balanceCents, (row?.balance ?? 0) + held, month.id);
     assert.equal(totals.fixedOnCardCents, 0, month.id);
   });
 });
@@ -90,10 +98,13 @@ test("novembro quitado não deixa saldo pendente e dezembro fica em aberto", () 
   assert.equal(november.faturaCents, 481023);
   assert.equal(november.fixedCents, 227000);
 
-  const december = computeTotals(expensesFor(1), seed.months[1]!.incomeCents);
-  assert.equal(december.remainingCents, 789766);
+  const decemberExpenses = expensesFor(1);
+  const december = computeTotals(decemberExpenses, seed.months[1]!.incomeCents);
+  assert.equal(december.remainingCents, 789766 - unlaunchedFixed(decemberExpenses));
   assert.equal(december.faturaCents, 213266);
-  assert.equal(december.fixedCents, 576500);
+  assert.equal(december.fixedForecastCents, 576500);
+  assert.equal(december.fixedLaunchedCents, 0);
+  assert.equal(december.fixedAllSettled, false);
 });
 
 test("gasto fixo marcado na fatura continua no indicador e sai do total a pagar", () => {
@@ -105,12 +116,14 @@ test("gasto fixo marcado na fatura continua no indicador e sai do total a pagar"
   assert.equal(isFixedOnCard(energy), true);
 
   const totals = computeTotals(expenses, seed.months[1]!.incomeCents);
-  assert.equal(totals.fixedCents, 576500);
+  const held = unlaunchedFixed(expenses);
+  assert.equal(totals.fixedForecastCents, 576500);
   assert.equal(totals.fixedOnCardCents, 60000);
-  assert.equal(totals.fixedCashCents, 516500);
-  assert.equal(totals.commitmentsCents, 789766 - 60000);
+  assert.equal(totals.fixedLaunchedCents, 60000);
+  assert.equal(totals.fixedCashCents, 0);
+  assert.equal(totals.commitmentsCents, 789766 - 60000 - held);
   assert.equal(totals.faturaCents, 213266);
-  assert.equal(totals.remainingCents, 789766 - 60000);
+  assert.equal(totals.remainingCents, 789766 - 60000 - held);
 });
 
 test("pagamento parcial deixa a feira em aberto e não soma o cartão duas vezes", () => {
@@ -143,13 +156,14 @@ test("pagamento parcial deixa a feira em aberto e não soma o cartão duas vezes
     partials: [],
   };
   const open = computeTotals([feira, invoice], 0);
-  assert.equal(open.fixedCents, 80000);
+  assert.equal(open.fixedForecastCents, 80000);
+  assert.equal(open.fixedLaunchedCents, 35000);
   assert.equal(open.fixedOnCardCents, 15000);
-  assert.equal(open.fixedCashCents, 65000);
   assert.equal(open.paidCents, 20000);
-  assert.equal(open.remainingCents, 60000);
+  assert.equal(open.remainingCents, 15000);
   assert.equal(open.faturaCents, 15000);
-  assert.equal(open.commitmentsCents, 80000);
+  assert.equal(open.commitmentsCents, 35000);
+  assert.equal(open.fixedAllSettled, false);
 
   feira.paid = true;
   feira.partials = [
@@ -201,13 +215,15 @@ test("gasto extra no cartão aumenta a fatura e o extra no Pix fica fora dela", 
   assert.equal(totals.extrasCardCents, 8000);
   assert.equal(totals.extrasPixCents, 4500);
   assert.equal(totals.faturaCents, 213266 + 8000);
-  assert.equal(totals.fixedCents, 576500);
-  assert.equal(totals.commitmentsCents, 789766 + 8000 + 4500);
+  assert.equal(totals.fixedForecastCents, 576500);
+  assert.equal(totals.commitmentsCents, 213266 + 8000 + 4500);
 });
 
 test("normaliza pagamento para não somar gasto fixo duas vezes", () => {
   const fixed = normalizeExpense({ section: "fixed", payment: "pix", onCard: true, cardLabel: " Neon " });
   assert.deepEqual(fixed, { section: "fixed", payment: "card", onCard: true, cardLabel: "Neon" });
+  const forecast = normalizeExpense({ section: "fixed", payment: "card", onCard: false, cardLabel: "Nubank" });
+  assert.deepEqual(forecast, { section: "fixed", payment: "card", onCard: false, cardLabel: "Nubank" });
   const cash = normalizeExpense({ section: "fixed", payment: "cash", onCard: false, cardLabel: "Nubank" });
   assert.deepEqual(cash, { section: "fixed", payment: "cash", onCard: false, cardLabel: null });
 
