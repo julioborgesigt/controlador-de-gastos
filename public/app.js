@@ -3840,7 +3840,6 @@ async function saveSheet(event) {
       if (draft.mode === "create") {
         state.data = await request("/api/expenses", {
           method: "POST",
-          signal: AbortSignal.timeout(25000),
           body: {
             ...body,
             monthId: startMonthId,
@@ -4007,15 +4006,6 @@ function parseMoney(value) {
   return negative ? -cents : cents;
 }
 
-function requestSignal(path, options) {
-  if (options.signal) return options.signal;
-  const slow = path === "/api/login"
-    || path === "/api/register"
-    || path === "/api/password"
-    || path.startsWith("/api/passkeys/");
-  return AbortSignal.timeout(slow ? 60000 : 30000);
-}
-
 async function request(path, options = {}) {
   const attempts = Math.max(1, options.attempts || 1);
   let lastError;
@@ -4024,30 +4014,18 @@ async function request(path, options = {}) {
       return await requestOnce(path, options);
     } catch (error) {
       lastError = error;
-      const woke = error.status === 0 || error instanceof TypeError;
-      if (!woke || attempt === attempts) throw error;
+      if (!(error instanceof TypeError) || attempt === attempts) throw error;
     }
   }
   throw lastError;
 }
 
 async function requestOnce(path, options) {
-  let response;
-  try {
-    response = await fetch(path, {
-      method: options.method || "GET",
-      headers: options.body ? { "content-type": "application/json" } : undefined,
-      body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: requestSignal(path, options),
-    });
-  } catch (error) {
-    if (error?.name === "TimeoutError" || error?.name === "AbortError") {
-      const timedOut = new Error("A conexão demorou. Tente de novo.");
-      timedOut.status = 0;
-      throw timedOut;
-    }
-    throw error;
-  }
+  const response = await fetch(path, {
+    method: options.method || "GET",
+    headers: options.body ? { "content-type": "application/json" } : undefined,
+    body: options.body ? JSON.stringify(options.body) : undefined,
+  });
   const data = await response.json().catch(() => ({}));
   if (response.status === 401 && path !== "/api/login" && path !== "/api/register" && path !== "/api/passkeys/login") {
     state.booting = false;
