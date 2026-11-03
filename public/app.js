@@ -77,7 +77,7 @@ async function boot() {
     render();
   }
   try {
-    const session = await request("/api/session");
+    const session = await request("/api/session", { attempts: 2 });
     if (generation !== bootGeneration) return;
     setBootProgress(0.62);
     state.needsSetup = session.needsSetup;
@@ -493,7 +493,11 @@ async function submitAuth(event) {
         passwordConfirmation: state.auth.confirmation,
       }
       : { cpf: state.auth.cpf, password: state.auth.password };
-    await request(registering ? "/api/register" : "/api/login", { method: "POST", body });
+    await request(registering ? "/api/register" : "/api/login", {
+      method: "POST",
+      body,
+      attempts: registering ? 1 : 2,
+    });
     state.authed = true;
     state.needsSetup = false;
     state.auth.password = "";
@@ -511,7 +515,7 @@ async function loginWithPasskey() {
   state.error = "";
   setWorking(true, "Aguardando a digital...");
   try {
-    const options = await request("/api/passkeys/login/options", { method: "POST", body: {} });
+    const options = await request("/api/passkeys/login/options", { method: "POST", body: {}, attempts: 2 });
     const credential = await navigator.credentials.get({ publicKey: publicKeyRequestOptions(options) });
     if (!credential) throw new DOMException("cancelada", "NotAllowedError");
     await request("/api/passkeys/login", { method: "POST", body: credentialToJSON(credential) });
@@ -3820,14 +3824,38 @@ function parseMoney(value) {
   return negative ? -cents : cents;
 }
 
+function requestSignal(path, options) {
+  if (options.signal) return options.signal;
+  const slow = path === "/api/login"
+    || path === "/api/register"
+    || path === "/api/password"
+    || path.startsWith("/api/passkeys/");
+  return AbortSignal.timeout(slow ? 60000 : 30000);
+}
+
 async function request(path, options = {}) {
+  const attempts = Math.max(1, options.attempts || 1);
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await requestOnce(path, options);
+    } catch (error) {
+      lastError = error;
+      const woke = error.status === 0 || error instanceof TypeError;
+      if (!woke || attempt === attempts) throw error;
+    }
+  }
+  throw lastError;
+}
+
+async function requestOnce(path, options) {
   let response;
   try {
     response = await fetch(path, {
       method: options.method || "GET",
       headers: options.body ? { "content-type": "application/json" } : undefined,
       body: options.body ? JSON.stringify(options.body) : undefined,
-      signal: options.signal || AbortSignal.timeout(12000),
+      signal: requestSignal(path, options),
     });
   } catch (error) {
     if (error?.name === "TimeoutError" || error?.name === "AbortError") {
