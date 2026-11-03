@@ -22,6 +22,7 @@ import {
   countsTowardPayment,
   livingCostMonths,
   normalizeExpense,
+  planCardPurchase,
   parseCardName,
   parseDueDay,
   parseInstallment,
@@ -53,6 +54,9 @@ import {
   setTheme,
   setCardDueDay,
   insertCardPurchase,
+  insertPartialPayment,
+  deletePartialPayment,
+  deletePartialsForExpenses,
   payRecurringOnCard,
   payCardInvoice,
   undoCardInvoice,
@@ -706,12 +710,126 @@ app.delete("/api/expenses/:id/card-payment", async (c) => {
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
 });
 
+app.post("/api/expenses/:id/partials", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const expense = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
+  if (!expense || expense.section !== "fixed" || expense.onCard || expense.payment === "card") {
+    return c.json({ error: "O pagamento parcial é para um custo de vida que ainda não está no cartão." }, 400);
+  }
+  if (expense.paid) return c.json({ error: "Esta despesa já foi encerrada." }, 400);
+  const body = await readJson(c);
+  const payment = body.payment === "pix" || body.payment === "debit" || body.payment === "cash" || body.payment === "card" ? body.payment : "";
+  if (!payment) return c.json({ error: "Escolha Pix, débito, espécie ou cartão." }, 400);
+  if (!isCents(body.amountCents) || body.amountCents <= 0) return c.json({ error: "Informe o valor pago." }, 400);
+  let cardLabel: string | null = null;
+  let installment: string | null = null;
+  let count = 1;
+  let invoiceMonthId = expense.monthId;
+  if (payment === "card") {
+    const cards = await listCards(c.env.DB, writer.scope.ownerId);
+    const card = resolveCardLabel(cards, typeof body.cardLabel === "string" ? body.cardLabel : null, true);
+    if (!card.ok) return c.json({ error: card.error }, 400);
+    cardLabel = card.cardLabel;
+    count = typeof body.installmentCount === "number" ? body.installmentCount : 1;
+    if (!Number.isInteger(count) || count < 1 || count > 48) return c.json({ error: "Informe de 1 a 48 parcelas." }, 400);
+    invoiceMonthId = isMonthId(body.invoiceMonthId) ? body.invoiceMonthId : expense.monthId;
+    const known = await listMonths(c.env.DB, writer.scope.ownerId);
+    const plan = planCardPurchase({
+      startMonthId: invoiceMonthId,
+      totalCount: count,
+      paidCount: 0,
+      amountCents: body.amountCents,
+      mode: "total",
+    });
+    if (!plan.ok) return c.json({ error: plan.error }, 400);
+    if (plan.plan.schedule.some((part) => !known.some((month) => month.id === part.monthId))) {
+      return c.json({ error: "O parcelamento passa do período gerenciado. Aumente o período ou reduza as parcelas." }, 400);
+    }
+    installment = count > 1 ? `${count} parcelas` : null;
+  }
+  const partialId = await insertPartialPayment(c.env.DB, {
+    ownerId: writer.scope.ownerId,
+    expenseId: expense.id,
+    amountCents: body.amountCents,
+    payment,
+    cardLabel,
+    installment,
+  });
+  if (payment === "card") {
+    const created = await insertCardPurchase(c.env.DB, {
+      ownerId: writer.scope.ownerId,
+      startMonthId: invoiceMonthId,
+      name: expense.name,
+      section: "card",
+      payment: "card",
+      cardLabel,
+      note: `origem:${expense.id}\nparcial:${partialId}`,
+      totalCount: count,
+      paidCount: 0,
+      amountCents: body.amountCents,
+      mode: "total",
+    });
+    if (!created.ok) {
+      await deletePartialPayment(c.env.DB, writer.scope.ownerId, expense.id, partialId);
+      return c.json({ error: created.error }, 400);
+    }
+  }
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, expense.monthId), writer.scope), 201);
+});
+
+app.delete("/api/expenses/:id/partials/:partialId", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const expense = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
+  if (!expense) return c.json({ error: "Gasto não encontrado." }, 404);
+  const removed = await deletePartialPayment(c.env.DB, writer.scope.ownerId, expense.id, c.req.param("partialId"));
+  if (!removed) return c.json({ error: "Pagamento parcial não encontrado." }, 404);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, expense.monthId), writer.scope));
+});
+
+app.post("/api/expenses/:id/settle", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const expense = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
+  if (!expense || expense.section !== "fixed" || expense.onCard || expense.payment === "card") {
+    return c.json({ error: "Esta despesa não encerra por aqui." }, 400);
+  }
+  if (expense.paid) return c.json({ error: "Esta despesa já foi encerrada." }, 400);
+  const body = await readJson(c);
+  const amountCents = body.useRegistered === true ? expense.amountCents : body.amountCents;
+  if (!isCents(amountCents) || amountCents <= 0) return c.json({ error: "Informe o valor pago." }, 400);
+  const partials = await c.env.DB
+    .prepare("SELECT COUNT(*) AS n FROM partial_payments WHERE owner_id = ? AND expense_id = ?")
+    .bind(writer.scope.ownerId, expense.id)
+    .first<{ n: number }>();
+  const hasPartials = Number(partials?.n) > 0;
+  if (hasPartials) {
+    await insertPartialPayment(c.env.DB, {
+      ownerId: writer.scope.ownerId,
+      expenseId: expense.id,
+      amountCents,
+      payment: expense.payment === "cash" ? "cash" : "pix",
+      cardLabel: null,
+      installment: null,
+    });
+  }
+  await c.env.DB
+    .prepare("UPDATE expenses SET paid = 1, amount_cents = ? WHERE owner_id = ? AND id = ?")
+    .bind(hasPartials ? expense.amountCents : amountCents, writer.scope.ownerId, expense.id)
+    .run();
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, expense.monthId), writer.scope));
+});
+
 app.delete("/api/expenses/:id", async (c) => {
   const writer = await requireWriter(c);
   if (!writer.ok) return c.json({ error: writer.error }, writer.status);
   const current = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
   if (!current) return c.json({ error: "Gasto não encontrado." }, 404);
-  if (current.section === "fixed") await clearRecurringCardLines(c.env.DB, writer.scope.ownerId, current.id);
+  if (current.section === "fixed") {
+    await deletePartialsForExpenses(c.env.DB, writer.scope.ownerId, [current.id]);
+    await clearRecurringCardLines(c.env.DB, writer.scope.ownerId, current.id);
+  }
   await c.env.DB.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(writer.scope.ownerId, current.id).run();
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
 });

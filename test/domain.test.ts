@@ -113,6 +113,56 @@ test("gasto fixo marcado na fatura continua no indicador e sai do total a pagar"
   assert.equal(totals.remainingCents, 789766 - 60000);
 });
 
+test("pagamento parcial deixa a feira em aberto e não soma o cartão duas vezes", () => {
+  const feira: Expense = {
+    id: "feira",
+    monthId: "2026-11",
+    name: "Feira",
+    section: "fixed",
+    amountCents: 80000,
+    payment: "pix",
+    onCard: false,
+    cardLabel: null,
+    paid: false,
+    note: null,
+    installment: null,
+    sortOrder: 1,
+    source: "user",
+    partials: [
+      { id: "1", amountCents: 20000, payment: "pix", cardLabel: null, installment: null, createdAt: "" },
+      { id: "2", amountCents: 15000, payment: "card", cardLabel: "Nubank", installment: "3 parcelas", createdAt: "" },
+    ],
+  };
+  const invoice: Expense = {
+    ...feira,
+    id: "fatura",
+    section: "card",
+    amountCents: 15000,
+    payment: "card",
+    cardLabel: "Nubank",
+    partials: [],
+  };
+  const open = computeTotals([feira, invoice], 0);
+  assert.equal(open.fixedCents, 80000);
+  assert.equal(open.fixedOnCardCents, 15000);
+  assert.equal(open.fixedCashCents, 65000);
+  assert.equal(open.paidCents, 20000);
+  assert.equal(open.remainingCents, 60000);
+  assert.equal(open.faturaCents, 15000);
+  assert.equal(open.commitmentsCents, 80000);
+
+  feira.paid = true;
+  feira.partials = [
+    { id: "1", amountCents: 30000, payment: "cash", cardLabel: null, installment: null, createdAt: "" },
+    { id: "2", amountCents: 15000, payment: "card", cardLabel: "Nubank", installment: null, createdAt: "" },
+  ];
+  const closed = computeTotals([feira, { ...invoice, paid: true }], 0);
+  assert.equal(closed.fixedCents, 45000);
+  assert.equal(closed.commitmentsCents, 45000);
+  assert.equal(closed.remainingCents, 0);
+  assert.equal(closed.paidCents, 45000);
+});
+
 test("gasto extra no cartão aumenta a fatura e o extra no Pix fica fora dela", () => {
   const expenses = expensesFor(1);
   expenses.push(

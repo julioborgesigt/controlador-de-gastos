@@ -959,3 +959,15 @@ body.is-working::before {
   flex: 1;
   margin-top: 0;
 }
+
+.partial-list { display: flex; flex-direction: column; gap: 8px; margin: 0 0 16px; }
+
+.partial-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.partial-line .linkish { flex: none; }

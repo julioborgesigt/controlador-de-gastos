@@ -1,6 +1,15 @@
 export type Section = "card" | "fixed" | "extra";
 export type Payment = "pix" | "card" | "debit" | "cash";
 
+export type PartialPayment = {
+  id: string;
+  amountCents: number;
+  payment: Payment;
+  cardLabel: string | null;
+  installment: string | null;
+  createdAt: string;
+};
+
 export type Expense = {
   id: string;
   monthId: string;
@@ -16,7 +25,18 @@ export type Expense = {
   sortOrder: number;
   source: "sheet" | "user";
   createdAt?: string;
+  partials?: PartialPayment[];
 };
+
+export function partialSplit(partials: readonly PartialPayment[]): { cashPaid: number; cardPaid: number; total: number } {
+  let cashPaid = 0;
+  let cardPaid = 0;
+  for (const partial of partials) {
+    if (partial.payment === "card") cardPaid += partial.amountCents;
+    else cashPaid += partial.amountCents;
+  }
+  return { cashPaid, cardPaid, total: cashPaid + cardPaid };
+}
 
 export type Totals = {
   invoiceCents: number;
@@ -53,6 +73,16 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
     if (expense.section === "card") invoiceCents += expense.amountCents;
     if (expense.section === "extra" && expense.payment === "card") extrasCardCents += expense.amountCents;
     if (expense.section === "extra" && expense.payment !== "card") extrasPixCents += expense.amountCents;
+    const partials = expense.partials ?? [];
+    if (expense.section === "fixed" && !isFixedOnCard(expense) && partials.length) {
+      const split = partialSplit(partials);
+      const size = expense.paid ? split.total : Math.max(expense.amountCents, split.total);
+      fixedCents += size;
+      fixedOnCardCents += split.cardPaid;
+      paidCents += split.cashPaid;
+      if (!expense.paid) remainingCents += Math.max(0, size - split.cardPaid - split.cashPaid);
+      continue;
+    }
     if (expense.section === "fixed") {
       fixedCents += expense.amountCents;
       if (isFixedOnCard(expense)) fixedOnCardCents += expense.amountCents;
