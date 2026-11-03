@@ -929,6 +929,8 @@ function summary(data) {
       el("div", { class: "metric" }, [
         el("small", {}, "Saldo previsto"),
         el("strong", { class: totals.balanceCents < 0 ? "negative" : "positive" }, money(totals.balanceCents)),
+        el("small", {}, "Saldo parcial"),
+        el("strong", { class: totals.partialBalanceCents < 0 ? "negative" : "positive" }, money(totals.partialBalanceCents)),
       ]),
     ]),
     jump("cartoes", "Fatura do cartão", money(totals.faturaCents), totals.extrasCardCents

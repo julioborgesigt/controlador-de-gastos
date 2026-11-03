@@ -86,7 +86,8 @@ test("planilha de novembro de 2026 a outubro de 2027 fecha com o app", () => {
     const totals = computeTotals(expenses, month.incomeCents);
     const row = expected[index];
     assert.equal(totals.commitmentsCents, (row?.commitments ?? 0) - held, month.id);
-    assert.equal(totals.balanceCents, (row?.balance ?? 0) + held, month.id);
+    assert.equal(totals.balanceCents, row?.balance, month.id);
+    assert.equal(totals.partialBalanceCents, (row?.balance ?? 0) + held, month.id);
     assert.equal(totals.fixedOnCardCents, 0, month.id);
   });
 });
@@ -163,6 +164,8 @@ test("pagamento parcial deixa a feira em aberto e não soma o cartão duas vezes
   assert.equal(open.remainingCents, 15000);
   assert.equal(open.faturaCents, 15000);
   assert.equal(open.commitmentsCents, 35000);
+  assert.equal(open.partialBalanceCents, -35000);
+  assert.equal(open.balanceCents, -80000);
   assert.equal(open.fixedAllSettled, false);
 
   feira.paid = true;
