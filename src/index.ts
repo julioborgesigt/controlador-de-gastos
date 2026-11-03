@@ -55,6 +55,7 @@ import {
   insertCardPurchase,
   payRecurringOnCard,
   payCardInvoice,
+  undoCardInvoice,
   listCards,
   listMonths,
   resetOwnerData,
@@ -492,11 +493,22 @@ app.post("/api/cards/:id/payoff", async (c) => {
   if (!isMonthId(body.monthId) || !(await getMonth(c.env.DB, writer.scope.ownerId, body.monthId))) {
     return c.json({ error: "Mês não encontrado." }, 404);
   }
-  const mode = body.mode === "pix" || body.mode === "installments" ? body.mode : "";
+  const mode = body.mode === "pix" || body.mode === "installments" || body.mode === "undo" ? body.mode : "";
   if (!mode) return c.json({ error: "Escolha Pago no Pix ou Pago parcelado." }, 400);
+  if (mode === "undo") {
+    const undone = await undoCardInvoice(c.env.DB, {
+      ownerId: writer.scope.ownerId,
+      cardId: card.id,
+      cardName: card.name,
+      monthId: body.monthId,
+    });
+    if (!undone.ok) return c.json({ error: undone.error }, 400);
+    return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.monthId), writer.scope));
+  }
   const months = await listMonths(c.env.DB, writer.scope.ownerId);
   const paid = await payCardInvoice(c.env.DB, {
     ownerId: writer.scope.ownerId,
+    cardId: card.id,
     monthId: body.monthId,
     cardName: card.name,
     mode,

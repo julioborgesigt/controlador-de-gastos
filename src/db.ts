@@ -751,10 +751,34 @@ export async function copyFromPreviousMonth(db: D1Database, ownerId: string, mon
   return inserts.length;
 }
 
+function payoffMarker(cardId: string, monthId: string): string {
+  return `quitado-cartao:${cardId}:${monthId}`;
+}
+
+function planMarker(cardId: string, monthId: string): string {
+  return `parcelamento:${cardId}:${monthId}`;
+}
+
+function noteWithMarker(note: string | null, marker: string): string {
+  const lines = String(note || "").split("\n").map((line) => line.trim()).filter(Boolean);
+  if (!lines.includes(marker)) lines.push(marker);
+  return lines.join("\n");
+}
+
+function noteWithoutMarker(note: string | null, marker: string): string | null {
+  const lines = String(note || "").split("\n").map((line) => line.trim()).filter((line) => line && line !== marker);
+  return lines.length ? lines.join("\n") : null;
+}
+
+function hasMarker(note: string | null, marker: string): boolean {
+  return String(note || "").split("\n").map((line) => line.trim()).includes(marker);
+}
+
 export async function payCardInvoice(
   db: D1Database,
   input: {
     ownerId: string;
+    cardId: string;
     monthId: string;
     cardName: string;
     mode: "pix" | "installments";
@@ -785,12 +809,16 @@ export async function payCardInvoice(
       return { ok: false, error: "O parcelamento passa do período gerenciado. Aumente o período ou reduza as parcelas." };
     }
   }
+  const settled = payoffMarker(input.cardId, input.monthId);
   for (const expense of open) {
-    await db.prepare("UPDATE expenses SET paid = 1 WHERE owner_id = ? AND id = ?").bind(input.ownerId, expense.id).run();
+    await db.prepare("UPDATE expenses SET paid = 1, note = ? WHERE owner_id = ? AND id = ?")
+      .bind(noteWithMarker(expense.note, settled), input.ownerId, expense.id)
+      .run();
   }
   if (plan?.ok) {
     const createdAt = new Date().toISOString();
     const name = `Parcelamento ${input.cardName}`.slice(0, 120);
+    const marker = planMarker(input.cardId, input.monthId);
     for (const part of plan.schedule) {
       const sort = await db
         .prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM expenses WHERE owner_id = ? AND month_id = ?")
@@ -800,13 +828,56 @@ export async function payCardInvoice(
         .prepare(
           `INSERT INTO expenses
             (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-           VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, NULL, ?, ?, 'user', ?)`,
+           VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, ?, ?, 'user', ?)`,
         )
-        .bind(crypto.randomUUID(), input.ownerId, part.monthId, name, part.amountCents, input.cardName, part.installment, sort?.next ?? 1000, createdAt)
+        .bind(crypto.randomUUID(), input.ownerId, part.monthId, name, part.amountCents, input.cardName, marker, part.installment, sort?.next ?? 1000, createdAt)
         .run();
     }
   }
   return { ok: true, paidCents: balance };
+}
+
+export async function undoCardInvoice(
+  db: D1Database,
+  input: { ownerId: string; cardId: string; cardName: string; monthId: string },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const rows = await db.prepare(
+    "SELECT id, month_id, note, name, card_label FROM expenses WHERE owner_id = ?",
+  ).bind(input.ownerId).all<{ id: string; month_id: string; note: string | null; name: string; card_label: string | null }>();
+  const all = rows.results ?? [];
+  const settled = payoffMarker(input.cardId, input.monthId);
+  const planned = planMarker(input.cardId, input.monthId);
+  const tagged = all.filter((row) => hasMarker(row.note, settled));
+  const installments = all.filter((row) => hasMarker(row.note, planned));
+  if (tagged.length || installments.length) {
+    for (const row of tagged) {
+      await db.prepare("UPDATE expenses SET paid = 0, note = ? WHERE owner_id = ? AND id = ?")
+        .bind(noteWithoutMarker(row.note, settled), input.ownerId, row.id)
+        .run();
+    }
+    for (const row of installments) {
+      await db.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(input.ownerId, row.id).run();
+    }
+    return { ok: true };
+  }
+  const monthExpenses = await listExpenses(db, input.ownerId, input.monthId);
+  const paidLines = monthExpenses.filter((expense) => (
+    cardKey(expense.cardLabel) === cardKey(input.cardName)
+    && expense.paid
+    && expense.amountCents > 0
+    && !(expense.section === "fixed" && (expense.onCard || expense.payment === "card"))
+  ));
+  const legacy = all.filter((row) => row.name === `Parcelamento ${input.cardName}` && cardKey(row.card_label) === cardKey(input.cardName));
+  if (!paidLines.length && !legacy.length) {
+    return { ok: false, error: "Não há pagamento deste cartão para desfazer neste mês." };
+  }
+  for (const expense of paidLines) {
+    await db.prepare("UPDATE expenses SET paid = 0 WHERE owner_id = ? AND id = ?").bind(input.ownerId, expense.id).run();
+  }
+  for (const row of legacy) {
+    await db.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(input.ownerId, row.id).run();
+  }
+  return { ok: true };
 }
 
 export async function ensureMonth(db: D1Database, ownerId: string, monthId: string): Promise<void> {

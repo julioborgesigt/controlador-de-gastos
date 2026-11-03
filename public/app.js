@@ -1920,17 +1920,26 @@ document.addEventListener("pointerdown", (event) => {
 function cardManageRow(card, amount, expenses) {
   const count = expenses.filter((expense) => shownExpense(expense) && !linkedLivingCost(expense)).length;
   const blocked = Number(card.expenseCount) > 0;
-  const front = el("article", { class: "jump card-manage" }, [
+  const balance = openCardBalance(expenses);
+  const settled = amount > 0 && balance === 0;
+  const front = el("article", { class: `jump card-manage${settled ? " paid" : ""}` }, [
     el("button", { type: "button", class: "item-main", onclick: () => openCard(card.id) }, [
-      el("div", { class: "row-between" }, [el("span", {}, card.name), el("strong", {}, money(amount))]),
+      el("div", { class: "row-between" }, [
+        el("span", { class: "card-title" }, card.name),
+        el("div", { class: "item-end" }, [
+          amount > 0 ? el("span", { class: settled ? "badge paid" : "badge open" }, settled ? "Pago" : "Em aberto") : "",
+          el("strong", { class: "amount" }, money(amount)),
+        ]),
+      ]),
       el("small", {}, [card.dueDay ? `Vence dia ${card.dueDay}` : "", count === 0 ? "Nenhum gasto neste mês" : `${count} ${count === 1 ? "gasto" : "gastos"}`].filter(Boolean).join(" · ")),
     ]),
   ]);
   if (!editable()) return front;
-  const balance = openCardBalance(expenses);
   const leads = balance > 0 ? [
     { label: "Pago\nno Pix", tone: "pay", run: () => payCardPix(card) },
     { label: "Pago\nparcelado", tone: "send", run: () => openCardPayoff(card, balance) },
+  ] : settled ? [
+    { label: "Desfazer", tone: "undo", commit: true, run: () => undoCardPayment(card) },
   ] : null;
   return swipeRow(front, {
     card: true,
@@ -2060,6 +2069,24 @@ function openCardBalance(expenses) {
   return expenses
     .filter((expense) => !fixedOnCard(expense) && !expense.paid && expense.amountCents > 0)
     .reduce((sum, expense) => sum + expense.amountCents, 0);
+}
+
+function undoCardPayment(card) {
+  state.error = "";
+  setWorking(true, "Desfazendo...");
+  request(`/api/cards/${card.id}/payoff`, {
+    method: "POST",
+    body: { mode: "undo", monthId: state.monthId },
+  }).then((data) => {
+    state.data = data;
+    rememberMonth(data);
+    state.notice = `Pagamento de ${card.name} desfeito.`;
+  }).catch((error) => {
+    state.error = messageOf(error);
+  }).finally(() => {
+    setWorking(false);
+    render();
+  });
 }
 
 function payCardPix(card) {
