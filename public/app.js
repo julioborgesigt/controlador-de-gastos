@@ -1,3 +1,4 @@
+import { dueDatePassed, invoiceDueDate } from "./card-due.js";
 import { quoteInstallments, solveInstallmentTriple } from "./installment-link.js";
 
 function applyTheme(theme) {
@@ -1053,6 +1054,14 @@ function confirmCopy() {
       cancel: "Cancelar",
     };
   }
+  if (state.confirm === "past-due") {
+    return {
+      title: "Vencimento já passou",
+      body: state.pastDue?.body || "O vencimento desta fatura já passou. Quer registrar mesmo assim?",
+      action: "Registrar mesmo assim",
+      cancel: "Não registrar",
+    };
+  }
   if (state.confirm === "settle") {
     return {
       title: "Quitar o que falta",
@@ -1635,6 +1644,12 @@ async function runConfirm() {
     await removeCard(state.confirmCard);
     return;
   }
+  if (kind === "past-due") {
+    if (state.sheet && state.pastDue) state.sheet.acceptedDueKey = state.pastDue.key;
+    render();
+    await saveSheet({ preventDefault() {} });
+    return;
+  }
   if (kind === "copy") await copyPrevious();
   else if (kind === "settle") await settle("pay-remaining");
   else if (kind === "reopen") await settle("reopen");
@@ -2025,6 +2040,46 @@ async function removeCard(card) {
 
 function sameCardName(left, right) {
   return String(left || "").trim().toLocaleLowerCase("pt-BR") === String(right || "").trim().toLocaleLowerCase("pt-BR");
+}
+
+function localToday() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
+}
+
+function formatDueDate(iso) {
+  const [year, month, day] = iso.split("-").map(Number);
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+function monthPhrase(monthId) {
+  const month = (state.data?.months || []).find((item) => item.id === monthId);
+  const [name, year] = String(month?.label || "").split(" ");
+  return name && year ? `${name.toLowerCase()} de ${year}` : monthId;
+}
+
+function pastDueWarning(cardName, monthId) {
+  const card = (state.data?.cards || []).find((item) => sameCardName(item.name, cardName));
+  if (!card?.dueDay || !monthId) return null;
+  const due = invoiceDueDate(monthId, card.dueDay);
+  if (!due || !dueDatePassed(monthId, card.dueDay, localToday())) return null;
+  return {
+    key: `${card.name}|${monthId}|${due}`,
+    body: `O ${card.name} vence dia ${card.dueDay}. A fatura de ${monthPhrase(monthId)} venceu em ${formatDueDate(due)}. Quer registrar mesmo assim?`,
+  };
+}
+
+function acceptPastDue(warning) {
+  if (!warning) return true;
+  if (state.sheet?.acceptedDueKey === warning.key) return true;
+  state.pastDue = warning;
+  state.confirm = "past-due";
+  return false;
 }
 
 function cardJump(name, amount, expenses, onclick) {
@@ -3348,6 +3403,7 @@ async function saveSheet(event) {
       } else if (!amountCents || amountCents <= 0) {
         throw new Error("Este gasto está sem valor. Informe outro valor.");
       }
+      if (!acceptPastDue(pastDueWarning(draft.cardLabel, draft.invoiceMonthId))) return;
       setWorking(true, "Lançando na fatura...");
       state.data = await request(`/api/expenses/${draft.id}/card-payment`, {
         method: "POST",
@@ -3434,6 +3490,7 @@ async function saveSheet(event) {
       if (!Number.isInteger(count) || count < 2 || count > 48) throw new Error("Informe de 2 a 48 parcelas.");
       if (installmentCents === null || installmentCents <= 0) throw new Error("Informe o valor da parcela.");
       if (!draft.startMonthId) throw new Error("Escolha o mês em que o parcelamento começa.");
+      if (!acceptPastDue(pastDueWarning(draft.cardName, draft.startMonthId))) return;
       setWorking(true, "Parcelando...");
       state.data = await request(`/api/cards/${draft.cardId}/payoff`, {
         method: "POST",
@@ -3503,6 +3560,9 @@ async function saveSheet(event) {
       const startMonthId = surpriseCard ? (draft.invoiceMonthId || "") : state.monthId;
       if (surpriseCard && !startMonthId) throw new Error("Escolha a fatura em que o valor entra.");
       const invoiceLabel = (state.data?.months || []).find((month) => month.id === startMonthId)?.label || "";
+      const dueMonth = livingOnCard ? draft.invoiceMonthId : surpriseCard ? startMonthId : onCardPurchase ? state.monthId : "";
+      const dueCard = dueMonth ? draft.cardLabel : "";
+      if (dueCard && !acceptPastDue(pastDueWarning(dueCard, dueMonth))) return;
       setWorking(true, "Salvando...");
       const body = {
         name: draft.name,
@@ -3525,6 +3585,7 @@ async function saveSheet(event) {
       if (draft.mode === "create") {
         state.data = await request("/api/expenses", {
           method: "POST",
+          signal: AbortSignal.timeout(25000),
           body: {
             ...body,
             monthId: startMonthId,

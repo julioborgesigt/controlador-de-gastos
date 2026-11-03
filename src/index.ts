@@ -605,58 +605,21 @@ app.post("/api/expenses", async (c) => {
   if (livingCard && !ids.length) {
     return c.json({ error: "A primeira fatura precisa estar dentro dos meses da conta." }, 400);
   }
-  const createdAt = new Date().toISOString();
-  for (const monthId of ids) {
-    if (!(await getMonth(c.env.DB, writer.scope.ownerId, monthId))) {
-      return c.json({ error: "Mês não encontrado." }, 404);
-    }
-    const sort = await c.env.DB.prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM expenses WHERE owner_id = ? AND month_id = ?")
-      .bind(writer.scope.ownerId, monthId)
-      .first<{ next: number }>();
-    const fixedId = crypto.randomUUID();
-    const nextSort = sort?.next ?? 1000;
-    await c.env.DB.prepare(
-      `INSERT INTO expenses
-        (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?)`,
-    )
-      .bind(
-        fixedId,
-        writer.scope.ownerId,
-        monthId,
-        parsed.value.name,
-        parsed.value.section,
-        parsed.value.amountCents,
-        parsed.value.payment,
-        parsed.value.onCard ? 1 : 0,
-        parsed.value.cardLabel,
-        livingCard ? 1 : parsed.value.paid ? 1 : 0,
-        parsed.value.note,
-        parsed.value.installment,
-        nextSort,
-        createdAt,
-      )
-      .run();
-    if (livingCard) {
-      await c.env.DB.prepare(
-        `INSERT INTO expenses
-          (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-         VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, NULL, ?, 'user', ?)`,
-      )
-        .bind(
-          crypto.randomUUID(),
-          writer.scope.ownerId,
-          monthId,
-          parsed.value.name,
-          parsed.value.amountCents,
-          parsed.value.cardLabel,
-          `origem:${fixedId}`,
-          nextSort + 1,
-          createdAt,
-        )
-        .run();
-    }
-  }
+  const inserted = await insertRepeatedExpenses(c.env.DB, {
+    ownerId: writer.scope.ownerId,
+    monthIds: ids,
+    name: parsed.value.name,
+    section: parsed.value.section,
+    amountCents: parsed.value.amountCents,
+    payment: parsed.value.payment,
+    onCard: parsed.value.onCard,
+    cardLabel: parsed.value.cardLabel,
+    paid: livingCard ? true : parsed.value.paid,
+    note: parsed.value.note,
+    installment: parsed.value.installment,
+    livingCard,
+  });
+  if (!inserted.ok) return c.json({ error: inserted.error }, 404);
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.monthId), writer.scope), 201);
 });
 
@@ -893,6 +856,97 @@ function isPayment(value: unknown): value is Payment {
 
 function isCents(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= -100_000_000 && value <= 100_000_000;
+}
+
+async function insertRepeatedExpenses(
+  db: D1Database,
+  input: {
+    ownerId: string;
+    monthIds: string[];
+    name: string;
+    section: Section;
+    amountCents: number;
+    payment: Payment;
+    onCard: boolean;
+    cardLabel: string | null;
+    paid: boolean;
+    note: string | null;
+    installment: string | null;
+    livingCard: boolean;
+  },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const ids = input.monthIds;
+  if (!ids.length) return { ok: false, error: "Mês não encontrado." };
+  const marks = ids.map(() => "?").join(", ");
+  const known = await db
+    .prepare(`SELECT id FROM months WHERE owner_id = ? AND id IN (${marks})`)
+    .bind(input.ownerId, ...ids)
+    .all<{ id: string }>();
+  const knownIds = new Set((known.results ?? []).map((row) => row.id));
+  if (ids.some((id) => !knownIds.has(id))) return { ok: false, error: "Mês não encontrado." };
+  const sorts = await db
+    .prepare(
+      `SELECT month_id, COALESCE(MAX(sort_order), 0) AS max_sort
+       FROM expenses WHERE owner_id = ? AND month_id IN (${marks}) GROUP BY month_id`,
+    )
+    .bind(input.ownerId, ...ids)
+    .all<{ month_id: string; max_sort: number }>();
+  const nextByMonth = new Map((sorts.results ?? []).map((row) => [row.month_id, Number(row.max_sort) || 0]));
+  const createdAt = new Date().toISOString();
+  const statements: D1PreparedStatement[] = [];
+  for (const monthId of ids) {
+    const nextSort = (nextByMonth.get(monthId) ?? 0) + 1;
+    const fixedId = crypto.randomUUID();
+    statements.push(
+      db
+        .prepare(
+          `INSERT INTO expenses
+            (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?)`,
+        )
+        .bind(
+          fixedId,
+          input.ownerId,
+          monthId,
+          input.name,
+          input.section,
+          input.amountCents,
+          input.payment,
+          input.onCard ? 1 : 0,
+          input.cardLabel,
+          input.paid ? 1 : 0,
+          input.note,
+          input.installment,
+          nextSort,
+          createdAt,
+        ),
+    );
+    if (input.livingCard) {
+      statements.push(
+        db
+          .prepare(
+            `INSERT INTO expenses
+              (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
+             VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, NULL, ?, 'user', ?)`,
+          )
+          .bind(
+            crypto.randomUUID(),
+            input.ownerId,
+            monthId,
+            input.name,
+            input.amountCents,
+            input.cardLabel,
+            `origem:${fixedId}`,
+            nextSort + 1,
+            createdAt,
+          ),
+      );
+    }
+  }
+  for (let index = 0; index < statements.length; index += 80) {
+    await db.batch(statements.slice(index, index + 80));
+  }
+  return { ok: true };
 }
 
 function recurringMonthIds(body: JsonBody, section: string): { ok: true; ids: string[] } | { ok: false; error: string } {
