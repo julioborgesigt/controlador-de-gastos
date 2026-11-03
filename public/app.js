@@ -934,7 +934,7 @@ function summary(data) {
     jump("cartoes", "Fatura do cartão", money(totals.faturaCents), totals.extrasCardCents
       ? `${money(totals.invoiceCents)} previstos + ${money(totals.extrasCardCents)} em imprevistos`
       : "Nubank, Neon e linhas da fatura"),
-    jump("casa", "Custo de vida", money(totals.fixedCents), `${money(totals.fixedOnCardCents)} no cartão · ${money(totals.fixedCashCents)} em Pix ou espécie`),
+    jump("casa", "Custo de vida", money(livingHeadline(totals).amount), livingHeadline(totals).detail),
     jump("extras", "Imprevisto", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
     editable() && totals.remainingCents > 0
       ? el("button", { class: "primary", type: "button", onclick: () => askConfirm("settle") }, "Quitar o que falta")
@@ -2111,7 +2111,7 @@ function shownExpense(expense) {
 }
 
 function fixedOnCard(expense) {
-  return expense.section === "fixed" && (expense.onCard || expense.payment === "card");
+  return expense.section === "fixed" && expense.onCard;
 }
 
 function cardMirror(expense, section) {
@@ -2235,7 +2235,11 @@ function sectionList(data, section) {
   const all = data.expenses.filter((expense) => belongs(expense, section));
   const visible = all.filter((expense) => state.showEmpty || expense.amountCents !== 0 || expense.source === "user");
   const hidden = all.length - visible.length;
-  const total = section === "card" ? totals.faturaCents : section === "fixed" ? totals.fixedCents : totals.extrasCardCents + totals.extrasPixCents;
+  const total = section === "card"
+    ? totals.faturaCents
+    : section === "fixed"
+      ? (totals.fixedAllSettled ? totals.fixedLaunchedCents : totals.fixedForecastCents)
+      : totals.extrasCardCents + totals.extrasPixCents;
   const children = [
     el("div", { class: "section-head" }, [
       el("p", { class: "eyebrow" }, section === "fixed" ? "Custo de vida" : data.month.label),
@@ -2245,7 +2249,7 @@ function sectionList(data, section) {
     ]),
   ];
   if (section === "fixed") {
-    children.push(el("p", { class: "note" }, "Puxe o card para a direita para pagar no Pix ou enviar pro cartão. Enviar pro cartão pergunta o cartão, o valor e o parcelamento."));
+    children.push(el("p", { class: "note" }, "O valor cadastrado é previsto. Pague no Pix, envie pro cartão ou lance um parcial para ele entrar na conta. O valor pode ser diferente do cadastrado."));
   }
   if (section === "extra") {
     children.push(el("p", { class: "note" }, "Dê um nome ao imprevisto e diga se ele saiu no Pix, débito, espécie ou cartão. No cartão, escolha a fatura."));
@@ -2649,24 +2653,43 @@ function belongs(expense, section) {
   return expense.section === "fixed";
 }
 
+function livingHeadline(totals) {
+  if (totals.fixedAllSettled) {
+    return { amount: totals.fixedLaunchedCents, detail: "Valor consolidado" };
+  }
+  return {
+    amount: totals.fixedForecastCents,
+    detail: `Parcial ${money(totals.fixedLaunchedCents)}`,
+  };
+}
+
 function blurb(section, totals) {
   if (section === "card" && totals.fixedOnCardCents) {
     return `${money(totals.fixedOnCardCents)} de custo de vida já foram lançados no cartão e não somam de novo.`;
   }
   if (section === "card") return "Linhas previstas da planilha mais os gastos lançados no cartão.";
-  if (section === "fixed") return "O que se repete na manutenção do mês.";
+  if (section === "fixed" && totals.fixedAllSettled) return "Todas as despesas deste mês foram quitadas.";
+  if (section === "fixed") return "O previsto só entra na fatura ou sai da receita quando você lançar o pagamento.";
   return "Imprevistos deste mês, fora da projeção.";
 }
 
 function costSplit(totals) {
+  if (totals.fixedAllSettled) {
+    return el("div", { class: "cost-split" }, [
+      el("div", {}, [
+        el("small", {}, "Consolidado"),
+        el("strong", {}, money(totals.fixedLaunchedCents)),
+      ]),
+    ]);
+  }
   return el("div", { class: "cost-split" }, [
     el("div", {}, [
-      el("small", {}, "No cartão"),
-      el("strong", {}, money(totals.fixedOnCardCents)),
+      el("small", {}, "Previsto"),
+      el("strong", {}, money(totals.fixedForecastCents)),
     ]),
     el("div", {}, [
-      el("small", {}, "Pix ou espécie"),
-      el("strong", {}, money(totals.fixedCashCents)),
+      el("small", {}, "Parcial"),
+      el("strong", {}, money(totals.fixedLaunchedCents)),
     ]),
   ]);
 }
@@ -2686,7 +2709,10 @@ function expenseRow(expense, section, options = {}) {
     if (editable()) openEdit(expense, { cardExpense: lockedCard });
   };
   const mirror = cardMirror(expense, section);
+  const forecast = section === "fixed" && !onInvoice && !expense.paid && !partials.length;
   const tone = mirror && !(onInvoice && section === "card") ? " on-card" : onInvoice && section === "card" ? " aside" : expense.paid ? " paid" : " open";
+  const badgeClass = mirror ? "badge on-card" : expense.paid ? "badge paid" : forecast ? "badge" : "badge open";
+  const badgeText = mirror ? "Tá no cartão" : expense.paid ? "Pago" : forecast ? "Previsto" : "Em aberto";
   const front = el("article", { class: `item${tone}` }, [
     el("div", { class: "item-copy" }, [
       el("button", { type: "button", class: "item-main", onclick: () => openExpenseInfo(expense, section) }, [
@@ -2697,23 +2723,27 @@ function expenseRow(expense, section, options = {}) {
       expense.section === "extra" && expense.payment !== "card" ? el("span", { class: "badge pix" }, paymentLabel(expense.payment)) : "",
     ]),
     el("div", { class: "item-end" }, [
-      mirror
-        ? el("span", { class: "badge on-card" }, "Tá no cartão")
-        : el("span", { class: expense.paid ? "badge paid" : "badge open" }, expense.paid ? "Pago" : "Em aberto"),
+      el("span", { class: badgeClass }, badgeText),
       el("span", { class: `amount${onInvoice && section === "card" ? " aside" : ""}` }, expense.amountCents === 0 ? "—" : money(expense.amountCents)),
     ]),
   ]);
   if (!editable()) return front;
   const living = section === "fixed" && !onInvoice;
+  const cardFirst = expense.payment === "card" && !expense.onCard;
   const leads = living
     ? [
-      {
-        label: expense.paid ? "Desfazer" : expense.payment === "cash" ? "Pago\nem espécie" : "Pago\nno Pix",
-        tone: expense.paid ? "undo" : "pay",
-        commit: expense.paid,
-        run: () => expense.paid ? patchExpense(expense, { paid: false }) : openCloseLiving(expense),
-      },
-      expense.paid ? null : { label: "Enviar pro\ncartão", tone: "send", run: () => openCardPay(expense) },
+      expense.paid
+        ? { label: "Desfazer", tone: "undo", commit: true, run: () => patchExpense(expense, { paid: false }) }
+        : cardFirst
+          ? { label: "Pago\nno cartão", tone: "send", run: () => openCardPay(expense) }
+          : {
+            label: expense.payment === "cash" ? "Pago\nem espécie" : "Pago\nno Pix",
+            tone: "pay",
+            run: () => openCloseLiving(expense),
+          },
+      expense.paid ? null : cardFirst
+        ? { label: "Pago\nno Pix", tone: "pay", run: () => openCloseLiving(expense) }
+        : { label: "Enviar pro\ncartão", tone: "send", run: () => openCardPay(expense) },
     ].filter(Boolean)
     : null;
   return swipeRow(front, {
@@ -2761,11 +2791,11 @@ function livingPay(draft) {
   const payment = draft.payment === "cash" || draft.payment === "card" ? draft.payment : "pix";
   return el("div", {}, [
     el("div", { class: "field" }, [
-      el("label", {}, "Como é pago"),
+      el("label", {}, "Como pretende pagar"),
       segmented("payment", [["pix", "Pix"], ["cash", "Espécie"], ["card", "Cartão"]], payment),
     ]),
     payment === "card" ? cardSelect(draft) : "",
-    payment === "card" ? invoiceMonthField(draft, "A primeira fatura em que entra:") : "",
+    el("p", { class: "muted" }, "O valor fica previsto. Ele só entra na fatura ou sai da receita quando você lançar Pago no Pix, Enviar pro cartão ou Pagamento parcial. Na hora, o valor pode ser outro."),
   ]);
 }
 
@@ -2773,9 +2803,7 @@ function recurringSpan(draft) {
   return el("div", { class: "field" }, [
     el("label", {}, "Lançar em"),
     segmented("repeat", [["all", "Todos os meses"], ["period", "Um período"]], draft.repeat || "all"),
-    el("p", { class: "muted" }, draft.payment === "card"
-      ? "No cartão, o valor entra na fatura a partir da primeira fatura escolhida e segue até o fim do período. Em Custo de vida ele fica como “Tá no cartão”, só para controle, e não soma de novo."
-      : draft.repeat === "period"
+    el("p", { class: "muted" }, draft.repeat === "period"
         ? "A conta entra em cada mês do intervalo, em aberto."
         : "Por padrão, a conta entra em todos os meses do período, em aberto."),
     draft.repeat === "period"
@@ -2896,15 +2924,23 @@ function closeExpenseInfo() {
   render();
 }
 
+function paidPartialCents(expense) {
+  return (expense.partials || []).reduce((sum, item) => sum + item.amountCents, 0);
+}
+
 function openCloseLiving(expense) {
+  const already = paidPartialCents(expense);
+  const rest = Math.max(0, expense.amountCents - already);
   state.expenseInfo = null;
   state.sheet = {
     mode: "close-living",
     id: expense.id,
     name: expense.name,
-    described: expense.amountCents,
+    planned: expense.amountCents,
+    described: rest,
+    already,
     payment: expense.payment === "cash" ? "cash" : "pix",
-    amountChoice: "registered",
+    amountChoice: already > 0 ? (rest > 0 ? "rest" : "none") : "registered",
     amount: "",
     partials: expense.partials || [],
   };
@@ -3051,13 +3087,16 @@ function openCardPay(expense) {
     return;
   }
   const selected = cards.some((card) => card.name === expense.cardLabel) ? expense.cardLabel : (cards.length === 1 ? cards[0].name : "");
+  const already = paidPartialCents(expense);
+  const rest = Math.max(0, expense.amountCents - already);
   state.sheet = {
     mode: "card-pay",
     id: expense.id,
-    described: expense.amountCents,
+    described: already > 0 ? rest : expense.amountCents,
+    already,
     alias: expense.name,
     cardLabel: selected,
-    amountChoice: "same",
+    amountChoice: already > 0 ? (rest > 0 ? "same" : "none") : "same",
     chargedAmount: "",
     billing: "once",
     installmentCount: "2",
@@ -3310,30 +3349,40 @@ function sheet() {
     );
   } else if (draft.mode === "card-pay") {
     const described = money(draft.described || 0);
+    const already = draft.already || 0;
+    const choices = already > 0
+      ? [
+        draft.described > 0 ? ["same", `O restante · ${described}`] : null,
+        ["other", "Outro valor"],
+        ["none", "Sem acréscimo"],
+      ].filter(Boolean)
+      : [["same", `O descrito · ${described}`], ["other", "Outro valor"]];
     panel.append(
       el("h2", {}, "Enviar pro cartão"),
-      el("p", { class: "muted" }, `Na lista este gasto está como ${described}. O apelido é o nome que entra na fatura.`),
+      el("p", { class: "muted" }, already > 0
+        ? `Já pago: ${money(already)}. O sugerido é o restante. A fatura só recebe o valor que você confirmar.`
+        : `Na lista este gasto está como ${described}. O valor só entra na fatura quando você confirmar, e pode ser diferente do cadastrado.`),
       field("Apelido na fatura", "alias", draft.alias, "text", "Faculdade, energia..."),
-      cardSelect(draft),
+      draft.amountChoice === "none" ? "" : cardSelect(draft),
       el("div", { class: "field" }, [
         el("label", {}, "O valor cobrado é"),
-        segmented("amountChoice", [["same", `O descrito · ${described}`], ["other", "Outro valor"]], draft.amountChoice),
+        segmented("amountChoice", choices, draft.amountChoice),
       ]),
-      draft.amountChoice === "other" || draft.billing === "installments"
+      draft.amountChoice !== "none" && (draft.amountChoice === "other" || draft.billing === "installments")
         ? field("Valor cobrado", "chargedAmount", draft.chargedAmount, "decimal")
         : "",
-      el("div", { class: "field" }, [
+      draft.amountChoice === "none" ? "" : el("div", { class: "field" }, [
         el("label", {}, "Parcelamento"),
         segmented("billing", [["once", "À vista"], ["installments", "Parcelado"]], draft.billing),
       ]),
-      draft.billing === "installments"
+      draft.amountChoice !== "none" && draft.billing === "installments"
         ? el("div", { class: "pair" }, [
           field("Quantidade de parcelas", "installmentCount", draft.installmentCount || "2", "numeric"),
           field("Valor da parcela", "installmentAmount", draft.installmentAmount || "", "decimal"),
         ])
         : "",
-      invoiceMonthField(draft),
-      el("p", { class: "muted", id: "installment-preview" }, cardPayPreview(draft)),
+      draft.amountChoice === "none" ? "" : invoiceMonthField(draft),
+      draft.amountChoice === "none" ? "" : el("p", { class: "muted", id: "installment-preview" }, cardPayPreview(draft)),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
         el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Lançando..." : "Lançar na fatura"),
@@ -3368,15 +3417,22 @@ function sheet() {
     );
   } else if (draft.mode === "close-living") {
     const method = draft.payment === "cash" ? "em espécie" : "no Pix";
-    const already = (draft.partials || []).reduce((sum, item) => sum + item.amountCents, 0);
+    const already = draft.already || 0;
+    const choices = already > 0
+      ? [
+        draft.described > 0 ? ["rest", `O restante · ${money(draft.described)}`] : null,
+        ["other", "Outro valor"],
+        ["none", "Sem acréscimo"],
+      ].filter(Boolean)
+      : [["registered", `O cadastrado · ${money(draft.planned)}`], ["other", "Outro valor"]];
     panel.append(
       el("h2", {}, "Encerrar despesa"),
-      el("p", {}, `O pagamento ${method} encerra “${draft.name}” neste mês. Ela deixa de ficar em aberto.`),
+      el("p", {}, `O pagamento ${method} encerra “${draft.name}” neste mês. Só então o valor sai da receita.`),
       el("p", { class: "muted" }, "Para lançar só uma parte e deixar a despesa aberta, feche esta tela, toque na despesa e escolha Pagamento parcial."),
-      already > 0 ? el("p", {}, `Já há ${money(already)} em pagamentos parciais. Este valor soma a eles e encerra a despesa.`) : "",
+      already > 0 ? el("p", {}, `Já pago: ${money(already)}. O sugerido é o que ainda falta do cadastrado.`) : "",
       el("div", { class: "field" }, [
-        el("label", {}, "O valor pago foi o cadastrado?"),
-        segmented("amountChoice", [["registered", `O cadastrado · ${money(draft.described)}`], ["other", "Outro valor"]], draft.amountChoice),
+        el("label", {}, already > 0 ? "Quanto entra neste pagamento?" : "O valor pago foi o cadastrado?"),
+        segmented("amountChoice", choices, draft.amountChoice),
       ]),
       draft.amountChoice === "other" ? field("Valor pago", "amount", draft.amount, "decimal") : "",
       el("div", { class: "actions" }, [
@@ -3584,13 +3640,20 @@ async function saveSheet(event) {
   try {
     if (draft.mode === "passkey") return;
     if (draft.mode === "close-living") {
-      const useRegistered = draft.amountChoice !== "other";
-      const amountCents = useRegistered ? draft.described : parseMoney(draft.amount || "");
-      if (!useRegistered && (amountCents === null || amountCents <= 0)) throw new Error("Informe o valor pago. Exemplo: 75,90");
+      const noAddition = draft.amountChoice === "none";
+      const useRegistered = draft.amountChoice === "registered";
+      const amountCents = noAddition
+        ? 0
+        : useRegistered
+          ? draft.planned
+          : draft.amountChoice === "rest"
+            ? draft.described
+            : parseMoney(draft.amount || "");
+      if (!noAddition && (amountCents === null || amountCents <= 0)) throw new Error("Informe o valor pago. Exemplo: 75,90");
       setWorking(true, "Encerrando...");
       state.data = await request(`/api/expenses/${draft.id}/settle`, {
         method: "POST",
-        body: { useRegistered, amountCents },
+        body: { useRegistered, noAddition, amountCents },
       });
       rememberMonth(state.data);
       state.notice = `“${draft.name}” encerrada neste mês.`;
@@ -3626,6 +3689,17 @@ async function saveSheet(event) {
       return;
     }
     if (draft.mode === "card-pay") {
+      if (draft.amountChoice === "none") {
+        setWorking(true, "Encerrando...");
+        state.data = await request(`/api/expenses/${draft.id}/settle`, {
+          method: "POST",
+          body: { noAddition: true, amountCents: 0, useRegistered: false },
+        });
+        rememberMonth(state.data);
+        state.notice = `“${draft.alias || draft.name}” encerrada sem acréscimo.`;
+        state.sheet = null;
+        return;
+      }
       const alias = String(draft.alias || "").trim();
       if (!alias) throw new Error("Escolha o apelido que vai aparecer na fatura.");
       if (!draft.cardLabel) throw new Error("Escolha o cartão.");
@@ -3660,6 +3734,27 @@ async function saveSheet(event) {
       }
       if (!acceptPastDue(pastDueWarning(draft.cardLabel, draft.invoiceMonthId))) return;
       setWorking(true, "Lançando na fatura...");
+      if ((draft.already || 0) > 0) {
+        const charged = draft.billing === "installments" ? parseMoney(draft.chargedAmount || "") : amountCents;
+        state.data = await request(`/api/expenses/${draft.id}/partials`, {
+          method: "POST",
+          body: {
+            amountCents: charged,
+            payment: "card",
+            cardLabel: draft.cardLabel,
+            installmentCount,
+            invoiceMonthId: draft.invoiceMonthId,
+          },
+        });
+        state.data = await request(`/api/expenses/${draft.id}/settle`, {
+          method: "POST",
+          body: { noAddition: true, amountCents: 0, useRegistered: false },
+        });
+        rememberMonth(state.data);
+        state.notice = `Lancei o restante no cartão e encerrei “${alias}”.`;
+        state.sheet = null;
+        return;
+      }
       state.data = await request(`/api/expenses/${draft.id}/card-payment`, {
         method: "POST",
         body: {
@@ -3790,10 +3885,9 @@ async function saveSheet(event) {
       if (amountCents === null) throw new Error("Informe o valor. Exemplo: 75,90");
       const livingOnCard = draft.mode === "create" && draft.section === "fixed" && !draft.cardExpense && draft.payment === "card";
       if (livingOnCard) {
-        draft.onCard = true;
-        draft.paid = true;
+        draft.onCard = false;
+        draft.paid = false;
         if (!String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão.");
-        if (!draft.invoiceMonthId) throw new Error("Escolha a primeira fatura em que o valor entra.");
       }
       const needsCard = (draft.section === "extra" && draft.payment === "card") || (draft.section === "fixed" && draft.onCard);
       if (needsCard && !String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão deste gasto.");
@@ -3824,7 +3918,7 @@ async function saveSheet(event) {
         amountCents,
         section: draft.section,
         payment: (draft.section === "fixed" && draft.onCard) || livingOnCard ? "card" : draft.payment,
-        onCard: (draft.section === "fixed" && draft.onCard) || livingOnCard,
+        onCard: draft.section === "fixed" && draft.onCard,
         cardLabel: draft.cardLabel,
         note: composeNote(draft.originId, draft.note),
         installment: onCardPurchase ? null : draft.installment,
@@ -3844,16 +3938,11 @@ async function saveSheet(event) {
             ...body,
             monthId: startMonthId,
             monthIds: recurringMonths || undefined,
-            invoiceMonthId: livingOnCard ? draft.invoiceMonthId : undefined,
           },
         });
-        if (livingOnCard) {
-          const label = (state.data?.months || []).find((month) => month.id === draft.invoiceMonthId)?.label || "";
-          state.notice = `Lancei no cartão a partir de ${label}, em ${recurringMonths.length} ${recurringMonths.length === 1 ? "mês" : "meses"}.`;
-        } else if (recurringMonths && recurringMonths.length > 1) {
-          state.notice = draft.repeat === "all"
-            ? `Lancei a conta em todos os ${recurringMonths.length} meses.`
-            : `Lancei a conta em ${recurringMonths.length} meses.`;
+        if (recurringMonths) {
+          const span = recurringMonths.length > 1 ? ` em ${recurringMonths.length} meses` : "";
+          state.notice = `Valor previsto${span}. Lance Pago no Pix, Enviar pro cartão ou Pagamento parcial para ele entrar na conta.`;
         }
         if (surpriseCard && startMonthId !== state.monthId) await loadMonth(state.monthId);
       } else {
