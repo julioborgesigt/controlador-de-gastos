@@ -597,10 +597,13 @@ export async function renameCard(
     throw error;
   }
   const labels = await cardLabelCounts(db, ownerId);
-  for (const item of labels) {
-    if (cardKey(item.label) !== cardKey(current.name) || !item.label || item.label === name) continue;
-    await db.prepare("UPDATE expenses SET card_label = ? WHERE owner_id = ? AND card_label = ?").bind(name, ownerId, item.label).run();
-  }
+  await runStatements(
+    db,
+    labels.flatMap((item) => {
+      if (cardKey(item.label) !== cardKey(current.name) || !item.label || item.label === name) return [];
+      return [db.prepare("UPDATE expenses SET card_label = ? WHERE owner_id = ? AND card_label = ?").bind(name, ownerId, item.label)];
+    }),
+  );
   return { ok: true };
 }
 
@@ -812,30 +815,30 @@ export async function payCardInvoice(
     }
   }
   const settled = payoffMarker(input.cardId, input.monthId);
-  for (const expense of open) {
-    await db.prepare("UPDATE expenses SET paid = 1, note = ? WHERE owner_id = ? AND id = ?")
-      .bind(noteWithMarker(expense.note, settled), input.ownerId, expense.id)
-      .run();
-  }
+  const statements: D1PreparedStatement[] = open.map((expense) =>
+    db.prepare("UPDATE expenses SET paid = 1, note = ? WHERE owner_id = ? AND id = ?")
+      .bind(noteWithMarker(expense.note, settled), input.ownerId, expense.id),
+  );
   if (plan?.ok) {
     const createdAt = new Date().toISOString();
     const name = `Parcelamento ${input.cardName}`.slice(0, 120);
     const marker = planMarker(input.cardId, input.monthId);
+    const used = await nextSorts(db, input.ownerId, plan.schedule.map((part) => part.monthId));
     for (const part of plan.schedule) {
-      const sort = await db
-        .prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM expenses WHERE owner_id = ? AND month_id = ?")
-        .bind(input.ownerId, part.monthId)
-        .first<{ next: number }>();
-      await db
-        .prepare(
-          `INSERT INTO expenses
-            (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-           VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, ?, ?, 'user', ?)`,
-        )
-        .bind(crypto.randomUUID(), input.ownerId, part.monthId, name, part.amountCents, input.cardName, marker, part.installment, sort?.next ?? 1000, createdAt)
-        .run();
+      const sort = (used.get(part.monthId) ?? 0) + 1;
+      used.set(part.monthId, sort);
+      statements.push(
+        db
+          .prepare(
+            `INSERT INTO expenses
+              (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
+             VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, ?, ?, 'user', ?)`,
+          )
+          .bind(crypto.randomUUID(), input.ownerId, part.monthId, name, part.amountCents, input.cardName, marker, part.installment, sort, createdAt),
+      );
     }
   }
+  await runStatements(db, statements);
   return { ok: true, paidCents: balance };
 }
 
@@ -852,14 +855,15 @@ export async function undoCardInvoice(
   const tagged = all.filter((row) => hasMarker(row.note, settled));
   const installments = all.filter((row) => hasMarker(row.note, planned));
   if (tagged.length || installments.length) {
-    for (const row of tagged) {
-      await db.prepare("UPDATE expenses SET paid = 0, note = ? WHERE owner_id = ? AND id = ?")
-        .bind(noteWithoutMarker(row.note, settled), input.ownerId, row.id)
-        .run();
-    }
-    for (const row of installments) {
-      await db.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(input.ownerId, row.id).run();
-    }
+    await runStatements(db, [
+      ...tagged.map((row) =>
+        db.prepare("UPDATE expenses SET paid = 0, note = ? WHERE owner_id = ? AND id = ?")
+          .bind(noteWithoutMarker(row.note, settled), input.ownerId, row.id),
+      ),
+      ...installments.map((row) =>
+        db.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(input.ownerId, row.id),
+      ),
+    ]);
     return { ok: true };
   }
   const monthExpenses = await listExpenses(db, input.ownerId, input.monthId);
@@ -873,26 +877,67 @@ export async function undoCardInvoice(
   if (!paidLines.length && !legacy.length) {
     return { ok: false, error: "Não há pagamento deste cartão para desfazer neste mês." };
   }
-  for (const expense of paidLines) {
-    await db.prepare("UPDATE expenses SET paid = 0 WHERE owner_id = ? AND id = ?").bind(input.ownerId, expense.id).run();
-  }
-  for (const row of legacy) {
-    await db.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(input.ownerId, row.id).run();
-  }
+  await runStatements(db, [
+    ...paidLines.map((expense) =>
+      db.prepare("UPDATE expenses SET paid = 0 WHERE owner_id = ? AND id = ?").bind(input.ownerId, expense.id),
+    ),
+    ...legacy.map((row) =>
+      db.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(input.ownerId, row.id),
+    ),
+  ]);
   return { ok: true };
 }
 
-export async function ensureMonth(db: D1Database, ownerId: string, monthId: string): Promise<void> {
-  const existing = await getMonth(db, ownerId, monthId);
-  if (existing) return;
+function sqlMarks(values: readonly string[]): string {
+  return values.map(() => "?").join(", ");
+}
+
+async function runStatements(db: D1Database, statements: D1PreparedStatement[]): Promise<void> {
+  for (let index = 0; index < statements.length; index += 80) {
+    await db.batch(statements.slice(index, index + 80));
+  }
+}
+
+async function nextSorts(db: D1Database, ownerId: string, monthIds: readonly string[]): Promise<Map<string, number>> {
+  const ids = [...new Set(monthIds)];
+  if (!ids.length) return new Map();
+  const sorts = await db
+    .prepare(
+      `SELECT month_id, COALESCE(MAX(sort_order), 0) AS max_sort
+       FROM expenses WHERE owner_id = ? AND month_id IN (${sqlMarks(ids)}) GROUP BY month_id`,
+    )
+    .bind(ownerId, ...ids)
+    .all<{ month_id: string; max_sort: number }>();
+  return new Map((sorts.results ?? []).map((row) => [row.month_id, Number(row.max_sort) || 0]));
+}
+
+export async function ensureMonths(db: D1Database, ownerId: string, monthIds: readonly string[]): Promise<void> {
+  const ids = [...new Set(monthIds)];
+  if (!ids.length) return;
+  const known = await db
+    .prepare(`SELECT id FROM months WHERE owner_id = ? AND id IN (${sqlMarks(ids)})`)
+    .bind(ownerId, ...ids)
+    .all<{ id: string }>();
+  const have = new Set((known.results ?? []).map((row) => row.id));
+  const missing = ids.filter((id) => !have.has(id));
+  if (!missing.length) return;
   const base = await getSetting(db, baseIncomeKey(ownerId));
   const income = base === null ? 0 : Number(base);
-  await db
-    .prepare(
-      "INSERT INTO months (owner_id, id, label, income_cents, settled, sort_order, income_locked) VALUES (?, ?, ?, ?, 0, ?, 0)",
-    )
-    .bind(ownerId, monthId, monthLabel(monthId), Number.isFinite(income) ? income : 0, monthSortOrder(monthId))
-    .run();
+  const cents = Number.isFinite(income) ? income : 0;
+  await runStatements(
+    db,
+    missing.map((monthId) =>
+      db
+        .prepare(
+          "INSERT INTO months (owner_id, id, label, income_cents, settled, sort_order, income_locked) VALUES (?, ?, ?, ?, 0, ?, 0)",
+        )
+        .bind(ownerId, monthId, monthLabel(monthId), cents, monthSortOrder(monthId)),
+    ),
+  );
+}
+
+export async function ensureMonth(db: D1Database, ownerId: string, monthId: string): Promise<void> {
+  await ensureMonths(db, ownerId, [monthId]);
 }
 
 function baseIncomeKey(ownerId: string): string {
@@ -909,28 +954,43 @@ export async function setManagedPeriod(
   if (!range.ok) return range;
   const existing = await listMonths(db, ownerId);
   const keep = new Set(range.months);
-  for (const month of existing) {
-    if (keep.has(month.id)) continue;
-    const expenses = await db
-      .prepare("SELECT COUNT(*) AS n FROM expenses WHERE owner_id = ? AND month_id = ?")
-      .bind(ownerId, month.id)
-      .first<{ n: number }>();
-    const extras = await db
-      .prepare("SELECT COUNT(*) AS n FROM income_extras WHERE owner_id = ? AND month_id = ?")
-      .bind(ownerId, month.id)
-      .first<{ n: number }>();
-    if (Number(expenses?.n) > 0 || Number(extras?.n) > 0 || month.incomeLocked) {
-      return { ok: false, error: `Há dados em ${month.label}. Apague esses dados antes de tirar o mês do período.` };
-    }
+  const dropping = existing.filter((month) => !keep.has(month.id));
+  if (dropping.length) {
+    const blocked = await busyMonthLabel(db, ownerId, dropping);
+    if (blocked) return { ok: false, error: `Há dados em ${blocked}. Apague esses dados antes de tirar o mês do período.` };
+    const ids = dropping.map((month) => month.id);
+    const marks = sqlMarks(ids);
+    await db.batch([
+      db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND month_id IN (${marks})`).bind(ownerId, ...ids),
+      db.prepare(`DELETE FROM income_extras WHERE owner_id = ? AND month_id IN (${marks})`).bind(ownerId, ...ids),
+      db.prepare(`DELETE FROM months WHERE owner_id = ? AND id IN (${marks})`).bind(ownerId, ...ids),
+    ]);
   }
-  for (const month of existing) {
-    if (keep.has(month.id)) continue;
-    await db.prepare("DELETE FROM expenses WHERE owner_id = ? AND month_id = ?").bind(ownerId, month.id).run();
-    await db.prepare("DELETE FROM income_extras WHERE owner_id = ? AND month_id = ?").bind(ownerId, month.id).run();
-    await db.prepare("DELETE FROM months WHERE owner_id = ? AND id = ?").bind(ownerId, month.id).run();
-  }
-  for (const monthId of range.months) await ensureMonth(db, ownerId, monthId);
+  await ensureMonths(db, ownerId, range.months);
   return { ok: true, startMonthId: range.months[0] };
+}
+
+async function busyMonthLabel(
+  db: D1Database,
+  ownerId: string,
+  months: Array<{ id: string; label: string; incomeLocked: boolean }>,
+): Promise<string | null> {
+  const ids = months.map((month) => month.id);
+  const marks = sqlMarks(ids);
+  const expenses = await db
+    .prepare(`SELECT month_id FROM expenses WHERE owner_id = ? AND month_id IN (${marks}) GROUP BY month_id`)
+    .bind(ownerId, ...ids)
+    .all<{ month_id: string }>();
+  const extras = await db
+    .prepare(`SELECT month_id FROM income_extras WHERE owner_id = ? AND month_id IN (${marks}) GROUP BY month_id`)
+    .bind(ownerId, ...ids)
+    .all<{ month_id: string }>();
+  const busy = new Set([
+    ...(expenses.results ?? []).map((row) => row.month_id),
+    ...(extras.results ?? []).map((row) => row.month_id),
+  ]);
+  const found = months.find((month) => month.incomeLocked || busy.has(month.id));
+  return found ? found.label : null;
 }
 
 export async function resetOwnerData(
@@ -939,11 +999,13 @@ export async function resetOwnerData(
   input: { scope: string; year?: number; monthId?: string },
 ): Promise<{ ok: true; ids: string[]; wiped?: boolean } | { ok: false; error: string }> {
   if (input.scope === "all") {
-    await db.prepare("DELETE FROM expenses WHERE owner_id = ?").bind(ownerId).run();
-    await db.prepare("DELETE FROM income_extras WHERE owner_id = ?").bind(ownerId).run();
-    await db.prepare("DELETE FROM months WHERE owner_id = ?").bind(ownerId).run();
-    await db.prepare("DELETE FROM cards WHERE owner_id = ?").bind(ownerId).run();
-    await db.prepare("DELETE FROM settings WHERE key = ? OR key = ?").bind(baseIncomeKey(ownerId), themeKey(ownerId)).run();
+    await db.batch([
+      db.prepare("DELETE FROM expenses WHERE owner_id = ?").bind(ownerId),
+      db.prepare("DELETE FROM income_extras WHERE owner_id = ?").bind(ownerId),
+      db.prepare("DELETE FROM months WHERE owner_id = ?").bind(ownerId),
+      db.prepare("DELETE FROM cards WHERE owner_id = ?").bind(ownerId),
+      db.prepare("DELETE FROM settings WHERE key = ? OR key = ?").bind(baseIncomeKey(ownerId), themeKey(ownerId)),
+    ]);
     return { ok: true, ids: [], wiped: true };
   }
   const months = await listMonths(db, ownerId);
@@ -952,15 +1014,14 @@ export async function resetOwnerData(
   const base = await getSetting(db, baseIncomeKey(ownerId));
   const income = base === null ? 0 : Number(base);
   const incomeCents = Number.isFinite(income) ? income : 0;
-  for (const monthId of targets.ids) {
-    await db.prepare("DELETE FROM expenses WHERE owner_id = ? AND month_id = ?").bind(ownerId, monthId).run();
-    await db.prepare("DELETE FROM income_extras WHERE owner_id = ? AND month_id = ?").bind(ownerId, monthId).run();
-    await db
-      .prepare("UPDATE months SET income_cents = ?, income_locked = 0, settled = 0 WHERE owner_id = ? AND id = ?")
-      .bind(incomeCents, ownerId, monthId)
-      .run();
-  }
-  return { ok: true, ids: targets.ids };
+  const ids = targets.ids;
+  const marks = sqlMarks(ids);
+  await db.batch([
+    db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND month_id IN (${marks})`).bind(ownerId, ...ids),
+    db.prepare(`DELETE FROM income_extras WHERE owner_id = ? AND month_id IN (${marks})`).bind(ownerId, ...ids),
+    db.prepare(`UPDATE months SET income_cents = ?, income_locked = 0, settled = 0 WHERE owner_id = ? AND id IN (${marks})`).bind(incomeCents, ownerId, ...ids),
+  ]);
+  return { ok: true, ids };
 }
 
 export async function insertCardPurchase(
@@ -982,15 +1043,13 @@ export async function insertCardPurchase(
   const plan = planCardPurchase(input);
   if (!plan.ok) return plan;
   const createdAt = new Date().toISOString();
-  for (const part of plan.plan.schedule) {
-    await ensureMonth(db, input.ownerId, part.monthId);
-  }
+  const monthIds = plan.plan.schedule.map((part) => part.monthId);
+  await ensureMonths(db, input.ownerId, monthIds);
+  const used = await nextSorts(db, input.ownerId, monthIds);
   const inserts: D1PreparedStatement[] = [];
   for (const part of plan.plan.schedule) {
-    const sort = await db
-      .prepare("SELECT COALESCE(MAX(sort_order), 0) + 1 AS next FROM expenses WHERE owner_id = ? AND month_id = ?")
-      .bind(input.ownerId, part.monthId)
-      .first<{ next: number }>();
+    const sort = (used.get(part.monthId) ?? 0) + 1;
+    used.set(part.monthId, sort);
     inserts.push(
       db
         .prepare(
@@ -1008,12 +1067,12 @@ export async function insertCardPurchase(
           input.cardLabel,
           input.note,
           part.installment,
-          sort?.next ?? 1000,
+          sort,
           createdAt,
         ),
     );
   }
-  if (inserts.length) await db.batch(inserts);
+  await runStatements(db, inserts);
   return { ok: true };
 }
 

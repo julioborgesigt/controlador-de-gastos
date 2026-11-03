@@ -385,10 +385,12 @@ app.post("/api/income/extras", async (c) => {
   if (!isCents(body.amountCents) || body.amountCents <= 0) return c.json({ error: "Informe o valor da receita extra." }, 400);
   const monthIds = incomeMonthIds(body);
   if (!monthIds) return c.json({ error: "Escolha ao menos um mês." }, 400);
-  for (const monthId of monthIds) {
-    if (!(await getMonth(c.env.DB, writer.scope.ownerId, monthId))) {
-      return c.json({ error: "Escolha o mês previsto." }, 400);
-    }
+  const knownMonths = await c.env.DB
+    .prepare(`SELECT id FROM months WHERE owner_id = ? AND id IN (${monthIds.map(() => "?").join(", ")})`)
+    .bind(writer.scope.ownerId, ...monthIds)
+    .all<{ id: string }>();
+  if ((knownMonths.results ?? []).length !== monthIds.length) {
+    return c.json({ error: "Escolha o mês previsto." }, 400);
   }
   const name = incomeExtraName(kind, body.name);
   if (!name) return c.json({ error: "Dê um nome para essa receita." }, 400);
