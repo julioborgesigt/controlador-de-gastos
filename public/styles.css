@@ -276,6 +276,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   gap: 4px;
 }
 
+.metric.wide { grid-column: 1 / -1; min-height: 0; }
+
 .metric strong, .jump strong { font-size: 18px; font-variant-numeric: tabular-nums; }
 
 .jump {
@@ -300,6 +302,17 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .card-manage .item-actions,
 .section-head + .item-actions { padding: 0; }
+
+.jump-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 12px;
+  row-gap: 2px;
+  align-items: baseline;
+}
+
+.jump-pair > strong,
+.jump-pair > .jump-caption { justify-self: end; text-align: right; }
 
 .jump small, .item small, .metric small { display: block; color: var(--muted); font-size: 13px; line-height: 1.35; }
 
