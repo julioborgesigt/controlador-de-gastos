@@ -917,7 +917,10 @@ function summary(data) {
       el("p", { class: "eyebrow" }, month.label),
       el("p", { class: "muted" }, "Falta pagar"),
       el("p", { class: "money" }, money(totals.remainingCents)),
-      el("p", { class: "muted" }, `Total do mês ${money(totals.commitmentsCents)} · já pago ${money(totals.paidCents)}`),
+      el("p", { class: "muted" }, `Total do mês ${money(totals.forecastExpenseCents)} · já pago ${money(totals.paidCents)}`),
+      totals.forecastExpenseCents > totals.partialExpenseCents
+        ? el("p", { class: "muted" }, "Inclui o custo de vida que ainda está previsto.")
+        : "",
       month.settled ? el("p", { class: "badge paid" }, "Mês quitado") : "",
     ]),
     el("div", { class: "grid" }, [
@@ -944,7 +947,7 @@ function summary(data) {
       : "Nubank, Neon e linhas da fatura"),
     livingJump(totals),
     jump("extras", "Imprevisto", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
-    editable() && totals.remainingCents > 0
+    editable() && totals.launchedRemainingCents > 0
       ? el("button", { class: "primary", type: "button", onclick: () => askConfirm("settle") }, "Quitar o que falta")
       : editable() && month.settled
         ? el("button", { class: "secondary", type: "button", onclick: () => askConfirm("reopen") }, "Reabrir mês")
@@ -1082,7 +1085,7 @@ function confirmCopy() {
   if (state.confirm === "settle") {
     return {
       title: "Quitar o que falta",
-      body: `Marca como pagos a fatura, o Pix e os imprevistos ainda em aberto em ${month}. Um custo de vida já lançado no cartão continua na lista e não é cobrado outra vez. Se não restar valor a pagar, o mês fica quitado.`,
+      body: `Marca como pagos a fatura e os imprevistos ainda em aberto em ${month}. O custo de vida previsto continua em falta até você lançar Pago no Pix, Enviar pro cartão ou Pagamento parcial. O mês só fica quitado quando esse valor zera.`,
       action: "Quitar",
       cancel: "Cancelar",
     };

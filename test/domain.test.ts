@@ -7,6 +7,7 @@ import {
   cardLinkRequired,
   carryForward,
   computeTotals,
+  monthCanSettle,
   expensesForCard,
   isFixedOnCard,
   livingCostMonths,
@@ -92,19 +93,25 @@ test("planilha de novembro de 2026 a outubro de 2027 fecha com o app", () => {
     assert.equal(totals.partialExpenseCents, (row?.commitments ?? 0) - held, month.id);
     assert.equal(totals.fixedOnCardCents, 0, month.id);
     assert.equal(totals.fixedCashCents + totals.fixedOnCardCents, totals.fixedLaunchedCents, month.id);
+    assert.equal(totals.paidCents + totals.remainingCents, totals.forecastExpenseCents, month.id);
+    assert.equal(totals.remainingCents, totals.launchedRemainingCents + held, month.id);
+    if (held > 0) assert.equal(monthCanSettle(totals), false, month.id);
   });
 });
 
 test("novembro quitado não deixa saldo pendente e dezembro fica em aberto", () => {
   const november = computeTotals(expensesFor(0), seed.months[0]!.incomeCents);
   assert.equal(november.remainingCents, 0);
+  assert.equal(monthCanSettle(november), true);
   assert.equal(november.paidCents, 708023);
   assert.equal(november.faturaCents, 481023);
   assert.equal(november.fixedCents, 227000);
 
   const decemberExpenses = expensesFor(1);
   const december = computeTotals(decemberExpenses, seed.months[1]!.incomeCents);
-  assert.equal(december.remainingCents, 789766 - unlaunchedFixed(decemberExpenses));
+  assert.equal(december.remainingCents, 789766);
+  assert.equal(december.launchedRemainingCents, 789766 - unlaunchedFixed(decemberExpenses));
+  assert.equal(monthCanSettle(december), false);
   assert.equal(december.faturaCents, 213266);
   assert.equal(december.fixedForecastCents, 576500);
   assert.equal(december.fixedLaunchedCents, 0);
@@ -127,7 +134,46 @@ test("gasto fixo marcado na fatura continua no indicador e sai do total a pagar"
   assert.equal(totals.fixedCashCents, 0);
   assert.equal(totals.commitmentsCents, 789766 - 60000 - held);
   assert.equal(totals.faturaCents, 213266);
-  assert.equal(totals.remainingCents, 789766 - 60000 - held);
+  assert.equal(totals.remainingCents, 789766 - 60000);
+  assert.equal(totals.launchedRemainingCents, 789766 - 60000 - held);
+  assert.equal(monthCanSettle(totals), false);
+});
+
+test("pagar a fatura não quita o mês enquanto o custo de vida previsto estiver em aberto", () => {
+  const living: Expense = {
+    id: "mercado",
+    monthId: "2026-11",
+    name: "Mercado",
+    section: "fixed",
+    amountCents: 20000,
+    payment: "pix",
+    onCard: false,
+    cardLabel: null,
+    paid: false,
+    note: null,
+    installment: null,
+    sortOrder: 1,
+    source: "user",
+  };
+  const invoice: Expense = {
+    ...living,
+    id: "fatura",
+    name: "Fatura",
+    section: "card",
+    amountCents: 5000,
+    payment: "card",
+    paid: true,
+  };
+  const open = computeTotals([living, invoice], 100000);
+  assert.equal(open.launchedRemainingCents, 0);
+  assert.equal(open.remainingCents, 20000);
+  assert.equal(open.paidCents + open.remainingCents, open.forecastExpenseCents);
+  assert.equal(monthCanSettle(open), false);
+
+  living.paid = true;
+  const closed = computeTotals([living, invoice], 100000);
+  assert.equal(closed.remainingCents, 0);
+  assert.equal(monthCanSettle(closed), true);
 });
 
 test("pagamento parcial deixa a feira em aberto e não soma o cartão duas vezes", () => {
@@ -164,7 +210,9 @@ test("pagamento parcial deixa a feira em aberto e não soma o cartão duas vezes
   assert.equal(open.fixedLaunchedCents, 35000);
   assert.equal(open.fixedOnCardCents, 15000);
   assert.equal(open.paidCents, 20000);
-  assert.equal(open.remainingCents, 15000);
+  assert.equal(open.remainingCents, 60000);
+  assert.equal(open.launchedRemainingCents, 15000);
+  assert.equal(monthCanSettle(open), false);
   assert.equal(open.faturaCents, 15000);
   assert.equal(open.commitmentsCents, 35000);
   assert.equal(open.partialBalanceCents, -35000);
@@ -184,7 +232,9 @@ test("pagamento parcial deixa a feira em aberto e não soma o cartão duas vezes
   assert.equal(closed.fixedCents, 45000);
   assert.equal(closed.commitmentsCents, 45000);
   assert.equal(closed.remainingCents, 0);
+  assert.equal(closed.launchedRemainingCents, 0);
   assert.equal(closed.paidCents, 45000);
+  assert.equal(monthCanSettle(closed), true);
 });
 
 test("gasto extra no cartão aumenta a fatura e o extra no Pix fica fora dela", () => {

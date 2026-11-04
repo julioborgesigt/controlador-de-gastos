@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, PartialPayment, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { carryForward, cardKey, cardOpenExpenses, computeTotals, expenseCountForCard, listMonthRange, monthLabel, monthSortOrder, planCardPayoff, planCardPurchase, previousMonthId, resetTargets } from "./domain.ts";
+import { carryForward, cardKey, cardOpenExpenses, computeTotals, expenseCountForCard, listMonthRange, monthCanSettle, monthLabel, monthSortOrder, planCardPayoff, planCardPurchase, previousMonthId, resetTargets } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -774,7 +774,7 @@ export async function monthPayload(db: D1Database, ownerId: string, monthId: str
     .reduce((sum, extra) => sum + extra.amountCents, 0);
   const incomeCents = month.income_cents + extraIncomeCents;
   const totals = computeTotals(expenses, incomeCents);
-  const settled = totals.remainingCents === 0 && totals.commitmentsCents > 0;
+  const settled = monthCanSettle(totals);
   if (settled !== (month.settled === 1)) {
     await db.prepare("UPDATE months SET settled = ? WHERE owner_id = ? AND id = ?").bind(settled ? 1 : 0, ownerId, monthId).run();
   }

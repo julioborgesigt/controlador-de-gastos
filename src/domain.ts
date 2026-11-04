@@ -52,11 +52,16 @@ export type Totals = {
   commitmentsCents: number;
   paidCents: number;
   remainingCents: number;
+  launchedRemainingCents: number;
   balanceCents: number;
   partialBalanceCents: number;
   forecastExpenseCents: number;
   partialExpenseCents: number;
 };
+
+export function monthCanSettle(totals: Pick<Totals, "remainingCents" | "commitmentsCents">): boolean {
+  return totals.remainingCents === 0 && totals.commitmentsCents > 0;
+}
 
 export function isFixedOnCard(expense: Pick<Expense, "section" | "onCard">): boolean {
   return expense.section === "fixed" && expense.onCard;
@@ -122,6 +127,7 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
   const faturaCents = invoiceCents + extrasCardCents;
   const commitmentsCents = faturaCents + fixedCashCents + extrasPixCents;
   const partialBalanceCents = incomeCents - commitmentsCents;
+  const launchedRemainingCents = remainingCents;
 
   return {
     invoiceCents,
@@ -136,7 +142,8 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
     extrasPixCents,
     commitmentsCents,
     paidCents,
-    remainingCents,
+    remainingCents: launchedRemainingCents + fixedHeldCents,
+    launchedRemainingCents,
     balanceCents: partialBalanceCents - fixedHeldCents,
     partialBalanceCents,
     forecastExpenseCents: commitmentsCents + fixedHeldCents,

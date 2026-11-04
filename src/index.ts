@@ -475,7 +475,7 @@ app.post("/api/months/:id/settle", async (c) => {
        WHERE owner_id = ?
          AND month_id = ?
          AND amount_cents != 0
-         AND NOT (section = 'fixed' AND (on_card = 1 OR payment = 'card'))`,
+         AND section != 'fixed'`,
     )
       .bind(writer.scope.ownerId, monthId)
       .run();
