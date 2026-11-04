@@ -2661,22 +2661,34 @@ function belongs(expense, section) {
   return expense.section === "fixed";
 }
 
+function livingCardPlace(totals) {
+  return `${money(totals.fixedCashCents)} fora do cartão · ${money(totals.fixedOnCardCents)} no cartão`;
+}
+
 function livingJump(totals) {
-  if (totals.fixedAllSettled) return jump("casa", "Custo de vida", money(totals.fixedLaunchedCents), "Valor consolidado");
-  return el("button", {
-    class: "jump",
-    type: "button",
-    onclick: () => {
-      state.view = "casa";
-      render();
-    },
-  }, [
+  const openLiving = () => {
+    state.view = "casa";
+    render();
+  };
+  const place = el("small", { class: "jump-place" }, livingCardPlace(totals));
+  if (totals.fixedAllSettled) {
+    return el("button", { class: "jump", type: "button", onclick: openLiving }, [
+      el("div", { class: "row-between" }, [
+        el("span", {}, "Custo de vida"),
+        el("strong", {}, money(totals.fixedLaunchedCents)),
+      ]),
+      el("small", {}, "Valor consolidado"),
+      place,
+    ]);
+  }
+  return el("button", { class: "jump", type: "button", onclick: openLiving }, [
     el("div", { class: "jump-pair" }, [
       el("span", {}, "Custo de vida"),
       el("strong", {}, money(totals.fixedLaunchedCents)),
       el("small", {}, `Previsto ${money(totals.fixedForecastCents)}`),
       el("small", { class: "jump-caption" }, "Parcial"),
     ]),
+    place,
   ]);
 }
 
