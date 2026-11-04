@@ -314,6 +314,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 .jump-pair > strong,
 .jump-pair > .jump-caption { justify-self: end; text-align: right; }
 
+.jump-place { margin-top: 6px; }
+
 .jump small, .item small, .metric small { display: block; color: var(--muted); font-size: 13px; line-height: 1.35; }
 
 .section-head { margin: 8px 2px 12px; }
