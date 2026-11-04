@@ -59,6 +59,12 @@ const views = [
 
 let bootGeneration = 0;
 
+const desktopMedia = window.matchMedia("(min-width: 1100px)");
+
+function onDesktop() {
+  return desktopMedia.matches;
+}
+
 boot();
 
 async function boot() {
@@ -179,6 +185,7 @@ function render() {
   const lockedScroll = document.body.classList.contains("sheet-open")
     ? Number(document.body.dataset.scrollLock || 0)
     : window.scrollY;
+  const contentScroll = document.querySelector(".content")?.scrollTop || 0;
   const viewKey = `${state.authed}:${state.monthId}:${state.view}:${state.cardFocus || ""}`;
   const keepPlace = state.viewKey === viewKey;
   root.replaceChildren();
@@ -230,6 +237,10 @@ function render() {
   if (state.sheet || state.confirm || state.expenseInfo) lockPage(keepPlace ? lockedScroll : 0);
   else unlockPage(keepPlace ? lockedScroll : 0);
   state.viewKey = viewKey;
+  if (keepPlace && onDesktop()) {
+    const nextContent = document.querySelector(".content");
+    if (nextContent) nextContent.scrollTop = contentScroll;
+  }
   queueMicrotask(centerMonthChip);
   syncOverlayHistory();
 }
@@ -372,6 +383,13 @@ function blockBackgroundWheel(event) {
 
 function blockBackgroundKeys(event) {
   if (!document.body.classList.contains("sheet-open")) return;
+  if (event.key === "Escape") {
+    event.preventDefault();
+    if (state.confirm) closeConfirm();
+    else if (state.expenseInfo) closeExpenseInfo();
+    else if (state.sheet) closeSheet();
+    return;
+  }
   if (!["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) return;
   if (event.target.closest?.("input, textarea, select")) return;
   const sheet = event.target.closest?.(".sheet");
@@ -1492,8 +1510,12 @@ async function saveSetup(draft) {
 function setupGuide() {
   const guides = [
     ["Resumo", "O panorama do mês: o que falta pagar, o saldo e o caminho para as outras abas."],
-    ["Cartões", "A fatura de cada cartão. Toque no cartão para ver os lançamentos. O dia de vencimento aparece junto do apelido."],
-    ["Custo de vida", "As contas que voltam todo mês. Puxe para a direita para pagar no Pix ou enviar pro cartão. Puxe para a esquerda para editar ou excluir."],
+    ["Cartões", onDesktop()
+      ? "A fatura de cada cartão. Clique no cartão para ver os lançamentos. O dia de vencimento aparece junto do apelido."
+      : "A fatura de cada cartão. Toque no cartão para ver os lançamentos. O dia de vencimento aparece junto do apelido."],
+    ["Custo de vida", onDesktop()
+      ? "As contas que voltam todo mês. Use os botões ao lado para pagar no Pix, enviar pro cartão, editar ou excluir."
+      : "As contas que voltam todo mês. Puxe para a direita para pagar no Pix ou enviar pro cartão. Puxe para a esquerda para editar ou excluir."],
     ["Imprevisto", "O que fugiu do plano. Dá para lançar no Pix, em espécie, no débito ou no cartão."],
     ["Receita", "A renda base e os extras do mês, como décimo terceiro ou um valor avulso."],
   ];
@@ -1698,7 +1720,9 @@ function cardsHome(data) {
       el("h2", {}, money(data.totals.faturaCents)),
       el("p", { class: "muted" }, blurb("card", data.totals)),
     ]),
-    el("p", { class: "note" }, "Toque num cartão para ver o detalhamento. Dá para editar o cartão. Excluir só quando ele não tiver gastos."),
+    el("p", { class: "note" }, onDesktop()
+      ? "Clique num cartão para ver o detalhamento. Os botões embaixo editam ou quitam o cartão. Excluir só quando ele não tiver gastos."
+      : "Toque num cartão para ver o detalhamento. Dá para editar o cartão. Excluir só quando ele não tiver gastos."),
     editable() ? el("div", { class: "stack-actions" }, [
       el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto Cartão"),
       el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
@@ -1785,6 +1809,18 @@ function cardDetail(data) {
 }
 
 let openSwipe = null;
+
+desktopMedia.addEventListener("change", () => {
+  if (openSwipe) closeSwipe(openSwipe);
+  render();
+});
+
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape" || !state.accountMenu) return;
+  if (state.sheet || state.confirm || state.expenseInfo) return;
+  state.accountMenu = false;
+  render();
+});
 let ignoreSwipeClickUntil = 0;
 
 function closeSwipe(front) {
@@ -1871,7 +1907,7 @@ function swipeRow(front, { pay, leads, actions, card }) {
   }
 
   front.addEventListener("pointerdown", (event) => {
-    if (event.button !== 0) return;
+    if (onDesktop() || event.button !== 0) return;
     startX = event.clientX;
     startY = event.clientY;
     base = Number(front.dataset.x || 0);
@@ -3049,7 +3085,11 @@ function expenseInfoDialog() {
       : "Pagamentos parciais, a despesa continua em aberto:");
   }
   if (info.registered) tail.push(`Cadastrado em ${info.registered}.`);
-  if (info.canEdit) tail.push("Para editar ou excluir, arraste o card para a esquerda.");
+  if (info.canEdit) {
+    tail.push(onDesktop()
+      ? "Para editar ou excluir, use os botões ao lado do lançamento."
+      : "Para editar ou excluir, arraste o card para a esquerda.");
+  }
   const partialItems = (info.partials || []).map((partial) => el("div", { class: "partial-line" }, [
     el("span", {}, partialLine(partial)),
     info.canEdit && info.living
@@ -3490,7 +3530,9 @@ function sheet() {
     panel.append(
       el("h2", {}, "Encerrar despesa"),
       el("p", {}, `O pagamento ${method} encerra “${draft.name}” neste mês. Só então o valor sai da receita.`),
-      el("p", { class: "muted" }, "Para lançar só uma parte e deixar a despesa aberta, feche esta tela, toque na despesa e escolha Pagamento parcial."),
+      el("p", { class: "muted" }, onDesktop()
+        ? "Para lançar só uma parte e deixar a despesa aberta, feche esta tela, clique na despesa e escolha Pagamento parcial."
+        : "Para lançar só uma parte e deixar a despesa aberta, feche esta tela, toque na despesa e escolha Pagamento parcial."),
       already > 0 ? el("p", {}, `Já pago: ${money(already)}. O sugerido é o que ainda falta do cadastrado.`) : "",
       el("div", { class: "field" }, [
         el("label", {}, already > 0 ? "Quanto entra neste pagamento?" : "O valor pago foi o cadastrado?"),
