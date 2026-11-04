@@ -921,10 +921,16 @@ function summary(data) {
       month.settled ? el("p", { class: "badge paid" }, "Mês quitado") : "",
     ]),
     el("div", { class: "grid" }, [
-      el("button", { class: "metric", type: "button", onclick: () => { state.view = "receita"; render(); } }, [
+      el("button", { class: "metric wide", type: "button", onclick: () => { state.view = "receita"; render(); } }, [
         el("small", {}, "Receita"),
         el("strong", {}, money(month.incomeCents)),
         month.extraIncomeCents ? el("small", {}, `inclui ${money(month.extraIncomeCents)} extras`) : "",
+      ]),
+      el("div", { class: "metric" }, [
+        el("small", {}, "Despesa prevista"),
+        el("strong", {}, money(totals.forecastExpenseCents)),
+        el("small", {}, "Despesa parcial"),
+        el("strong", {}, money(totals.partialExpenseCents)),
       ]),
       el("div", { class: "metric" }, [
         el("small", {}, "Saldo previsto"),
@@ -936,7 +942,7 @@ function summary(data) {
     jump("cartoes", "Fatura do cartão", money(totals.faturaCents), totals.extrasCardCents
       ? `${money(totals.invoiceCents)} previstos + ${money(totals.extrasCardCents)} em imprevistos`
       : "Nubank, Neon e linhas da fatura"),
-    jump("casa", "Custo de vida", money(livingHeadline(totals).amount), livingHeadline(totals).detail),
+    livingJump(totals),
     jump("extras", "Imprevisto", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
     editable() && totals.remainingCents > 0
       ? el("button", { class: "primary", type: "button", onclick: () => askConfirm("settle") }, "Quitar o que falta")
@@ -2655,14 +2661,23 @@ function belongs(expense, section) {
   return expense.section === "fixed";
 }
 
-function livingHeadline(totals) {
-  if (totals.fixedAllSettled) {
-    return { amount: totals.fixedLaunchedCents, detail: "Valor consolidado" };
-  }
-  return {
-    amount: totals.fixedForecastCents,
-    detail: `Parcial ${money(totals.fixedLaunchedCents)}`,
-  };
+function livingJump(totals) {
+  if (totals.fixedAllSettled) return jump("casa", "Custo de vida", money(totals.fixedLaunchedCents), "Valor consolidado");
+  return el("button", {
+    class: "jump",
+    type: "button",
+    onclick: () => {
+      state.view = "casa";
+      render();
+    },
+  }, [
+    el("div", { class: "jump-pair" }, [
+      el("span", {}, "Custo de vida"),
+      el("strong", {}, money(totals.fixedLaunchedCents)),
+      el("small", {}, `Previsto ${money(totals.fixedForecastCents)}`),
+      el("small", { class: "jump-caption" }, "Parcial"),
+    ]),
+  ]);
 }
 
 function blurb(section, totals) {

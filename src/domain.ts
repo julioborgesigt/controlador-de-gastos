@@ -54,6 +54,8 @@ export type Totals = {
   remainingCents: number;
   balanceCents: number;
   partialBalanceCents: number;
+  forecastExpenseCents: number;
+  partialExpenseCents: number;
 };
 
 export function isFixedOnCard(expense: Pick<Expense, "section" | "onCard">): boolean {
@@ -137,6 +139,8 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
     remainingCents,
     balanceCents: partialBalanceCents - fixedHeldCents,
     partialBalanceCents,
+    forecastExpenseCents: commitmentsCents + fixedHeldCents,
+    partialExpenseCents: commitmentsCents,
   };
 }
 
