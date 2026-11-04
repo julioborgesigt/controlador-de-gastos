@@ -1757,7 +1757,7 @@ function cardDetail(data) {
   ];
   const groups = [
     ["Fatura prevista", visible.filter((expense) => expense.section === "card")],
-    ["Gastos do cartão", visible.filter((expense) => expense.section === "extra")],
+    ["Gastos imprevistos no cartão", visible.filter((expense) => expense.section === "extra")],
     ["Custo de vida, já na fatura", visible.filter((expense) => expense.section === "fixed" && !linkedInvoice(expense))],
   ];
   for (const [title, rows] of groups) {
@@ -2525,7 +2525,15 @@ function installmentPreview(draft) {
   const paid = Number(draft.installmentsPaid);
   const amount = parseMoney(draft.amount || "");
   const when = draft.invoiceMonthId ? faturaWhen(draft.invoiceMonthId, true) : "";
-  if (!Number.isInteger(total) || total < 1 || !Number.isInteger(paid) || paid < 0 || paid >= total || amount === null || amount <= 0) {
+  const valid = Number.isInteger(total) && total >= 1 && Number.isInteger(paid) && paid >= 0 && paid < total && amount !== null && amount > 0;
+  if (draft.mode === "edit") {
+    if (!valid) return "A quantidade e as parcelas já pagas descrevem esta linha da fatura.";
+    const per = draft.amountMode === "total" ? Math.floor(amount / total) : amount;
+    if (per <= 0) return "O valor total não cobre todas as parcelas.";
+    if (total <= 1) return `${money(per)} nesta fatura.`;
+    return `Esta linha é a parcela ${paid + 1}/${total}, de ${money(per)}.`;
+  }
+  if (!valid) {
     return when
       ? `O pagamento entra ${when}.`
       : "A parcela deste mês é a primeira que ainda falta pagar. As seguintes entram nos próximos meses.";
@@ -2535,6 +2543,15 @@ function installmentPreview(draft) {
   if (when && remaining <= 1) return `${money(per)} ${faturaWhen(draft.invoiceMonthId)}.`;
   if (when) return `${remaining} parcelas de ${money(per)} ${when} (${paid + 1}/${total}).`;
   return `${remaining} ${remaining === 1 ? "parcela" : "parcelas"} de ${money(per)} a partir deste mês (${paid + 1}/${total}).`;
+}
+
+function installmentDraft(installment) {
+  const match = /^(\d+)\s*\/\s*(\d+)$/.exec(String(installment || "").trim());
+  if (!match) return { installmentCount: "1", installmentsPaid: "0" };
+  const current = Number(match[1]);
+  const total = Number(match[2]);
+  if (total < 1 || current < 1 || current > total) return { installmentCount: "1", installmentsPaid: "0" };
+  return { installmentCount: String(total), installmentsPaid: String(current - 1) };
 }
 
 function monthSelect(selected) {
@@ -2885,7 +2902,7 @@ function openCardExpense(cardName = "") {
     id: "",
     name: "",
     amount: "",
-    section: "extra",
+    section: "card",
     payment: "card",
     onCard: false,
     cardLabel: selected,
@@ -3065,6 +3082,7 @@ function expenseInfoDialog() {
 }
 
 function openEdit(expense, options = {}) {
+  const parts = installmentDraft(expense.installment);
   state.sheet = {
     mode: "edit",
     cardExpense: Boolean(options.cardExpense),
@@ -3077,7 +3095,11 @@ function openEdit(expense, options = {}) {
     cardLabel: expense.cardLabel || "",
     note: visibleNote(expense.note),
     originId: originIdFrom(expense.note),
+    partialId: partialIdFrom(expense.note),
     installment: expense.installment || "",
+    installmentCount: parts.installmentCount,
+    installmentsPaid: parts.installmentsPaid,
+    amountMode: "installment",
     paid: expense.paid,
     source: expense.source,
   };
@@ -3090,14 +3112,22 @@ function originIdFrom(note) {
   return line ? line.slice("origem:".length) : "";
 }
 
+function partialIdFrom(note) {
+  const line = String(note || "").split("\n").find((item) => item.startsWith("parcial:"));
+  return line ? line.slice("parcial:".length) : "";
+}
+
 function visibleNote(note) {
   return String(note || "").split("\n").filter((item) => item && !item.startsWith("origem:") && !item.startsWith("parcial:")).join("\n");
 }
 
-function composeNote(originId, note) {
+function composeNote(originId, note, partialId) {
   const text = String(note || "").trim();
-  if (!originId) return text;
-  return text ? `origem:${originId}\n${text}` : `origem:${originId}`;
+  const lines = [];
+  if (originId) lines.push(`origem:${originId}`);
+  if (partialId) lines.push(`parcial:${partialId}`);
+  if (text) lines.push(text);
+  return lines.join("\n");
 }
 
 function linkedLivingCost(expense) {
@@ -3506,11 +3536,11 @@ function sheet() {
     );
   } else {
     const needsCard = draft.cardExpense || draft.section === "card" || draft.payment === "card" || draft.onCard;
-    const cardSpend = draft.cardExpense && draft.mode === "create";
+    const cardSpend = (draft.cardExpense && draft.mode === "create") || (draft.mode === "edit" && draft.section === "card");
     const recurring = draft.section === "fixed" && !cardSpend;
     const surprise = draft.section === "extra" && !cardSpend;
     const heading = cardSpend
-      ? "Gasto no cartão"
+      ? (draft.mode === "edit" ? "Editar gasto no cartão" : "Gasto no cartão")
       : recurring
         ? (draft.mode === "create" ? "Novo custo de vida" : "Editar custo de vida")
         : surprise
@@ -3556,7 +3586,7 @@ function sheet() {
         ])
         : "",
       cardSpend ? el("p", { class: "muted", id: "installment-preview" }, installmentPreview(draft)) : cardPurchaseFields(draft),
-      draft.mode === "edit" && (draft.section === "card" || draft.section === "extra")
+      draft.mode === "edit" && !cardSpend && draft.section === "extra"
         ? field("Parcela", "installment", draft.installment, "text", "3/10, se houver")
         : "",
       needsCard && !(recurring && draft.mode === "create" && draft.payment === "card") ? cardSelect(draft) : "",
@@ -3583,7 +3613,7 @@ function cardSelect(draft) {
   const required = draft.mode === "card-pay" || draft.mode === "partial"
     || (draft.section === "extra" && (draft.payment === "card" || draft.cardExpense))
     || (draft.section === "fixed" && draft.onCard)
-    || (draft.cardExpense && draft.mode === "create");
+    || (draft.section === "card" && (draft.cardExpense || draft.mode === "create"));
   const current = draft.cardLabel || "";
   const known = cards.some((card) => card.name === current);
   const select = el("select", { id: "cardLabel", name: "cardLabel" });
@@ -3902,14 +3932,14 @@ async function saveSheet(event) {
       state.data.cards = data.cards;
     } else {
       if (draft.cardExpense && draft.mode === "create") {
-        draft.section = "extra";
+        draft.section = "card";
         draft.payment = "card";
         draft.onCard = false;
       } else if (draft.cardExpense && draft.section !== "fixed") {
         draft.payment = "card";
         draft.onCard = false;
       }
-      const amountCents = parseMoney(draft.amount || "0");
+      let amountCents = parseMoney(draft.amount || "0");
       if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
       if (amountCents === null) throw new Error("Informe o valor. Exemplo: 75,90");
       const livingOnCard = draft.mode === "create" && draft.section === "fixed" && !draft.cardExpense && draft.payment === "card";
@@ -3918,7 +3948,9 @@ async function saveSheet(event) {
         draft.paid = false;
         if (!String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão.");
       }
-      const needsCard = (draft.section === "extra" && draft.payment === "card") || (draft.section === "fixed" && draft.onCard);
+      const needsCard = (draft.section === "extra" && draft.payment === "card")
+        || (draft.section === "fixed" && draft.onCard)
+        || (draft.cardExpense && draft.mode === "create");
       if (needsCard && !String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão deste gasto.");
       const onCardPurchase = draft.mode === "create" && !livingOnCard && (draft.section === "card" || draft.payment === "card");
       const totalCount = Number(draft.installmentCount);
@@ -3933,6 +3965,19 @@ async function saveSheet(event) {
         throw new Error(livingOnCard
           ? "A primeira fatura precisa estar dentro dos meses da conta."
           : "Escolha um período em que o fim não seja antes do início.");
+      }
+      if (draft.mode === "edit" && draft.section === "card") {
+        if (!Number.isInteger(totalCount) || totalCount < 1 || totalCount > 48 || !Number.isInteger(paidCount) || paidCount < 0 || paidCount >= totalCount) {
+          throw new Error("Informe as parcelas em números inteiros.");
+        }
+        if (draft.amountMode === "total") {
+          const per = Math.floor(amountCents / totalCount);
+          if (per <= 0) throw new Error("O valor total não cobre todas as parcelas.");
+          amountCents = per;
+        }
+        draft.installment = totalCount > 1 ? `${paidCount + 1}/${totalCount}` : "";
+        draft.payment = "card";
+        draft.onCard = false;
       }
       const surpriseCard = draft.mode === "create" && !draft.cardExpense && draft.section === "extra" && draft.payment === "card";
       const startMonthId = surpriseCard ? (draft.invoiceMonthId || "") : state.monthId;
@@ -3949,7 +3994,7 @@ async function saveSheet(event) {
         payment: (draft.section === "fixed" && draft.onCard) || livingOnCard ? "card" : draft.payment,
         onCard: draft.section === "fixed" && draft.onCard,
         cardLabel: draft.cardLabel,
-        note: composeNote(draft.originId, draft.note),
+        note: composeNote(draft.originId, draft.note, draft.partialId),
         installment: onCardPurchase ? null : draft.installment,
         paid: draft.paid,
         installmentPlan: onCardPurchase ? { totalCount, paidCount, amountMode: draft.amountMode || "installment" } : undefined,
