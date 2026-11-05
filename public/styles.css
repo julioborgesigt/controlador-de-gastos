@@ -554,6 +554,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .badge.source-extra { background: #f3e8ff; color: #6b21a8; }
 
+.badge.source-planned { background: #e6f4ef; color: #0f6e56; }
+
 .cost-split {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -676,6 +678,8 @@ html[data-theme="dark"] .badge.forecast { background: #3f2e12; color: #fcd34d; }
 html[data-theme="dark"] .badge.source-fixed { background: #243044; color: #b7d4ff; }
 
 html[data-theme="dark"] .badge.source-extra { background: #2e2140; color: #e9d5ff; }
+
+html[data-theme="dark"] .badge.source-planned { background: #17362e; color: #5dceb0; }
 
 html[data-theme="dark"] .nav button.active { background: #2a313b; }
 

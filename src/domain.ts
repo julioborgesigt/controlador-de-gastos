@@ -356,6 +356,16 @@ export function isVariableCost(note: string | null | undefined): boolean {
   return String(note || "").split("\n").some((line) => line.trim() === "tipo:variavel");
 }
 
+export function isPlannedCost(note: string | null | undefined): boolean {
+  return String(note || "").split("\n").some((line) => line.trim() === "tipo:planejado");
+}
+
+export function noteWithPlanned(note: string | null | undefined, planned: boolean): string {
+  const lines = String(note || "").split("\n").map((line) => line.trim()).filter((line) => line && line !== "tipo:planejado");
+  if (!planned) return lines.join("\n");
+  return ["tipo:planejado", ...lines].join("\n");
+}
+
 export function noteWithVariable(note: string | null | undefined, variable: boolean): string {
   const lines = String(note || "").split("\n").map((line) => line.trim()).filter((line) => line && line !== "tipo:variavel");
   if (!variable) return lines.join("\n");

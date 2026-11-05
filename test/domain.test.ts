@@ -19,6 +19,8 @@ import {
   partialIdFromNote,
   livingCardChargeKind,
   isVariableCost,
+  isPlannedCost,
+  noteWithPlanned,
   noteWithVariable,
   normalizeExpense,
   expenseCountForCard,
@@ -446,6 +448,13 @@ test("excluir custo ou gasto no cartão pode ser só deste mês ou de todos", ()
   assert.deepEqual(expenseDeleteTargets(surprise, "s2", "month"), ["s2"]);
   assert.deepEqual(expenseDeleteTargets(surprise, "s2", "forward"), ["s2", "s3"]);
   assert.deepEqual(expenseDeleteTargets(surprise, "s2", "series"), ["s1", "s2", "s3"]);
+});
+
+test("planejado fica marcado sem se misturar com imprevisto", () => {
+  assert.equal(isPlannedCost("tipo:planejado"), true);
+  assert.equal(isPlannedCost("tipo:variavel"), false);
+  assert.equal(noteWithPlanned("viagem", true), "tipo:planejado\nviagem");
+  assert.equal(noteWithPlanned("tipo:planejado\nviagem", false), "viagem");
 });
 
 test("custo variável no cartão fica marcado na observação interna", () => {
