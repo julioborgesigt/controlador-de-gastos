@@ -1516,7 +1516,7 @@ function setupGuide() {
     ["Custo de vida", onDesktop()
       ? "As contas que voltam todo mês. Use os botões ao lado para pagar no Pix, enviar pro cartão, editar ou excluir."
       : "As contas que voltam todo mês. Puxe para a direita para pagar no Pix ou enviar pro cartão. Puxe para a esquerda para editar ou excluir."],
-    ["Imprevisto", "O que fugiu do plano. Dá para lançar no Pix, em espécie, no débito ou no cartão."],
+    ["Imprevisto", "O que fugiu do plano. Dá para lançar no Pix ou no crédito."],
     ["Receita", "A renda base e os extras do mês, como décimo terceiro ou um valor avulso."],
   ];
   return el("main", { class: "screen auth" }, [
@@ -1724,7 +1724,7 @@ function cardsHome(data) {
       ? "Clique num cartão para ver o detalhamento. Os botões embaixo editam ou quitam o cartão. Excluir só quando ele não tiver gastos."
       : "Toque num cartão para ver o detalhamento. Dá para editar o cartão. Excluir só quando ele não tiver gastos."),
     editable() ? el("div", { class: "stack-actions" }, [
-      el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto Cartão"),
+      el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto no crédito"),
       el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
     ]) : "",
   ];
@@ -1779,7 +1779,7 @@ function cardDetail(data) {
         class: "primary",
         type: "button",
         onclick: () => openCardExpense(card ? card.name : ""),
-      }, "+ Gasto Cartão"),
+      }, "+ Gasto no crédito"),
     ]) : "",
   ];
   const groups = [
@@ -2299,7 +2299,7 @@ function sectionList(data, section) {
     children.push(el("p", { class: "note" }, "O valor cadastrado é previsto. Pague no Pix, envie pro cartão ou lance um parcial para ele entrar na conta. O valor pode ser diferente do cadastrado."));
   }
   if (section === "extra") {
-    children.push(el("p", { class: "note" }, "Dê um nome ao imprevisto e diga se ele saiu no Pix, débito, espécie ou cartão. No cartão, escolha a fatura."));
+    children.push(el("p", { class: "note" }, "Dê um nome ao imprevisto e diga se ele saiu no Pix ou no crédito. No crédito, escolha o cartão e a fatura."));
   }
   if (editable()) {
     children.push(el("button", {
@@ -2785,7 +2785,7 @@ function expenseRow(expense, section, options = {}) {
   if (expense.section === "extra" && section === "card" && !options.manage) meta.push("Imprevisto");
   if (onInvoice && section === "card") meta.push("Custo de vida, já incluído");
   if (expense.payment !== "card" || onInvoice) meta.push(paymentLabel(expense.payment));
-  if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Cartão ${expense.cardLabel}` : "Cartão");
+  if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Crédito ${expense.cardLabel}` : "Crédito");
   if (section === "fixed" && isVariableNote(expense.note)) meta.push("Variável");
   if (expense.installment) meta.push(expense.installment);
   const partials = expense.partials || [];
@@ -2836,9 +2836,9 @@ function expenseRow(expense, section, options = {}) {
       expense.paid
         ? { label: "Desfazer", tone: "undo", commit: true, run: () => openUndoPayments(expense) }
         : cardFirst
-          ? { label: "Pago\nno cartão", tone: "send", run: () => openCardPay(expense) }
+          ? { label: "Pago\nno crédito", tone: "send", run: () => openCardPay(expense) }
           : {
-            label: expense.payment === "cash" ? "Pago\nem espécie" : "Pago\nno Pix",
+            label: "Pago\nno Pix",
             tone: "pay",
             run: () => openCloseLiving(expense),
           },
@@ -2896,13 +2896,13 @@ function managedMonthSelect(draft, key, label) {
 }
 
 function livingPay(draft) {
-  const payment = draft.payment === "cash" || draft.payment === "card" ? draft.payment : "pix";
+  const payment = draft.payment === "card" ? "card" : "pix";
   const editing = draft.mode === "edit";
   const cardLaunch = draft.cardLaunch === "following" ? "following" : "month";
   return el("div", {}, [
     el("div", { class: "field" }, [
       el("label", {}, editing ? "Como fica o pagamento" : "Como pretende pagar"),
-      segmented("payment", [["pix", "Pix"], ["cash", "Espécie"], ["card", "Cartão"]], payment),
+      segmented("payment", [["pix", "Pix"], ["card", "Crédito"]], payment),
     ]),
     payment === "card" ? cardSelect(draft) : "",
     !editing && payment === "card"
@@ -2919,8 +2919,8 @@ function livingPay(draft) {
       : "",
     el("p", { class: "muted" }, editing
       ? (payment === "card"
-        ? "Pix ou espécie tira este mês da fatura. Cartão lança o valor cadastrado neste mês."
-        : "Trocar para cartão lança o valor cadastrado na fatura deste mês.")
+        ? "Pix tira este mês da fatura. Crédito lança o valor cadastrado neste mês."
+        : "Trocar para crédito lança o valor cadastrado na fatura deste mês.")
       : payment === "card" && draft.costKind === "variavel"
         ? "O valor fica previsto e não entra na fatura agora. O lançamento, total ou parcial, fica para quando você quiser, e o parcial pode se repetir. A despesa só encerra quando você pedir, mesmo que passe do previsto."
         : payment === "card"
@@ -3075,7 +3075,7 @@ function closeAfterField(draft) {
 
 function partialLine(partial) {
   const method = partial.payment === "card"
-    ? `Cartão${partial.cardLabel ? ` ${partial.cardLabel}` : ""}`
+    ? `Crédito${partial.cardLabel ? ` ${partial.cardLabel}` : ""}`
     : paymentLabel(partial.payment);
   return `${method} · ${money(partial.amountCents)}${partial.installment ? ` · ${partial.installment}` : ""}`;
 }
@@ -3127,7 +3127,7 @@ function openCloseLiving(expense) {
     planned: expense.amountCents,
     described: rest,
     already,
-    payment: expense.payment === "cash" ? "cash" : "pix",
+    payment: "pix",
     amountChoice: already > 0 ? (rest > 0 ? "rest" : "none") : "registered",
     amount: "",
     partials: expense.partials || [],
@@ -3169,7 +3169,7 @@ function undoPaymentsDraft(expense) {
     id: expense.id,
     name: expense.name,
     paid: Boolean(expense.paid),
-    payment: expense.payment === "cash" ? "cash" : "pix",
+    payment: "pix",
     amountCents: expense.amountCents,
     partials,
   };
@@ -3190,7 +3190,7 @@ function paymentEntries(draft) {
   return [{
     id: "",
     amountCents: draft.amountCents,
-    payment: draft.payment === "cash" ? "cash" : "pix",
+    payment: "pix",
     cardLabel: null,
     installment: null,
     createdAt: "",
@@ -3834,7 +3834,7 @@ function sheet() {
       ]),
     );
   } else if (draft.mode === "close-living") {
-    const method = draft.payment === "cash" ? "em espécie" : "no Pix";
+    const method = "no Pix";
     const already = draft.already || 0;
     const choices = already > 0
       ? [
@@ -3867,7 +3867,7 @@ function sheet() {
       field("Valor pago agora", "amount", draft.amount, "decimal"),
       el("div", { class: "field" }, [
         el("label", {}, "Como foi pago"),
-        segmented("payment", [["pix", "Pix"], ["debit", "Débito"], ["cash", "Espécie"], ["card", "Cartão"]], draft.payment),
+        segmented("payment", [["pix", "Pix"], ["card", "Crédito"]], draft.payment),
       ]),
       draft.payment === "card" ? cardSelect(draft) : "",
       draft.payment === "card"
@@ -3910,7 +3910,7 @@ function sheet() {
     const recurring = draft.section === "fixed" && !cardSpend;
     const surprise = draft.section === "extra" && !cardSpend;
     const heading = cardSpend
-      ? (draft.mode === "edit" ? "Editar gasto no cartão" : "Gasto no cartão")
+      ? (draft.mode === "edit" ? "Editar gasto no crédito" : "Gasto no crédito")
       : recurring
         ? (draft.mode === "create" ? "Novo custo de vida" : "Editar custo de vida")
         : surprise
@@ -3933,7 +3933,7 @@ function sheet() {
       surprise
         ? el("div", { class: "field" }, [
           el("label", {}, "Como foi pago"),
-          segmented("payment", [["pix", "Pix"], ["debit", "Débito"], ["cash", "Espécie"], ["card", "Cartão"]], draft.payment),
+          segmented("payment", [["pix", "Pix"], ["card", "Crédito"]], draft.payment),
         ])
         : "",
       recurring ? livingPay(draft) : "",
@@ -4455,11 +4455,7 @@ async function saveSheet(event) {
       } else if (seriesEdit) {
         const payment = draft.section === "card" || draft.payment === "card"
           ? "card"
-          : draft.payment === "cash"
-            ? "cash"
-            : draft.payment === "debit"
-              ? "debit"
-              : "pix";
+          : "pix";
         state.data = await request(`/api/expenses/${draft.id}`, {
           method: "PATCH",
           body: {
@@ -4481,7 +4477,7 @@ async function saveSheet(event) {
           method: "PATCH",
           body: {
             ...body,
-            payment: wantsCard && !relaunch ? "card" : (wantsCard ? "pix" : (draft.payment === "cash" ? "cash" : "pix")),
+            payment: wantsCard && !relaunch ? "card" : "pix",
             onCard: Boolean(wantsCard && draft.wasOnCard && !relaunch),
             paid: relaunch ? false : (wantsCard ? true : (draft.wasOnCard ? false : draft.paid)),
           },
@@ -4501,9 +4497,7 @@ async function saveSheet(event) {
           });
           state.notice = "Lancei o valor no cartão deste mês.";
         } else if (draft.wasOnCard && !wantsCard) {
-          state.notice = draft.payment === "cash"
-            ? "Tirei este mês do cartão. O pagamento ficou em espécie."
-            : "Tirei este mês do cartão. O pagamento ficou no Pix.";
+          state.notice = "Tirei este mês do cartão. O pagamento ficou no Pix.";
         }
         rememberMonth(state.data);
       } else {
@@ -4653,10 +4647,7 @@ function closeSheet() {
 }
 
 function paymentLabel(payment) {
-  if (payment === "card") return "Cartão";
-  if (payment === "debit") return "Débito";
-  if (payment === "cash") return "Espécie";
-  return "Pix";
+  return payment === "card" ? "Crédito" : "Pix";
 }
 
 function money(cents) {

@@ -791,8 +791,8 @@ app.post("/api/expenses/:id/partials", async (c) => {
   }
   if (expense.paid) return c.json({ error: "Esta despesa já foi encerrada." }, 400);
   const body = await readJson(c);
-  const payment = body.payment === "pix" || body.payment === "debit" || body.payment === "cash" || body.payment === "card" ? body.payment : "";
-  if (!payment) return c.json({ error: "Escolha Pix, débito, espécie ou cartão." }, 400);
+  const payment = body.payment === "card" ? "card" : body.payment === "pix" ? "pix" : "";
+  if (!payment) return c.json({ error: "Escolha Pix ou crédito." }, 400);
   if (!isCents(body.amountCents) || body.amountCents <= 0) return c.json({ error: "Informe o valor pago." }, 400);
   if (payment === "card") {
     const cards = await listCards(c.env.DB, writer.scope.ownerId);
@@ -872,7 +872,7 @@ app.post("/api/expenses/:id/settle", async (c) => {
       ownerId: writer.scope.ownerId,
       expenseId: expense.id,
       amountCents,
-      payment: expense.payment === "cash" ? "cash" : "pix",
+      payment: "pix",
       cardLabel: null,
       installment: null,
     });
@@ -1042,7 +1042,7 @@ function readInstallmentPlan(value: unknown): { ok: true; totalCount: number; pa
 }
 
 function isPayment(value: unknown): value is Payment {
-  return value === "pix" || value === "card" || value === "debit" || value === "cash";
+  return value === "pix" || value === "card";
 }
 
 function isCents(value: unknown): value is number {

@@ -266,7 +266,7 @@ test("pagamento parcial deixa a feira em aberto e não soma o cartão duas vezes
 
   feira.paid = true;
   feira.partials = [
-    { id: "1", amountCents: 30000, payment: "cash", cardLabel: null, installment: null, createdAt: "" },
+    { id: "1", amountCents: 30000, payment: "pix", cardLabel: null, installment: null, createdAt: "" },
     { id: "2", amountCents: 15000, payment: "card", cardLabel: "Nubank", installment: null, createdAt: "" },
   ];
   const closed = computeTotals([feira, { ...invoice, paid: true }], 0);
@@ -326,8 +326,10 @@ test("normaliza pagamento para não somar gasto fixo duas vezes", () => {
   assert.deepEqual(fixed, { section: "fixed", payment: "card", onCard: true, cardLabel: "Neon" });
   const forecast = normalizeExpense({ section: "fixed", payment: "card", onCard: false, cardLabel: "Nubank" });
   assert.deepEqual(forecast, { section: "fixed", payment: "card", onCard: false, cardLabel: "Nubank" });
-  const cash = normalizeExpense({ section: "fixed", payment: "cash", onCard: false, cardLabel: "Nubank" });
-  assert.deepEqual(cash, { section: "fixed", payment: "cash", onCard: false, cardLabel: null });
+  const legacy = normalizeExpense({ section: "fixed", payment: "cash", onCard: false, cardLabel: "Nubank" });
+  assert.deepEqual(legacy, { section: "fixed", payment: "pix", onCard: false, cardLabel: null });
+  const legacyExtra = normalizeExpense({ section: "extra", payment: "debit", onCard: false, cardLabel: null });
+  assert.equal(legacyExtra.payment, "pix");
 
   const extra = normalizeExpense({ section: "extra", payment: "card", onCard: true, cardLabel: "Nubank" });
   assert.equal(extra.onCard, false);
