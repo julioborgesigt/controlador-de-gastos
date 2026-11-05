@@ -50,11 +50,11 @@ let suppressHistory = false;
 let allowLeave = false;
 
 const views = [
-  ["resumo", "Resumo"],
-  ["cartoes", "Cartões"],
+  ["resumo", "Resumo mensal"],
+  ["cartoes", "Cartões de crédito"],
   ["casa", "Custo de vida"],
-  ["extras", "Imprevisto"],
-  ["receita", "Receita"],
+  ["extras", "Imprevisto / Planejado"],
+  ["receita", "Receita mensal"],
 ];
 
 let bootGeneration = 0;
@@ -943,7 +943,7 @@ function summary(data) {
     ]),
     el("div", { class: "grid" }, [
       el("button", { class: "metric wide", type: "button", onclick: () => { state.view = "receita"; render(); } }, [
-        el("small", {}, "Receita"),
+        el("small", {}, "Receita mensal"),
         el("strong", {}, money(month.incomeCents)),
         month.extraIncomeCents ? el("small", {}, `inclui ${money(month.extraIncomeCents)} extras`) : "",
       ]),
@@ -964,7 +964,7 @@ function summary(data) {
       ? `${money(totals.invoiceCents)} previstos + ${money(totals.extrasCardCents)} em imprevistos`
       : "Nubank, Neon e linhas da fatura"),
     livingJump(totals),
-    jump("extras", "Imprevisto", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
+    jump("extras", "Imprevisto / Planejado", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
     editable() && totals.launchedRemainingCents > 0
       ? el("button", { class: "primary", type: "button", onclick: () => askConfirm("settle") }, "Quitar o que falta")
       : editable() && month.settled
@@ -1509,20 +1509,20 @@ async function saveSetup(draft) {
 
 function setupGuide() {
   const guides = [
-    ["Resumo", "O panorama do mês: o que falta pagar, o saldo e o caminho para as outras abas."],
-    ["Cartões", onDesktop()
+    ["Resumo mensal", "O panorama do mês: o que falta pagar, o saldo e o caminho para as outras abas."],
+    ["Cartões de crédito", onDesktop()
       ? "A fatura de cada cartão. Clique no cartão para ver os lançamentos. O dia de vencimento aparece junto do apelido."
       : "A fatura de cada cartão. Toque no cartão para ver os lançamentos. O dia de vencimento aparece junto do apelido."],
     ["Custo de vida", onDesktop()
       ? "As contas que voltam todo mês. Use os botões ao lado para pagar no Pix, enviar pro cartão, editar ou excluir."
       : "As contas que voltam todo mês. Puxe para a direita para pagar no Pix ou enviar pro cartão. Puxe para a esquerda para editar ou excluir."],
-    ["Imprevisto", "Imprevistos e gastos planejados. Os dois podem sair no Pix ou no crédito."],
-    ["Receita", "A renda base e os extras do mês, como décimo terceiro ou um valor avulso."],
+    ["Imprevisto / Planejado", "Imprevistos e gastos planejados. Os dois podem sair no Pix ou no crédito."],
+    ["Receita mensal", "A renda base e os extras do mês, como décimo terceiro ou um valor avulso."],
   ];
   return el("main", { class: "screen auth" }, [
     el("p", { class: "eyebrow" }, "Como usar"),
     el("h1", {}, "Cada aba tem um papel"),
-    el("p", { class: "lede" }, "O período, os cartões e a aparência continuam disponíveis no perfil e na aba Cartões."),
+    el("p", { class: "lede" }, "O período, os cartões e a aparência continuam disponíveis no perfil e na aba Cartões de crédito."),
     el("div", { class: "list" }, guides.map(([title, text]) => el("article", { class: "item" }, [
       el("div", { class: "item-copy" }, [
         el("strong", {}, title),
@@ -2330,7 +2330,7 @@ function incomeView(data) {
   const extras = data.incomeExtras || [];
   return el("section", {}, [
     el("div", { class: "section-head" }, [
-      el("p", { class: "eyebrow" }, "Receita"),
+      el("p", { class: "eyebrow" }, "Receita mensal"),
       el("h2", {}, money(data.month.incomeCents)),
       el("p", { class: "muted" }, `${data.month.label}: ${money(data.month.baseIncomeCents)} de base${data.month.extraIncomeCents ? ` + ${money(data.month.extraIncomeCents)} extras` : ""}.`),
     ]),
