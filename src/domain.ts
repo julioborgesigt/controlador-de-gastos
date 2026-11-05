@@ -203,12 +203,44 @@ export type LivingCostRef = {
   onCard: boolean;
   paid: boolean;
   hasPartials?: boolean;
+  note?: string | null;
+  createdAt?: string | null;
+  cardLabel?: string | null;
 };
 
 export function sameLivingName(left: string, right: string): boolean {
   const a = left.trim().toLocaleLowerCase("pt-BR");
   const b = right.trim().toLocaleLowerCase("pt-BR");
   return a.length > 0 && a === b;
+}
+
+export function seriesIdFromNote(note: string | null | undefined): string {
+  const line = String(note || "").split("\n").find((item) => item.startsWith("serie:"));
+  return line ? line.slice("serie:".length).trim() : "";
+}
+
+export function noteWithSeries(note: string | null | undefined, seriesId: string): string {
+  const id = seriesId.trim();
+  const lines = String(note || "").split("\n").map((item) => item.trim()).filter((item) => item && !item.startsWith("serie:"));
+  if (!id) return lines.join("\n");
+  return [`serie:${id}`, ...lines].join("\n");
+}
+
+export function sameAccount(
+  current: { id: string; name: string; section?: string; cardLabel?: string | null; note?: string | null; createdAt?: string | null },
+  item: { id: string; name: string; section?: string; cardLabel?: string | null; note?: string | null; createdAt?: string | null },
+): boolean {
+  if (item.id === current.id) return true;
+  if (current.section && item.section && current.section !== item.section) return false;
+  const left = seriesIdFromNote(current.note);
+  const right = seriesIdFromNote(item.note);
+  if (left || right) return left !== "" && left === right;
+  const sameBatch = Boolean(current.createdAt && item.createdAt && current.createdAt === item.createdAt);
+  const unnamedLegacy = !current.createdAt && !item.createdAt;
+  if (!sameBatch && !unnamedLegacy) return false;
+  if (!sameLivingName(current.name, item.name)) return false;
+  if ((current.section === "card" || item.section === "card") && cardKey(current.cardLabel) !== cardKey(item.cardLabel)) return false;
+  return true;
 }
 
 export function livingCardSendTargets(
@@ -222,7 +254,7 @@ export function livingCardSendTargets(
   const later = expenses.filter((item) =>
     item.id !== current.id
     && item.section === "fixed"
-    && sameLivingName(item.name, current.name)
+    && sameAccount(current, item)
     && item.monthId >= current.monthId
     && !item.onCard
     && !item.paid
@@ -242,7 +274,7 @@ export function livingCardUndoTargets(
   if (!current || current.section !== "fixed" || !current.onCard) return [];
   if (scope !== "series") return [current.id];
   return expenses
-    .filter((item) => item.section === "fixed" && item.onCard && sameLivingName(item.name, current.name))
+    .filter((item) => item.section === "fixed" && item.onCard && sameAccount(current, item))
     .sort((left, right) => left.monthId.localeCompare(right.monthId) || left.id.localeCompare(right.id))
     .map((item) => item.id);
 }
@@ -253,6 +285,8 @@ export type ExpenseDeleteRef = {
   section: Section;
   monthId: string;
   cardLabel: string | null;
+  note?: string | null;
+  createdAt?: string | null;
 };
 
 export function expenseDeleteTargets(
@@ -264,11 +298,7 @@ export function expenseDeleteTargets(
   if (!current) return [];
   if (scope !== "series" || (current.section !== "fixed" && current.section !== "card")) return [current.id];
   return expenses
-    .filter((item) => {
-      if (item.section !== current.section || !sameLivingName(item.name, current.name)) return false;
-      if (current.section === "card" && cardKey(item.cardLabel) !== cardKey(current.cardLabel)) return false;
-      return true;
-    })
+    .filter((item) => item.section === current.section && sameAccount(current, item))
     .sort((left, right) => left.monthId.localeCompare(right.monthId) || left.id.localeCompare(right.id))
     .map((item) => item.id);
 }

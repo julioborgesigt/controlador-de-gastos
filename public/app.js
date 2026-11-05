@@ -3282,6 +3282,7 @@ function openEdit(expense, options = {}) {
     onCard: expense.onCard,
     cardLabel: expense.cardLabel || "",
     note: visibleNote(expense.note),
+    seriesId: seriesIdFrom(expense.note),
     originId: originIdFrom(expense.note),
     partialId: partialIdFrom(expense.note),
     installment: expense.installment || "",
@@ -3310,13 +3311,19 @@ function partialIdFrom(note) {
   return line ? line.slice("parcial:".length) : "";
 }
 
-function visibleNote(note) {
-  return String(note || "").split("\n").filter((item) => item && !item.startsWith("origem:") && !item.startsWith("parcial:")).join("\n");
+function seriesIdFrom(note) {
+  const line = String(note || "").split("\n").find((item) => item.startsWith("serie:"));
+  return line ? line.slice("serie:".length) : "";
 }
 
-function composeNote(originId, note, partialId) {
+function visibleNote(note) {
+  return String(note || "").split("\n").filter((item) => item && !item.startsWith("origem:") && !item.startsWith("parcial:") && !item.startsWith("serie:")).join("\n");
+}
+
+function composeNote(originId, note, partialId, seriesId) {
   const text = String(note || "").trim();
   const lines = [];
+  if (seriesId) lines.push(`serie:${seriesId}`);
   if (originId) lines.push(`origem:${originId}`);
   if (partialId) lines.push(`parcial:${partialId}`);
   if (text) lines.push(text);
@@ -4333,7 +4340,7 @@ async function saveSheet(event) {
         payment: (draft.section === "fixed" && draft.onCard) || livingOnCard || wantsCard ? "card" : draft.payment,
         onCard: draft.section === "fixed" && draft.onCard && !relaunch,
         cardLabel: draft.cardLabel,
-        note: composeNote(draft.originId, draft.note, draft.partialId),
+        note: composeNote(draft.originId, draft.note, draft.partialId, draft.seriesId),
         installment: onCardPurchase ? null : draft.installment,
         paid: draft.paid,
         installmentPlan: onCardPurchase ? { totalCount, paidCount, amountMode: draft.amountMode || "installment" } : undefined,
