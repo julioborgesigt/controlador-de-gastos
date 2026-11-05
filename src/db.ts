@@ -562,13 +562,12 @@ export async function deleteMatchingExpenses(
   db: D1Database,
   ownerId: string,
   expenseId: string,
-  scope: "month" | "series",
+  scope: "month" | "forward" | "series",
 ): Promise<{ ok: true; monthId: string; count: number } | { ok: false; error: string }> {
   const current = await getExpense(db, ownerId, expenseId);
   if (!current) return { ok: false, error: "Gasto não encontrado." };
-  const pool = current.section === "fixed" || current.section === "card"
-    ? await listSectionExpenses(db, ownerId, current.section)
-    : [current];
+  const spreads = current.section === "fixed" || current.section === "card" || (current.section === "extra" && current.payment === "card");
+  const pool = spreads ? await listSectionExpenses(db, ownerId, current.section) : [current];
   const ids = expenseDeleteTargets(pool, current.id, scope);
   if (current.section === "card" && scope === "series") {
     const origins = pool.filter((item) => ids.includes(item.id)).map((item) => originExpenseId(item.note)).filter(Boolean);

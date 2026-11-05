@@ -887,7 +887,8 @@ app.post("/api/expenses/:id/settle", async (c) => {
 app.delete("/api/expenses/:id", async (c) => {
   const writer = await requireWriter(c);
   if (!writer.ok) return c.json({ error: writer.error }, writer.status);
-  const scope = c.req.query("scope") === "series" ? "series" : "month";
+  const asked = c.req.query("scope");
+  const scope = asked === "series" || asked === "forward" ? asked : "month";
   const removed = await deleteMatchingExpenses(c.env.DB, writer.scope.ownerId, c.req.param("id"), scope);
   if (!removed.ok) return c.json({ error: removed.error }, 404);
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, removed.monthId), writer.scope));
