@@ -147,7 +147,7 @@ async function loadMonth(monthId) {
   state.data = data;
   if (data.theme) applyTheme(data.theme);
   state.monthId = data.month.id;
-  sessionStorage.setItem("monthId", data.month.id);
+  try { sessionStorage.setItem("monthId", data.month.id); } catch { /* o mês segue só nesta aba */ }
   rememberMonth(data);
 }
 
@@ -261,7 +261,7 @@ function syncOverlayHistory() {
     overlayPushed = false;
     if (history.state && history.state.overlay) {
       suppressHistory = true;
-      history.back();
+      setTimeout(() => history.back(), 0);
     }
   }
 }
@@ -525,7 +525,7 @@ async function submitAuth(event) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -544,7 +544,7 @@ async function loginWithPasskey() {
     state.error = passkeyMessage(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -562,7 +562,7 @@ async function registerPasskey() {
     state.error = passkeyMessage(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -578,7 +578,7 @@ async function removePasskey(id) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -714,7 +714,7 @@ async function chooseSpace(ownerId) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -759,7 +759,7 @@ async function openShares() {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -779,7 +779,7 @@ async function saveShare(event) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -793,7 +793,7 @@ async function setSharePermission(share, permission) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -810,7 +810,7 @@ async function removeShare(share) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -866,7 +866,7 @@ function shell() {
         accountButton(),
       ]),
     ]),
-    el("div", { class: "months" }, data.months.map(monthChip)),
+    el("div", { class: "months" }, (data.months || []).map(monthChip)),
     el("main", { class: "content" }, [
       state.error && !state.sheet ? el("p", { class: "error" }, state.error) : "",
       state.notice && !state.sheet ? el("p", { class: "note" }, state.notice) : "",
@@ -916,7 +916,7 @@ async function changeMonth(monthId) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -975,7 +975,7 @@ function summary(data) {
 }
 
 function accountCpf() {
-  return state.spaces.find((space) => space.permission === "own")?.detail || "";
+  return (state.spaces || []).find((space) => space.permission === "own")?.detail || "";
 }
 
 function accountButton() {
@@ -1310,7 +1310,7 @@ async function offerDevice(after) {
   } catch (error) {
     state.error = passkeyMessage(error);
     setWorking(false);
-    render();
+    renderSafely();
     return;
   }
   setWorking(false);
@@ -1503,7 +1503,7 @@ async function saveSetup(draft) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -1590,7 +1590,7 @@ async function savePeriod(draft, first) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -1661,7 +1661,7 @@ async function executeReset() {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -2090,7 +2090,7 @@ async function removeCard(card) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -2201,7 +2201,7 @@ function undoCardPayment(card) {
     state.error = messageOf(error);
   }).finally(() => {
     setWorking(false);
-    render();
+    renderSafely();
   });
 }
 
@@ -2219,7 +2219,7 @@ function payCardPix(card) {
     state.error = messageOf(error);
   }).finally(() => {
     setWorking(false);
-    render();
+    renderSafely();
   });
 }
 
@@ -2555,7 +2555,7 @@ async function undoCardPay(id) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -3084,7 +3084,7 @@ async function removePartial(expenseId, partialId) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -4205,7 +4205,7 @@ async function saveSheet(event) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -4232,7 +4232,7 @@ async function patchExpense(expense, patch) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -4247,7 +4247,7 @@ async function deleteExpense(expense) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -4304,7 +4304,7 @@ async function logout() {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -4361,34 +4361,61 @@ async function request(path, options = {}) {
 }
 
 async function requestOnce(path, options) {
-  const response = await fetch(path, {
-    method: options.method || "GET",
-    headers: options.body ? { "content-type": "application/json" } : undefined,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (response.status === 401 && path !== "/api/login" && path !== "/api/register" && path !== "/api/passkeys/login") {
-    state.booting = false;
-    state.authed = false;
-    state.authView = "login";
-    state.needsPeriod = false;
-    state.choosing = false;
-    state.data = null;
-    state.busy = false;
-    clearMonthCache();
-    render();
-  }
-  if (!response.ok) {
-    const error = new Error(data.error || "Não foi possível concluir.");
-    error.status = response.status;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(path, {
+      method: options.method || "GET",
+      headers: options.body ? { "content-type": "application/json" } : undefined,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401 && path !== "/api/login" && path !== "/api/register" && path !== "/api/passkeys/login") {
+      state.booting = false;
+      state.authed = false;
+      state.authView = "login";
+      state.needsPeriod = false;
+      state.choosing = false;
+      state.data = null;
+      state.busy = false;
+      clearMonthCache();
+      renderSafely();
+    }
+    if (!response.ok) {
+      const error = new Error(data.error || "Não foi possível concluir.");
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("O servidor demorou para responder. Tente de novo.");
     throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  return data;
 }
 
 function messageOf(error) {
-  if (error instanceof TypeError) return "Sem conexão. Tente de novo em instantes.";
-  return error.message || "Não foi possível concluir.";
+  if (error?.name === "AbortError") return "O servidor demorou para responder. Tente de novo.";
+  if (error instanceof TypeError && /fetch|network|Failed/i.test(String(error.message || ""))) {
+    return "Sem conexão. Tente de novo em instantes.";
+  }
+  return error?.message || "Não foi possível concluir.";
+}
+
+function renderSafely() {
+  try {
+    render();
+  } catch (error) {
+    console.error(error);
+    setWorking(false);
+    const note = document.createElement("p");
+    note.className = "error";
+    note.textContent = error?.message || "Não foi possível atualizar a tela.";
+    if (!root.querySelector(".shell, .screen")) root.replaceChildren(note);
+    else root.prepend(note);
+  }
 }
 
 function glyph(name) {
