@@ -45,6 +45,7 @@ import {
   findUserByCpf,
   findUserById,
   clearRecurringCardCharge,
+  clearLivingCardCharges,
   clearRecurringCardLines,
   getExpense,
   getMonth,
@@ -56,7 +57,7 @@ import {
   insertPartialPayment,
   deletePartialPayment,
   deletePartialsForExpenses,
-  payRecurringOnCard,
+  payLivingSeriesOnCard,
   payCardInvoice,
   undoCardInvoice,
   listCards,
@@ -604,21 +605,44 @@ app.post("/api/expenses", async (c) => {
   }
   const monthIds = recurringMonthIds(body, parsed.value.section);
   if (!monthIds.ok) return c.json({ error: monthIds.error }, 400);
+  const launchOnCard = parsed.value.section === "fixed" && parsed.value.payment === "card";
+  if (launchOnCard && !parsed.value.cardLabel) return c.json({ error: "Escolha o cartão." }, 400);
+  if (launchOnCard && parsed.value.amountCents <= 0) {
+    return c.json({ error: "Informe um valor maior que zero para lançar no cartão." }, 400);
+  }
   const inserted = await insertRepeatedExpenses(c.env.DB, {
     ownerId: writer.scope.ownerId,
     monthIds: monthIds.ids,
     name: parsed.value.name,
     section: parsed.value.section,
     amountCents: parsed.value.amountCents,
-    payment: parsed.value.payment,
+    payment: launchOnCard ? "pix" : parsed.value.payment,
     onCard: parsed.value.section === "fixed" ? false : parsed.value.onCard,
-    cardLabel: parsed.value.cardLabel,
+    cardLabel: launchOnCard ? null : parsed.value.cardLabel,
     paid: parsed.value.section === "fixed" ? false : parsed.value.paid,
     note: parsed.value.note,
     installment: parsed.value.installment,
     livingCard: false,
   });
   if (!inserted.ok) return c.json({ error: inserted.error }, 404);
+  if (launchOnCard) {
+    const scope = body.cardLaunch === "following" ? "following" : "month";
+    const anchor = inserted.rows.find((row) => row.monthId === body.monthId)
+      ?? inserted.rows.slice().sort((left, right) => left.monthId.localeCompare(right.monthId))[0];
+    if (!anchor) return c.json({ error: "Mês não encontrado." }, 404);
+    const paid = await payLivingSeriesOnCard(c.env.DB, {
+      ownerId: writer.scope.ownerId,
+      expenseId: anchor.id,
+      scope,
+      cardLabel: parsed.value.cardLabel || "",
+      alias: parsed.value.name,
+      amountCents: parsed.value.amountCents,
+      totalCount: 1,
+      startMonthId: anchor.monthId,
+      mode: "installment",
+    });
+    if (!paid.ok) return c.json({ error: paid.error }, 400);
+  }
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.monthId), writer.scope), 201);
 });
 
@@ -681,9 +705,11 @@ app.post("/api/expenses/:id/card-payment", async (c) => {
   if (body.amountMode !== undefined && body.amountMode !== "installment" && body.amountMode !== "total") {
     return c.json({ error: "Diga se o valor é da parcela ou do total." }, 400);
   }
-  const paid = await payRecurringOnCard(c.env.DB, {
+  const scope = body.scope === "following" ? "following" : "month";
+  const paid = await payLivingSeriesOnCard(c.env.DB, {
     ownerId: writer.scope.ownerId,
     expenseId: current.id,
+    scope,
     cardLabel: card.cardLabel || "",
     alias: typeof body.alias === "string" ? body.alias : "",
     amountCents: body.amountCents,
@@ -698,7 +724,8 @@ app.post("/api/expenses/:id/card-payment", async (c) => {
 app.delete("/api/expenses/:id/card-payment", async (c) => {
   const writer = await requireWriter(c);
   if (!writer.ok) return c.json({ error: writer.error }, writer.status);
-  const cleared = await clearRecurringCardCharge(c.env.DB, writer.scope.ownerId, c.req.param("id"));
+  const scope = c.req.query("scope") === "series" ? "series" : "month";
+  const cleared = await clearLivingCardCharges(c.env.DB, writer.scope.ownerId, c.req.param("id"), scope);
   if (!cleared.ok) return c.json({ error: cleared.error }, 404);
   const current = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
   if (!current) return c.json({ error: "Gasto não encontrado." }, 404);
@@ -1006,7 +1033,7 @@ async function insertRepeatedExpenses(
     installment: string | null;
     livingCard: boolean;
   },
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; rows: Array<{ id: string; monthId: string }> } | { ok: false; error: string }> {
   const ids = input.monthIds;
   if (!ids.length) return { ok: false, error: "Mês não encontrado." };
   const marks = ids.map(() => "?").join(", ");
@@ -1026,9 +1053,11 @@ async function insertRepeatedExpenses(
   const nextByMonth = new Map((sorts.results ?? []).map((row) => [row.month_id, Number(row.max_sort) || 0]));
   const createdAt = new Date().toISOString();
   const statements: D1PreparedStatement[] = [];
+  const rows: Array<{ id: string; monthId: string }> = [];
   for (const monthId of ids) {
     const nextSort = (nextByMonth.get(monthId) ?? 0) + 1;
     const fixedId = crypto.randomUUID();
+    rows.push({ id: fixedId, monthId });
     statements.push(
       db
         .prepare(
@@ -1078,7 +1107,7 @@ async function insertRepeatedExpenses(
   for (let index = 0; index < statements.length; index += 80) {
     await db.batch(statements.slice(index, index + 80));
   }
-  return { ok: true };
+  return { ok: true, rows };
 }
 
 function recurringMonthIds(body: JsonBody, section: string): { ok: true; ids: string[] } | { ok: false; error: string } {

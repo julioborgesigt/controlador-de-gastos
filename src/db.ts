@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, PartialPayment, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { carryForward, cardKey, cardOpenExpenses, computeTotals, expenseCountForCard, listMonthRange, monthCanSettle, monthLabel, monthSortOrder, planCardPayoff, planCardPurchase, previousMonthId, resetTargets } from "./domain.ts";
+import { carryForward, cardKey, cardOpenExpenses, computeTotals, expenseCountForCard, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, planCardPayoff, planCardPurchase, previousMonthId, resetTargets } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -535,6 +535,19 @@ export async function listExpenses(db: D1Database, ownerId: string, monthId: str
 export async function getExpense(db: D1Database, ownerId: string, id: string): Promise<Expense | null> {
   const row = await db.prepare("SELECT * FROM expenses WHERE owner_id = ? AND id = ?").bind(ownerId, id).first<ExpenseRow>();
   return row ? mapExpense(row) : null;
+}
+
+export async function listFixedExpenses(db: D1Database, ownerId: string): Promise<Array<Expense & { hasPartials: boolean }>> {
+  const result = await db
+    .prepare(
+      `SELECT e.*,
+        (SELECT COUNT(*) FROM partial_payments p WHERE p.owner_id = e.owner_id AND p.expense_id = e.id) AS partial_count
+       FROM expenses e
+       WHERE e.owner_id = ? AND e.section = 'fixed'`,
+    )
+    .bind(ownerId)
+    .all<ExpenseRow & { partial_count: number }>();
+  return (result.results ?? []).map((row) => ({ ...mapExpense(row), hasPartials: Number(row.partial_count) > 0 }));
 }
 
 export function mapExpense(row: ExpenseRow): Expense {
@@ -1247,6 +1260,64 @@ export async function clearRecurringCardCharge(
     .bind(ownerId, expenseId)
     .run();
   return { ok: true };
+}
+
+export async function payLivingSeriesOnCard(
+  db: D1Database,
+  input: {
+    ownerId: string;
+    expenseId: string;
+    scope: "month" | "following";
+    cardLabel: string;
+    alias: string;
+    amountCents: number;
+    totalCount: number;
+    startMonthId?: string;
+    mode?: "installment" | "total";
+  },
+): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+  const scope = input.totalCount > 1 ? "month" : input.scope;
+  const all = await listFixedExpenses(db, input.ownerId);
+  const ids = livingCardSendTargets(all, input.expenseId, scope);
+  if (!ids.length) return { ok: false, error: "Gasto não encontrado." };
+  let count = 0;
+  for (const id of ids) {
+    const row = all.find((item) => item.id === id);
+    if (!row) continue;
+    const own = id !== input.expenseId;
+    const amount = own ? row.amountCents : input.amountCents;
+    if (amount <= 0) continue;
+    const paid = await payRecurringOnCard(db, {
+      ownerId: input.ownerId,
+      expenseId: id,
+      cardLabel: input.cardLabel,
+      alias: own ? row.name : input.alias,
+      amountCents: amount,
+      totalCount: own ? 1 : input.totalCount,
+      startMonthId: own ? row.monthId : input.startMonthId || row.monthId,
+      mode: own ? "installment" : input.mode,
+    });
+    if (!paid.ok) return paid;
+    count += 1;
+  }
+  if (!count) return { ok: false, error: "Não há valor para lançar no cartão." };
+  return { ok: true, count };
+}
+
+export async function clearLivingCardCharges(
+  db: D1Database,
+  ownerId: string,
+  expenseId: string,
+  scope: "month" | "series",
+): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+  const all = await listFixedExpenses(db, ownerId);
+  const ids = livingCardUndoTargets(all, expenseId, scope);
+  if (!ids.length) return { ok: false, error: "Este gasto não está no cartão." };
+  for (const id of ids) {
+    const cleared = await clearRecurringCardCharge(db, ownerId, id);
+    if (!cleared.ok) return cleared;
+  }
+  return { ok: true, count: ids.length };
 }
 
 export async function applyBaseIncome(db: D1Database, ownerId: string, amountCents: number, scope: "all" | "unlocked"): Promise<void> {

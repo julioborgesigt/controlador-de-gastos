@@ -184,6 +184,58 @@ export function livingCostMonths(monthIds: readonly string[], invoiceMonthId: st
   return monthIds.filter((monthId) => monthId >= invoiceMonthId);
 }
 
+export type LivingCostRef = {
+  id: string;
+  name: string;
+  section: Section;
+  monthId: string;
+  onCard: boolean;
+  paid: boolean;
+  hasPartials?: boolean;
+};
+
+export function sameLivingName(left: string, right: string): boolean {
+  const a = left.trim().toLocaleLowerCase("pt-BR");
+  const b = right.trim().toLocaleLowerCase("pt-BR");
+  return a.length > 0 && a === b;
+}
+
+export function livingCardSendTargets(
+  expenses: readonly LivingCostRef[],
+  currentId: string,
+  scope: "month" | "following",
+): string[] {
+  const current = expenses.find((item) => item.id === currentId);
+  if (!current || current.section !== "fixed") return [];
+  if (scope !== "following") return [current.id];
+  const later = expenses.filter((item) =>
+    item.id !== current.id
+    && item.section === "fixed"
+    && sameLivingName(item.name, current.name)
+    && item.monthId >= current.monthId
+    && !item.onCard
+    && !item.paid
+    && !item.hasPartials,
+  );
+  return [current, ...later]
+    .sort((left, right) => left.monthId.localeCompare(right.monthId) || left.id.localeCompare(right.id))
+    .map((item) => item.id);
+}
+
+export function livingCardUndoTargets(
+  expenses: readonly LivingCostRef[],
+  currentId: string,
+  scope: "month" | "series",
+): string[] {
+  const current = expenses.find((item) => item.id === currentId);
+  if (!current || current.section !== "fixed" || !current.onCard) return [];
+  if (scope !== "series") return [current.id];
+  return expenses
+    .filter((item) => item.section === "fixed" && item.onCard && sameLivingName(item.name, current.name))
+    .sort((left, right) => left.monthId.localeCompare(right.monthId) || left.id.localeCompare(right.id))
+    .map((item) => item.id);
+}
+
 export function parseInstallment(value: unknown): { ok: true; value: string | null } | { ok: false; error: string } {
   if (value === undefined || value === null || value === "") return { ok: true, value: null };
   if (typeof value !== "string") return { ok: false, error: "Parcela inválida." };
