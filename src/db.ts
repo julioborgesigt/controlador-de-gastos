@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, PartialPayment, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { carryForward, cardKey, cardOpenExpenses, computeTotals, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, originExpenseId, planCardPayoff, planCardPurchase, previousMonthId, resetTargets } from "./domain.ts";
+import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, computeTotals, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, resetTargets } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -577,19 +577,27 @@ export async function deleteMatchingExpenses(
     await deletePartialsForExpenses(db, ownerId, fixedIds);
     for (const id of fixedIds) await clearRecurringCardLines(db, ownerId, id);
   }
-  const origins = [...new Set(selected.map((item) => originExpenseId(item.note)).filter(Boolean))];
+  const deletedNotes = selected.map((item) => item.note);
   await db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND id IN (${sqlMarks(ids)})`).bind(ownerId, ...ids).run();
-  for (const origin of origins) {
+  const left = await db
+    .prepare("SELECT note FROM expenses WHERE owner_id = ? AND note IS NOT NULL")
+    .bind(ownerId)
+    .all<{ note: string }>();
+  const effects = cardDeletionEffects(deletedNotes, (left.results ?? []).map((row) => row.note));
+  for (const origin of effects.resetOriginIds) {
     if (ids.includes(origin)) continue;
-    const left = await db
-      .prepare("SELECT id FROM expenses WHERE owner_id = ? AND (note = ? OR note LIKE ?) LIMIT 1")
-      .bind(ownerId, `origem:${origin}`, `origem:${origin}\n%`)
-      .first<{ id: string }>();
-    if (left) continue;
     await db
       .prepare("UPDATE expenses SET payment = 'pix', on_card = 0, card_label = NULL, paid = 0 WHERE owner_id = ? AND id = ? AND section = 'fixed'")
       .bind(ownerId, origin)
       .run();
+  }
+  for (const partialId of effects.dropPartialIds) {
+    const row = await db
+      .prepare("SELECT expense_id FROM partial_payments WHERE owner_id = ? AND id = ?")
+      .bind(ownerId, partialId)
+      .first<{ expense_id: string }>();
+    if (!row || ids.includes(row.expense_id)) continue;
+    await deletePartialPayment(db, ownerId, row.expense_id, partialId);
   }
   return { ok: true, monthId: current.monthId, count: ids.length };
 }
@@ -805,7 +813,40 @@ export async function deletePartialPayment(db: D1Database, ownerId: string, expe
   if (!row) return false;
   await db.prepare("DELETE FROM expenses WHERE owner_id = ? AND note LIKE ?").bind(ownerId, `%parcial:${partialId}%`).run();
   await db.prepare("DELETE FROM partial_payments WHERE owner_id = ? AND id = ?").bind(ownerId, partialId).run();
+  await db
+    .prepare("UPDATE expenses SET paid = 0 WHERE owner_id = ? AND id = ? AND section = 'fixed'")
+    .bind(ownerId, expenseId)
+    .run();
   return true;
+}
+
+export async function undoExpensePayments(
+  db: D1Database,
+  ownerId: string,
+  expenseId: string,
+  scope: "last" | "all",
+): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+  const expense = await getExpense(db, ownerId, expenseId);
+  if (!expense || expense.section !== "fixed" || expense.onCard) {
+    return { ok: false, error: "Este pagamento não se desfaz por aqui." };
+  }
+  const rows = await db
+    .prepare(
+      "SELECT id FROM partial_payments WHERE owner_id = ? AND expense_id = ? ORDER BY created_at DESC, id DESC",
+    )
+    .bind(ownerId, expenseId)
+    .all<{ id: string }>();
+  const partialIds = (rows.results ?? []).map((row) => row.id);
+  if (!partialIds.length) {
+    if (!expense.paid) return { ok: false, error: "Não há pagamento para desfazer." };
+    await db.prepare("UPDATE expenses SET paid = 0 WHERE owner_id = ? AND id = ?").bind(ownerId, expenseId).run();
+    return { ok: true, count: 1 };
+  }
+  const targets = scope === "all" ? partialIds : partialIds.slice(0, 1);
+  for (const partialId of targets) {
+    await deletePartialPayment(db, ownerId, expenseId, partialId);
+  }
+  return { ok: true, count: targets.length };
 }
 
 export async function deletePartialsForExpenses(db: D1Database, ownerId: string, expenseIds: readonly string[]): Promise<void> {
@@ -820,9 +861,28 @@ export async function deletePartialsForExpenses(db: D1Database, ownerId: string,
     .run();
 }
 
+async function clearOrphanCardPartials(db: D1Database, ownerId: string): Promise<void> {
+  const partials = await db
+    .prepare("SELECT id, expense_id FROM partial_payments WHERE owner_id = ? AND payment = 'card'")
+    .bind(ownerId)
+    .all<{ id: string; expense_id: string }>();
+  const rows = partials.results ?? [];
+  if (!rows.length) return;
+  const notes = await db
+    .prepare("SELECT note FROM expenses WHERE owner_id = ? AND note LIKE '%parcial:%'")
+    .bind(ownerId)
+    .all<{ note: string | null }>();
+  const live = new Set((notes.results ?? []).map((row) => partialIdFromNote(row.note)).filter(Boolean));
+  for (const partial of rows) {
+    if (live.has(partial.id)) continue;
+    await deletePartialPayment(db, ownerId, partial.expense_id, partial.id);
+  }
+}
+
 export async function monthPayload(db: D1Database, ownerId: string, monthId: string) {
   const month = await getMonth(db, ownerId, monthId);
   if (!month) return null;
+  await clearOrphanCardPartials(db, ownerId);
   const expenses = await attachPartials(db, ownerId, await listExpenses(db, ownerId, monthId));
   const cards = await listCards(db, ownerId);
   const incomeExtras = await listIncomeExtras(db, ownerId);

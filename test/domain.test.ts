@@ -14,6 +14,8 @@ import {
   livingCardSendTargets,
   livingCardUndoTargets,
   expenseDeleteTargets,
+  cardDeletionEffects,
+  partialIdFromNote,
   normalizeExpense,
   expenseCountForCard,
   listMonthRange,
@@ -178,6 +180,29 @@ test("pagar a fatura não quita o mês enquanto o custo de vida previsto estiver
   const closed = computeTotals([living, invoice], 100000);
   assert.equal(closed.remainingCents, 0);
   assert.equal(monthCanSettle(closed), true);
+});
+
+test("excluir a linha do cartão solta o parcial e o custo que estava inteiro na fatura", () => {
+  assert.equal(partialIdFromNote("origem:feira\nparcial:p1"), "p1");
+  assert.equal(partialIdFromNote("origem:feira"), "");
+
+  const partialGone = cardDeletionEffects(["origem:feira\nparcial:p1"], []);
+  assert.deepEqual(partialGone.dropPartialIds, ["p1"]);
+  assert.deepEqual(partialGone.resetOriginIds, []);
+
+  const partialKept = cardDeletionEffects(
+    ["origem:feira\nparcial:p1"],
+    ["origem:feira\nparcial:p1"],
+  );
+  assert.deepEqual(partialKept.dropPartialIds, []);
+  assert.deepEqual(partialKept.resetOriginIds, []);
+
+  const fullCharge = cardDeletionEffects(["origem:agua"], []);
+  assert.deepEqual(fullCharge.resetOriginIds, ["agua"]);
+  assert.deepEqual(fullCharge.dropPartialIds, []);
+
+  const installmentLeft = cardDeletionEffects(["origem:agua"], ["origem:agua"]);
+  assert.deepEqual(installmentLeft.resetOriginIds, []);
 });
 
 test("pagamento parcial deixa a feira em aberto e não soma o cartão duas vezes", () => {

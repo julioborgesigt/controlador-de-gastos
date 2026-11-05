@@ -2813,7 +2813,7 @@ function expenseRow(expense, section, options = {}) {
     : living
     ? [
       expense.paid
-        ? { label: "Desfazer", tone: "undo", commit: true, run: () => patchExpense(expense, { paid: false }) }
+        ? { label: "Desfazer", tone: "undo", commit: true, run: () => openUndoPayments(expense) }
         : cardFirst
           ? { label: "Pago\nno cartão", tone: "send", run: () => openCardPay(expense) }
           : {
@@ -3062,16 +3062,91 @@ function openPartialPayment(info) {
   render();
 }
 
+function undoPaymentsDraft(expense) {
+  const partials = [...(expense.partials || [])].sort((left, right) => {
+    const byTime = String(right.createdAt || "").localeCompare(String(left.createdAt || ""));
+    if (byTime) return byTime;
+    return String(right.id || "").localeCompare(String(left.id || ""));
+  });
+  return {
+    mode: "undo-payments",
+    id: expense.id,
+    name: expense.name,
+    paid: Boolean(expense.paid),
+    payment: expense.payment === "cash" ? "cash" : "pix",
+    amountCents: expense.amountCents,
+    partials,
+  };
+}
+
+function openUndoPayments(expense) {
+  if (!expense) return;
+  state.expenseInfo = null;
+  state.sheet = undoPaymentsDraft(expense);
+  state.error = "";
+  render();
+}
+
+function paymentEntries(draft) {
+  const partials = draft.partials || [];
+  if (partials.length) return partials.map((partial) => ({ ...partial, synthetic: false }));
+  if (!draft.paid) return [];
+  return [{
+    id: "",
+    amountCents: draft.amountCents,
+    payment: draft.payment === "cash" ? "cash" : "pix",
+    cardLabel: null,
+    installment: null,
+    createdAt: "",
+    synthetic: true,
+  }];
+}
+
+function paymentEntryLine(entry) {
+  const when = entry.createdAt ? passkeyWhen(entry.createdAt) : "";
+  return [partialLine(entry), when].filter(Boolean).join(" · ");
+}
+
 async function removePartial(expenseId, partialId) {
   state.error = "";
-  setWorking(true, "Desfazendo...");
+  setWorking(true, "Excluindo...");
   try {
     state.data = await request(`/api/expenses/${expenseId}/partials/${partialId}`, { method: "DELETE" });
     rememberMonth(state.data);
     const expense = (state.data.expenses || []).find((item) => item.id === expenseId);
-    if (expense) openExpenseInfo(expense, "fixed");
-    else state.expenseInfo = null;
-    state.notice = "Pagamento parcial desfeito.";
+    const backToUndo = state.sheet?.mode === "undo-payments" && state.sheet.id === expenseId;
+    if (backToUndo) {
+      state.sheet = expense && ((expense.partials || []).length || expense.paid) ? undoPaymentsDraft(expense) : null;
+    } else if (expense) {
+      openExpenseInfo(expense, "fixed");
+    } else {
+      state.expenseInfo = null;
+    }
+    state.notice = "Lançamento excluído.";
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    renderSafely();
+  }
+}
+
+async function undoPayments(expenseId, scope) {
+  state.error = "";
+  setWorking(true, scope === "all" ? "Desfazendo todos..." : "Desfazendo...");
+  try {
+    state.data = await request(`/api/expenses/${expenseId}/payments?scope=${scope}`, { method: "DELETE" });
+    rememberMonth(state.data);
+    const expense = (state.data.expenses || []).find((item) => item.id === expenseId);
+    const name = state.sheet?.name || expense?.name || "despesa";
+    if (state.sheet?.mode === "undo-payments" && expense && ((expense.partials || []).length || expense.paid)) {
+      state.sheet = undoPaymentsDraft(expense);
+    } else if (state.sheet?.mode === "undo-payments") {
+      state.sheet = null;
+    }
+    state.notice = scope === "all"
+      ? `Desfiz todos os lançamentos de “${name}”.`
+      : `Desfiz o último lançamento de “${name}”.`;
   } catch (error) {
     state.error = messageOf(error);
   } finally {
@@ -3128,6 +3203,13 @@ function expenseInfoDialog() {
       el("div", { class: "actions" }, [
         info.canEdit && info.living && !info.paid
           ? el("button", { class: "secondary", type: "button", onclick: () => openPartialPayment(info) }, "Pagamento parcial")
+          : "",
+        info.canEdit && info.living && (info.partials?.length || info.paid)
+          ? el("button", {
+            class: "secondary",
+            type: "button",
+            onclick: () => openUndoPayments((state.data?.expenses || []).find((item) => item.id === info.id)),
+          }, "Desfazer lançamentos")
           : "",
         el("button", { class: "primary", type: "button", onclick: closeExpenseInfo }, "Fechar"),
       ]),
@@ -3500,6 +3582,31 @@ function sheet() {
         el("button", { class: "danger", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Excluindo..." : "Excluir"),
       ]),
     );
+  } else if (draft.mode === "undo-payments") {
+    const entries = paymentEntries(draft);
+    panel.append(
+      el("h2", {}, "Desfazer pagamento"),
+      el("p", { class: "muted" }, `Estes são os lançamentos de “${draft.name}”. Dá para tirar só o último, todos, ou um lançamento específico.`),
+      entries.length
+        ? el("div", { class: "partial-list" }, entries.map((entry, index) => el("div", { class: "partial-line" }, [
+          el("span", {}, index === 0 ? `Último · ${paymentEntryLine(entry)}` : paymentEntryLine(entry)),
+          el("button", {
+            class: "linkish danger",
+            type: "button",
+            onclick: () => (entry.synthetic || !entry.id ? undoPayments(draft.id, "last") : removePartial(draft.id, entry.id)),
+          }, "Excluir"),
+        ])))
+        : el("p", {}, "Não há lançamento para desfazer."),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
+        entries.length
+          ? el("button", { class: "danger", type: "button", disabled: state.busy ? "" : null, onclick: () => undoPayments(draft.id, "all") }, "Desfazer todos")
+          : "",
+        entries.length
+          ? el("button", { class: "primary", type: "button", disabled: state.busy ? "" : null, onclick: () => undoPayments(draft.id, "last") }, state.busy ? "Desfazendo..." : "Desfazer o último")
+          : "",
+      ]),
+    );
   } else if (draft.mode === "undo-card") {
     panel.append(
       el("h2", {}, "Tirar do cartão"),
@@ -3820,7 +3927,7 @@ async function saveSheet(event) {
   const draft = state.sheet;
   state.error = "";
   try {
-    if (draft.mode === "passkey") return;
+    if (draft.mode === "passkey" || draft.mode === "undo-payments") return;
     if (draft.mode === "close-living") {
       const noAddition = draft.amountChoice === "none";
       const useRegistered = draft.amountChoice === "registered";
