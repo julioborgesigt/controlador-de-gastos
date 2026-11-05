@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, PartialPayment, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, computeTotals, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, resetTargets } from "./domain.ts";
+import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, computeTotals, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteWithSeries, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, resetTargets, sameAccount, seriesIdFromNote } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -570,6 +570,18 @@ export async function deleteMatchingExpenses(
     ? await listSectionExpenses(db, ownerId, current.section)
     : [current];
   const ids = expenseDeleteTargets(pool, current.id, scope);
+  if (current.section === "card" && scope === "series") {
+    const origins = pool.filter((item) => ids.includes(item.id)).map((item) => originExpenseId(item.note)).filter(Boolean);
+    if (origins.length) {
+      const fixed = await listFixedExpenses(db, ownerId);
+      const seeds = fixed.filter((item) => origins.includes(item.id));
+      const siblingIds = new Set(fixed.filter((item) => seeds.some((seed) => sameAccount(seed, item))).map((item) => item.id));
+      for (const card of pool) {
+        const origin = originExpenseId(card.note);
+        if (origin && siblingIds.has(origin) && !ids.includes(card.id)) ids.push(card.id);
+      }
+    }
+  }
   if (!ids.length) return { ok: false, error: "Gasto não encontrado." };
   const selected = pool.filter((item) => ids.includes(item.id));
   const fixedIds = selected.filter((item) => item.section === "fixed").map((item) => item.id);
@@ -855,7 +867,7 @@ export async function addLivingCardPartial(
     section: "card",
     payment: "card",
     cardLabel: input.cardLabel,
-    note: `origem:${expense.id}\nparcial:${partialId}`,
+    note: noteWithSeries(`origem:${expense.id}\nparcial:${partialId}`, seriesIdFromNote(expense.note)),
     totalCount: count,
     paidCount: 0,
     amountCents: input.amountCents,
@@ -990,14 +1002,14 @@ export async function copyFromPreviousMonth(db: D1Database, ownerId: string, mon
   if (!sourceMonth) return 0;
   const source = await listExpenses(db, ownerId, sourceMonth);
   const destination = await listExpenses(db, ownerId, monthId);
-  const taken = new Set(destination.map((expense) => `${expense.section}|${expense.name.toLowerCase()}`));
+  const taken = new Set(destination.map((expense) => accountKey(expense)));
   const nextSort = destination.reduce((max, expense) => Math.max(max, expense.sortOrder), 0);
   const createdAt = new Date().toISOString();
   const inserts: D1PreparedStatement[] = [];
   for (const expense of source) {
     const carried = carryForward(expense);
     if (!carried) continue;
-    const key = `${carried.section}|${carried.name.toLowerCase()}`;
+    const key = accountKey(expense);
     if (taken.has(key)) continue;
     taken.add(key);
     inserts.push(
@@ -1026,6 +1038,13 @@ export async function copyFromPreviousMonth(db: D1Database, ownerId: string, mon
   }
   if (inserts.length) await db.batch(inserts);
   return inserts.length;
+}
+
+function accountKey(expense: { id: string; section: string; name: string; note?: string | null; createdAt?: string | null }): string {
+  const series = seriesIdFromNote(expense.note);
+  if (series) return `serie:${series}`;
+  if (expense.createdAt) return `criado:${expense.createdAt}|${expense.section}|${expense.name.trim().toLocaleLowerCase("pt-BR")}`;
+  return `id:${expense.id}`;
 }
 
 function payoffMarker(cardId: string, monthId: string): string {
@@ -1321,6 +1340,7 @@ export async function insertCardPurchase(
   const plan = planCardPurchase(input);
   if (!plan.ok) return plan;
   const createdAt = new Date().toISOString();
+  const note = noteWithSeries(input.note, seriesIdFromNote(input.note) || crypto.randomUUID());
   const monthIds = plan.plan.schedule.map((part) => part.monthId);
   await ensureMonths(db, input.ownerId, monthIds);
   const used = await nextSorts(db, input.ownerId, monthIds);
@@ -1343,7 +1363,7 @@ export async function insertCardPurchase(
           input.section === "fixed" ? "card" : input.section,
           part.amountCents,
           input.cardLabel,
-          input.note,
+          note,
           part.installment,
           sort,
           createdAt,
@@ -1406,7 +1426,7 @@ export async function payRecurringOnCard(
     section: "card",
     payment: "card",
     cardLabel: input.cardLabel,
-    note: recurringOriginNote(input.expenseId),
+    note: noteWithSeries(recurringOriginNote(input.expenseId), seriesIdFromNote(expense.note)),
     totalCount: input.totalCount,
     paidCount: 0,
     amountCents: input.amountCents,
@@ -1443,7 +1463,7 @@ async function chargeLivingRowsOnCard(
 ): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
   const alias = input.alias.trim().replace(/\s+/g, " ").slice(0, 80);
   if (!alias) return { ok: false, error: "Escolha o apelido que vai aparecer na fatura." };
-  const charges: Array<{ id: string; name: string; monthId: string; amountCents: number }> = [];
+  const charges: Array<{ id: string; name: string; monthId: string; amountCents: number; note: string }> = [];
   for (const row of input.rows) {
     const own = row.id !== input.anchorId;
     const amount = own ? row.amountCents : input.amountCents;
@@ -1459,7 +1479,13 @@ async function chargeLivingRowsOnCard(
     if (!plan.ok) return plan;
     const part = plan.plan.schedule[0];
     if (!part) continue;
-    charges.push({ id: row.id, name: own ? row.name : alias, monthId: part.monthId, amountCents: part.amountCents });
+    charges.push({
+      id: row.id,
+      name: own ? row.name : alias,
+      monthId: part.monthId,
+      amountCents: part.amountCents,
+      note: noteWithSeries(recurringOriginNote(row.id), seriesIdFromNote(row.note)),
+    });
   }
   if (!charges.length) return { ok: false, error: "Não há valor para lançar no cartão." };
   await ensureMonths(db, input.ownerId, charges.map((charge) => charge.monthId));
@@ -1482,7 +1508,7 @@ async function chargeLivingRowsOnCard(
         `INSERT INTO expenses
           (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
          VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, NULL, ?, 'user', ?)`,
-      ).bind(crypto.randomUUID(), input.ownerId, charge.monthId, charge.name, charge.amountCents, input.cardLabel, marker, sort, createdAt),
+      ).bind(crypto.randomUUID(), input.ownerId, charge.monthId, charge.name, charge.amountCents, input.cardLabel, charge.note, sort, createdAt),
     );
   }
   await runStatements(db, statements);

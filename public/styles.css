@@ -714,11 +714,12 @@ body.sheet-open {
   z-index: 1;
   width: min(520px, 100%);
   max-height: min(92dvh, 760px);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
   overscroll-behavior: contain;
   touch-action: pan-y;
   border-radius: 16px 16px 0 0;
-  padding: 12px 18px calc(18px + var(--safe-bottom));
+  padding: 0 18px calc(18px + var(--safe-bottom));
   box-shadow: 0 -8px 24px rgba(16, 24, 40, 0.12);
 }
 
@@ -730,12 +731,15 @@ body.sheet-open {
   position: sticky;
   top: 0;
   z-index: 2;
-  margin: -4px -18px 8px;
-  padding: 12px 18px 16px;
+  margin: 0 -18px 4px;
+  padding: 10px 18px 8px;
   background: var(--card);
+  border-radius: 15px 15px 0 0;
   touch-action: none;
   cursor: grab;
 }
+
+.sheet h2 { margin: 8px 0 8px; }
 
 .handle {
   width: 46px;

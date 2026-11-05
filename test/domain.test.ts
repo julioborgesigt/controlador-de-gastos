@@ -385,6 +385,18 @@ test("enviar pro cartão fica neste mês, ou segue os meses seguintes ainda em a
   assert.deepEqual(livingCardUndoTargets(costs, "jan", "month"), ["jan"]);
   assert.deepEqual(livingCardUndoTargets(costs, "jan", "series"), ["jan", "mai"]);
   assert.deepEqual(livingCardUndoTargets(costs, "nov", "series"), []);
+  const twins = [
+    { id: "a-nov", name: "Internet", section: "fixed" as const, monthId: "2026-11", onCard: false, paid: false, note: "serie:a", createdAt: "t1" },
+    { id: "a-dez", name: "Internet", section: "fixed" as const, monthId: "2026-12", onCard: false, paid: false, note: "serie:a", createdAt: "t1" },
+    { id: "b-nov", name: "Internet", section: "fixed" as const, monthId: "2026-11", onCard: false, paid: false, note: "serie:b", createdAt: "t2" },
+    { id: "b-dez", name: "Internet", section: "fixed" as const, monthId: "2026-12", onCard: false, paid: false, note: "serie:b", createdAt: "t2" },
+  ];
+  assert.deepEqual(livingCardSendTargets(twins, "a-nov", "following"), ["a-nov", "a-dez"]);
+  assert.deepEqual(livingCardUndoTargets([
+    { ...twins[0], onCard: true, paid: true },
+    { ...twins[1], onCard: true, paid: true },
+    { ...twins[2], onCard: true, paid: true },
+  ], "a-nov", "series"), ["a-nov", "a-dez"]);
 });
 
 test("excluir custo ou gasto no cartão pode ser só deste mês ou de todos", () => {
@@ -403,6 +415,20 @@ test("excluir custo ou gasto no cartão pode ser só deste mês ou de todos", ()
   assert.deepEqual(expenseDeleteTargets(rows, "c1", "series"), ["c1", "c2"]);
   assert.deepEqual(expenseDeleteTargets(rows, "c3", "month"), ["c3"]);
   assert.deepEqual(expenseDeleteTargets(rows, "e1", "series"), ["e1"]);
+  const twins = [
+    { id: "n1", name: "Internet", section: "fixed" as const, monthId: "2026-11", cardLabel: null, note: "serie:a", createdAt: "t1" },
+    { id: "n2", name: "Internet", section: "fixed" as const, monthId: "2026-12", cardLabel: null, note: "serie:a", createdAt: "t1" },
+    { id: "o1", name: "Internet", section: "fixed" as const, monthId: "2026-11", cardLabel: null, note: "serie:b", createdAt: "t2" },
+    { id: "o2", name: "Internet", section: "fixed" as const, monthId: "2026-12", cardLabel: null, note: "serie:b", createdAt: "t2" },
+  ];
+  assert.deepEqual(expenseDeleteTargets(twins, "n1", "series"), ["n1", "n2"]);
+  assert.deepEqual(expenseDeleteTargets(twins, "o1", "month"), ["o1"]);
+  const legacy = [
+    { id: "l1", name: "Internet", section: "fixed" as const, monthId: "2026-11", cardLabel: null, createdAt: "2026-11-02T10:00:00.000Z" },
+    { id: "l2", name: "Internet", section: "fixed" as const, monthId: "2026-12", cardLabel: null, createdAt: "2026-11-02T10:00:00.000Z" },
+    { id: "m1", name: "Internet", section: "fixed" as const, monthId: "2026-11", cardLabel: null, createdAt: "2026-11-02T11:00:00.000Z" },
+  ];
+  assert.deepEqual(expenseDeleteTargets(legacy, "l1", "series"), ["l1", "l2"]);
 });
 
 test("custo de vida no cartão começa na primeira fatura escolhida", () => {

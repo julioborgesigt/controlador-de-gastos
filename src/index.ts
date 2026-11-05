@@ -21,7 +21,9 @@ import {
   cardLinkRequired,
   countsTowardPayment,
   livingCardChargeKind,
+  noteWithSeries,
   normalizeExpense,
+  seriesIdFromNote,
   parseCardName,
   parseDueDay,
   parseInstallment,
@@ -1060,6 +1062,8 @@ async function insertRepeatedExpenses(
     .all<{ month_id: string; max_sort: number }>();
   const nextByMonth = new Map((sorts.results ?? []).map((row) => [row.month_id, Number(row.max_sort) || 0]));
   const createdAt = new Date().toISOString();
+  const seriesId = seriesIdFromNote(input.note) || crypto.randomUUID();
+  const note = noteWithSeries(input.note, seriesId);
   const statements: D1PreparedStatement[] = [];
   const rows: Array<{ id: string; monthId: string }> = [];
   for (const monthId of ids) {
@@ -1084,7 +1088,7 @@ async function insertRepeatedExpenses(
           input.onCard ? 1 : 0,
           input.cardLabel,
           input.paid ? 1 : 0,
-          input.note,
+          note,
           input.installment,
           nextSort,
           createdAt,
