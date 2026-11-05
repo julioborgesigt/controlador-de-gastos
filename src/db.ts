@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, PartialPayment, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteWithSeries, noteWithVisibleText, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope } from "./domain.ts";
+import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteWithSeries, noteWithVisibleText, isVariableCost, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -957,7 +957,7 @@ export async function addLivingCardPartial(
   if (plan.plan.schedule.some((part) => !known.some((month) => month.id === part.monthId))) {
     return { ok: false, error: "O parcelamento passa do período gerenciado. Aumente o período ou reduza as parcelas." };
   }
-  if (expense.payment === "card") {
+  if (expense.payment === "card" && !isVariableCost(expense.note)) {
     await db
       .prepare("UPDATE expenses SET payment = 'pix', on_card = 0, card_label = NULL, paid = 0 WHERE owner_id = ? AND id = ?")
       .bind(input.ownerId, expense.id)

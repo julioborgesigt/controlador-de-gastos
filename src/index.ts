@@ -20,8 +20,10 @@ import { loginOptions, loginWithPasskey, registerPasskey, registrationOptions } 
 import {
   cardLinkRequired,
   countsTowardPayment,
+  isVariableCost,
   livingCardChargeKind,
   noteWithSeries,
+  noteWithVariable,
   normalizeExpense,
   seriesIdFromNote,
   parseCardName,
@@ -611,8 +613,9 @@ app.post("/api/expenses", async (c) => {
   }
   const monthIds = recurringMonthIds(body, parsed.value.section);
   if (!monthIds.ok) return c.json({ error: monthIds.error }, 400);
-  const launchOnCard = parsed.value.section === "fixed" && parsed.value.payment === "card";
-  if (launchOnCard && !parsed.value.cardLabel) return c.json({ error: "Escolha o cartão." }, 400);
+  const variableCard = body.costKind === "variavel" && parsed.value.section === "fixed";
+  const launchOnCard = parsed.value.section === "fixed" && parsed.value.payment === "card" && !variableCard;
+  if ((launchOnCard || variableCard) && !parsed.value.cardLabel) return c.json({ error: "Escolha o cartão." }, 400);
   if (launchOnCard && parsed.value.amountCents <= 0) {
     return c.json({ error: "Informe um valor maior que zero para lançar no cartão." }, 400);
   }
@@ -626,7 +629,7 @@ app.post("/api/expenses", async (c) => {
     onCard: parsed.value.section === "fixed" ? false : parsed.value.onCard,
     cardLabel: launchOnCard ? null : parsed.value.cardLabel,
     paid: parsed.value.section === "fixed" ? false : parsed.value.paid,
-    note: parsed.value.note,
+    note: variableCard ? noteWithVariable(parsed.value.note, true) : parsed.value.note,
     installment: parsed.value.installment,
     livingCard: false,
   });
@@ -736,7 +739,8 @@ app.post("/api/expenses/:id/card-payment", async (c) => {
   const charged = body.amountMode === "total" || body.installmentCount <= 1
     ? body.amountCents
     : body.amountCents * body.installmentCount;
-  if (livingCardChargeKind({ plannedCents: current.amountCents, alreadyCents: already, chargedCents: charged }) === "partial") {
+  const variable = isVariableCost(current.note);
+  if (variable || livingCardChargeKind({ plannedCents: current.amountCents, alreadyCents: already, chargedCents: charged }) === "partial") {
     const added = await addLivingCardPartial(c.env.DB, {
       ownerId: writer.scope.ownerId,
       expenseId: current.id,
