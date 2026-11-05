@@ -55,6 +55,7 @@ import {
   clearLivingCardCharges,
   clearRecurringCardLines,
   getExpense,
+  reclassifyExpense,
   getMonth,
   getSetting,
   getTheme,
@@ -716,6 +717,37 @@ app.patch("/api/expenses/:id", async (c) => {
     )
     .run();
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
+});
+
+app.post("/api/expenses/:id/classification", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const current = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
+  if (!current) return c.json({ error: "Gasto não encontrado." }, 404);
+  const body = await readJson(c);
+  const track = body.classification;
+  if (track !== "imprevisto" && track !== "planejado" && track !== "casa") {
+    return c.json({ error: "Escolha Imprevisto, Planejado ou Custo de vida." }, 400);
+  }
+  if (!isCents(body.amountCents) || body.amountCents <= 0) return c.json({ error: "Informe um valor maior que zero." }, 400);
+  if (typeof body.name !== "string" || !body.name.trim() || body.name.trim().length > 120) {
+    return c.json({ error: "Dê um nome ao gasto, com até 120 caracteres." }, 400);
+  }
+  const cards = await listCards(c.env.DB, writer.scope.ownerId);
+  const card = resolveCardLabel(cards, typeof body.cardLabel === "string" ? body.cardLabel : null, true);
+  if (!card.ok) return c.json({ error: card.error }, 400);
+  const note = typeof body.note === "string" ? body.note.trim().slice(0, 300) : "";
+  const saved = await reclassifyExpense(c.env.DB, {
+    ownerId: writer.scope.ownerId,
+    expenseId: current.id,
+    track,
+    name: body.name.trim(),
+    amountCents: body.amountCents,
+    cardLabel: card.cardLabel || "",
+    note,
+  });
+  if (!saved.ok) return c.json({ error: saved.error }, 400);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, saved.monthId), writer.scope));
 });
 
 app.post("/api/expenses/:id/card-payment", async (c) => {

@@ -360,6 +360,34 @@ export function isPlannedCost(note: string | null | undefined): boolean {
   return String(note || "").split("\n").some((line) => line.trim() === "tipo:planejado");
 }
 
+export type ExpenseTrack = "imprevisto" | "planejado" | "casa";
+
+export function expenseTrack(expense: Pick<Expense, "section" | "note">): ExpenseTrack | "" {
+  const note = String(expense.note || "");
+  if (note.includes("parcelamento:") || note.includes("quitado-cartao:")) return "";
+  if (expense.section === "extra") return isPlannedCost(note) ? "planejado" : "imprevisto";
+  if (expense.section === "fixed") return "casa";
+  if (expense.section === "card" && originExpenseId(note)) return "casa";
+  return "";
+}
+
+export function noteForTrack(note: string | null | undefined, track: ExpenseTrack): string {
+  const lines = String(note || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && line !== "tipo:planejado" && !line.startsWith("origem:") && !line.startsWith("parcial:"));
+  if (track === "planejado") lines.unshift("tipo:planejado");
+  return lines.join("\n");
+}
+
+export function noteWithOrigin(note: string | null | undefined, originId: string): string {
+  const lines = String(note || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("origem:"));
+  return [`origem:${originId}`, ...lines].join("\n");
+}
+
 export function noteWithPlanned(note: string | null | undefined, planned: boolean): string {
   const lines = String(note || "").split("\n").map((line) => line.trim()).filter((line) => line && line !== "tipo:planejado");
   if (!planned) return lines.join("\n");

@@ -20,6 +20,9 @@ import {
   livingCardChargeKind,
   isVariableCost,
   isPlannedCost,
+  expenseTrack,
+  noteForTrack,
+  noteWithOrigin,
   noteWithPlanned,
   noteWithVariable,
   normalizeExpense,
@@ -448,6 +451,17 @@ test("excluir custo ou gasto no cartão pode ser só deste mês ou de todos", ()
   assert.deepEqual(expenseDeleteTargets(surprise, "s2", "month"), ["s2"]);
   assert.deepEqual(expenseDeleteTargets(surprise, "s2", "forward"), ["s2", "s3"]);
   assert.deepEqual(expenseDeleteTargets(surprise, "s2", "series"), ["s1", "s2", "s3"]);
+});
+
+test("a tarja do cartão distingue imprevisto, planejado e custo de vida", () => {
+  assert.equal(expenseTrack({ section: "extra", note: "" }), "imprevisto");
+  assert.equal(expenseTrack({ section: "extra", note: "tipo:planejado" }), "planejado");
+  assert.equal(expenseTrack({ section: "fixed", note: "" }), "casa");
+  assert.equal(expenseTrack({ section: "card", note: "origem:abc" }), "casa");
+  assert.equal(expenseTrack({ section: "card", note: "" }), "");
+  assert.equal(noteForTrack("origem:abc\ntipo:planejado\nviagem", "imprevisto"), "viagem");
+  assert.equal(noteForTrack("viagem", "planejado"), "tipo:planejado\nviagem");
+  assert.equal(noteWithOrigin("serie:s1", "abc"), "origem:abc\nserie:s1");
 });
 
 test("planejado fica marcado sem se misturar com imprevisto", () => {

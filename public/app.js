@@ -1774,7 +1774,7 @@ function cardDetail(data) {
         : "Estes gastos ainda não têm um cartão cadastrado."),
     ]),
     editable() && card ? cardTools(card) : "",
-    el("p", { class: "note" }, "Esta fatura reúne custo de vida, imprevisto e planejado. O lançamento nasce nessas abas, já com a tarja de origem."),
+    el("p", { class: "note" }, "Esta fatura reúne custo de vida, imprevisto e planejado. Edite um gasto para mudar o valor e a tarja: ele continua no cartão e passa para a aba escolhida."),
   ];
   const groups = [
     ["Fatura prevista", visible.filter((expense) => expense.section === "card")],
@@ -2778,6 +2778,18 @@ function isPlannedNote(note) {
   return String(note || "").split("\n").some((item) => item.trim() === "tipo:planejado");
 }
 
+function systemCardLine(expense) {
+  const note = String(expense.note || "");
+  return note.includes("parcelamento:") || note.includes("quitado-cartao:");
+}
+
+function cardTrack(expense) {
+  if (systemCardLine(expense)) return "";
+  if (expense.section === "extra") return isPlannedNote(expense.note) ? "planejado" : "imprevisto";
+  if (expense.section === "fixed" || originIdFrom(expense.note)) return "casa";
+  return "";
+}
+
 function cardSourceLabel(expense) {
   if (expense.section === "extra") return isPlannedNote(expense.note) ? "Planejado" : "Imprevisto";
   if (expense.section === "fixed" && expense.onCard) return "Custo de vida";
@@ -2798,7 +2810,7 @@ function expenseRow(expense, section, options = {}) {
   const partials = expense.partials || [];
   if (section === "fixed" && !onInvoice && partials.length) meta.push(partialSummary(expense));
   const edit = () => {
-    if (editable()) openEdit(expense, { cardExpense: lockedCard });
+    if (editable()) openEdit(expense, { cardExpense: lockedCard, fromCard: section === "card" && !systemCardLine(expense) });
   };
   const mirror = cardMirror(expense, section);
   const forecast = section === "fixed" && !onInvoice && !expense.paid && !partials.length;
@@ -3338,7 +3350,9 @@ function openEdit(expense, options = {}) {
     note: visibleNote(expense.note),
     seriesId: seriesIdFrom(expense.note),
     variable: isVariableNote(expense.note),
-    expenseKind: isPlannedNote(expense.note) ? "planejado" : "imprevisto",
+    fromCard: Boolean(options.fromCard),
+    expenseKind: options.fromCard ? cardTrack(expense) : (isPlannedNote(expense.note) ? "planejado" : "imprevisto"),
+    originalKind: options.fromCard ? cardTrack(expense) : "",
     originId: originIdFrom(expense.note),
     partialId: partialIdFrom(expense.note),
     installment: expense.installment || "",
@@ -3905,6 +3919,28 @@ function sheet() {
         el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : (draft.closeAfter === "close" ? "Lançar e encerrar" : "Lançar parcial")),
       ]),
     );
+  } else if (draft.fromCard && draft.mode === "edit") {
+    panel.append(
+      el("h2", {}, "Editar gasto do cartão"),
+      field("Nome", "name", draft.name, "text"),
+      field("Valor", "amount", draft.amount, "decimal"),
+      el("div", { class: "field" }, [
+        el("label", {}, "Tarja"),
+        segmented("expenseKind", [
+          ["imprevisto", "Imprevisto"],
+          ["planejado", "Planejado"],
+          ["casa", "Custo de vida"],
+        ], draft.expenseKind || ""),
+      ]),
+      el("p", { class: "muted" }, "A tarja manda este lançamento para a aba correspondente. Ele continua neste cartão, no crédito."),
+      cardSelect(draft),
+      field("Observação", "note", draft.note, "text"),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
+        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : "Salvar"),
+      ]),
+      el("button", { class: "danger", type: "button", onclick: () => openDeleteExpense(draft) }, "Excluir gasto"),
+    );
   } else if (draft.mode === "card") {
     panel.append(
       el("h2", {}, draft.id ? "Editar cartão" : "Novo cartão"),
@@ -3999,7 +4035,7 @@ function sheet() {
 
 function cardSelect(draft) {
   const cards = state.data?.cards ?? [];
-  const required = draft.mode === "card-pay" || draft.mode === "partial"
+  const required = draft.fromCard || draft.mode === "card-pay" || draft.mode === "partial"
     || (draft.section === "extra" && (draft.payment === "card" || draft.cardExpense))
     || (draft.section === "fixed" && (draft.onCard || draft.payment === "card"))
     || (draft.section === "card" && (draft.cardExpense || draft.mode === "create"));
@@ -4356,6 +4392,30 @@ async function saveSheet(event) {
         }
       }
       state.data.cards = data.cards;
+    } else if (draft.fromCard && draft.mode === "edit") {
+      if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
+      const amountCents = parseMoney(draft.amount || "");
+      if (amountCents === null || amountCents <= 0) throw new Error("Informe um valor maior que zero.");
+      if (!["imprevisto", "planejado", "casa"].includes(draft.expenseKind)) {
+        throw new Error("Escolha a tarja: Imprevisto, Planejado ou Custo de vida.");
+      }
+      if (!String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão deste gasto.");
+      setWorking(true, "Salvando...");
+      state.data = await request(`/api/expenses/${draft.id}/classification`, {
+        method: "POST",
+        body: {
+          classification: draft.expenseKind,
+          name: draft.name.trim(),
+          amountCents,
+          cardLabel: draft.cardLabel,
+          note: draft.note,
+        },
+      });
+      rememberMonth(state.data);
+      const moved = draft.expenseKind === "casa" ? "Custo de vida" : draft.expenseKind === "planejado" ? "Planejado" : "Imprevisto";
+      state.notice = draft.expenseKind === draft.originalKind
+        ? "Gasto atualizado."
+        : `Gasto atualizado. A tarja agora é ${moved}.`;
     } else {
       if (draft.cardExpense && draft.mode === "create") {
         draft.section = "card";
