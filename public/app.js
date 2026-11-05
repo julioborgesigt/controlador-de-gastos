@@ -2759,22 +2759,14 @@ function blurb(section, totals) {
 }
 
 function costSplit(totals) {
-  if (totals.fixedAllSettled) {
-    return el("div", { class: "cost-split" }, [
-      el("div", {}, [
-        el("small", {}, "Consolidado"),
-        el("strong", {}, money(totals.fixedLaunchedCents)),
-      ]),
-    ]);
-  }
   return el("div", { class: "cost-split" }, [
     el("div", {}, [
-      el("small", {}, "Previsto"),
-      el("strong", {}, money(totals.fixedForecastCents)),
+      el("small", {}, "Já no cartão"),
+      el("strong", {}, money(totals.fixedOnCardCents)),
     ]),
     el("div", {}, [
-      el("small", {}, "Parcial"),
-      el("strong", {}, money(totals.fixedLaunchedCents)),
+      el("small", {}, "Previsto no Pix"),
+      el("strong", {}, money(totals.fixedPixForecastCents)),
     ]),
   ]);
 }
