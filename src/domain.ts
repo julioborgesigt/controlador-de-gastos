@@ -322,7 +322,17 @@ export function editTargets<T extends ExpenseDeleteRef>(
     .sort((left, right) => left.monthId.localeCompare(right.monthId) || left.id.localeCompare(right.id));
 }
 
-const NOTE_MARKERS = ["serie:", "origem:", "parcial:", "quitado-cartao:", "parcelamento:"];
+const NOTE_MARKERS = ["serie:", "origem:", "parcial:", "tipo:", "quitado-cartao:", "parcelamento:"];
+
+export function isVariableCost(note: string | null | undefined): boolean {
+  return String(note || "").split("\n").some((line) => line.trim() === "tipo:variavel");
+}
+
+export function noteWithVariable(note: string | null | undefined, variable: boolean): string {
+  const lines = String(note || "").split("\n").map((line) => line.trim()).filter((line) => line && line !== "tipo:variavel");
+  if (!variable) return lines.join("\n");
+  return ["tipo:variavel", ...lines].join("\n");
+}
 
 export function visibleExpenseNote(note: string | null | undefined): string {
   return String(note || "")

@@ -2779,6 +2779,7 @@ function expenseRow(expense, section, options = {}) {
   if (onInvoice && section === "card") meta.push("Custo de vida, já incluído");
   if (expense.payment !== "card" || onInvoice) meta.push(paymentLabel(expense.payment));
   if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Cartão ${expense.cardLabel}` : "Cartão");
+  if (section === "fixed" && isVariableNote(expense.note)) meta.push("Variável");
   if (expense.installment) meta.push(expense.installment);
   const partials = expense.partials || [];
   if (section === "fixed" && !onInvoice && partials.length) meta.push(partialSummary(expense));
@@ -2854,7 +2855,7 @@ function expenseRow(expense, section, options = {}) {
 
 function recurringMonthIds(draft) {
   const months = state.data?.months || [];
-  if (draft.payment === "card" && draft.section === "fixed" && !draft.cardExpense) {
+  if (draft.payment === "card" && draft.costKind !== "variavel" && draft.section === "fixed" && !draft.cardExpense) {
     if (draft.cardLaunch === "following") return months.map((month) => month.id).filter((id) => id >= state.monthId);
     return state.monthId ? [state.monthId] : [];
   }
@@ -2895,6 +2896,12 @@ function livingPay(draft) {
     payment === "card" ? cardSelect(draft) : "",
     !editing && payment === "card"
       ? el("div", { class: "field" }, [
+        el("label", {}, "Tipo do custo"),
+        segmented("costKind", [["fixo", "Fixo"], ["variavel", "Variável"]], draft.costKind === "variavel" ? "variavel" : "fixo"),
+      ])
+      : "",
+    !editing && payment === "card" && draft.costKind !== "variavel"
+      ? el("div", { class: "field" }, [
         el("label", {}, "Lançar no cartão"),
         segmented("cardLaunch", [["month", "Só este mês"], ["following", "Este mês e os seguintes"]], cardLaunch),
       ])
@@ -2903,7 +2910,9 @@ function livingPay(draft) {
       ? (payment === "card"
         ? "Pix ou espécie tira este mês da fatura. Cartão lança o valor cadastrado neste mês."
         : "Trocar para cartão lança o valor cadastrado na fatura deste mês.")
-      : payment === "card"
+      : payment === "card" && draft.costKind === "variavel"
+        ? "O valor fica previsto e não entra na fatura agora. O lançamento, total ou parcial, fica para quando você quiser, e o parcial pode se repetir. A despesa só encerra quando você pedir, mesmo que passe do previsto."
+        : payment === "card"
         ? (cardLaunch === "following"
           ? "O valor entra na fatura deste mês e de cada mês seguinte do período."
           : "O valor entra na fatura só deste mês.")
@@ -2948,6 +2957,7 @@ function openCreate(section, payment) {
     repeatStart: state.monthId,
     repeatEnd: (state.data?.months || []).at(-1)?.id || state.monthId,
     cardLaunch: "month",
+    costKind: "fixo",
     paid: false,
     source: "user",
   };
@@ -3007,10 +3017,12 @@ function partialSummary(expense) {
     const other = paid - card;
     if (other > 0) bits.push(`Pago ${money(other)}`);
     if (!expense.paid && left > 0) bits.push(`falta ${money(left)}`);
+    else if (!expense.paid && left < 0) bits.push(`passou ${money(-left)}`);
     bits.push(`previsto ${money(expense.amountCents)}`);
     return bits.join(" · ");
   }
   if (!expense.paid && left > 0) return `Pago ${money(paid)} · falta ${money(left)}`;
+  if (!expense.paid && left < 0) return `Pago ${money(paid)} · passou ${money(-left)}`;
   const count = `${partials.length} ${partials.length === 1 ? "pagamento" : "pagamentos"}`;
   return `Pago ${money(paid)} em ${count}`;
 }
@@ -3077,6 +3089,7 @@ function openExpenseInfo(expense, section) {
     status: mirror ? "" : (expense.paid ? "Pago" : "Em aberto"),
     installment: expense.installment || "",
     partials: expense.partials || [],
+    variable: isVariableNote(expense.note),
     canEdit: editable(),
   };
   state.error = "";
@@ -3125,6 +3138,7 @@ function openPartialPayment(info) {
     billing: "once",
     installmentCount: "2",
     invoiceMonthId: info.monthId || state.monthId,
+    variable: Boolean(info.variable),
     planned: info.amountCents || 0,
     already,
     closeAfter: "open",
@@ -3303,6 +3317,7 @@ function openEdit(expense, options = {}) {
     cardLabel: expense.cardLabel || "",
     note: visibleNote(expense.note),
     seriesId: seriesIdFrom(expense.note),
+    variable: isVariableNote(expense.note),
     originId: originIdFrom(expense.note),
     partialId: partialIdFrom(expense.note),
     installment: expense.installment || "",
@@ -3337,14 +3352,19 @@ function seriesIdFrom(note) {
   return line ? line.slice("serie:".length) : "";
 }
 
-function visibleNote(note) {
-  return String(note || "").split("\n").filter((item) => item && !item.startsWith("origem:") && !item.startsWith("parcial:") && !item.startsWith("serie:")).join("\n");
+function isVariableNote(note) {
+  return String(note || "").split("\n").some((item) => item.trim() === "tipo:variavel");
 }
 
-function composeNote(originId, note, partialId, seriesId) {
+function visibleNote(note) {
+  return String(note || "").split("\n").filter((item) => item && !item.startsWith("origem:") && !item.startsWith("parcial:") && !item.startsWith("serie:") && !item.startsWith("tipo:")).join("\n");
+}
+
+function composeNote(originId, note, partialId, seriesId, variable) {
   const text = String(note || "").trim();
   const lines = [];
   if (seriesId) lines.push(`serie:${seriesId}`);
+  if (variable) lines.push("tipo:variavel");
   if (originId) lines.push(`origem:${originId}`);
   if (partialId) lines.push(`parcial:${partialId}`);
   if (text) lines.push(text);
@@ -3398,6 +3418,7 @@ function openCardPay(expense) {
     amountEdits: [],
     invoiceMonthId: expense.monthId || state.monthId,
     cardScope: "month",
+    variable: isVariableNote(expense.note),
     linked: linkedInvoice(expense) || expense.onCard,
   };
   state.error = "";
@@ -3716,7 +3737,9 @@ function sheet() {
       : [["same", `O descrito · ${described}`], ["other", "Outro valor"]];
     panel.append(
       el("h2", {}, "Enviar pro cartão"),
-      el("p", { class: "muted" }, already > 0
+      el("p", { class: "muted" }, draft.variable
+        ? "Custo variável. Lance o total ou uma parte. Pode lançar de novo depois. A despesa continua aberta até você encerrar, mesmo que passe do previsto."
+        : already > 0
         ? `Já pago: ${money(already)}. O sugerido é o restante. A fatura só recebe o valor que você confirmar.`
         : `Na lista este gasto está como ${described}. O valor só entra na fatura quando você confirmar, e pode ser diferente do cadastrado.`),
       field("Apelido na fatura", "alias", draft.alias, "text", "Faculdade, energia..."),
@@ -3740,18 +3763,20 @@ function sheet() {
         : "",
       draft.amountChoice === "none" ? "" : invoiceMonthField(draft),
       draft.amountChoice === "none" ? "" : el("p", { class: "muted", id: "installment-preview" }, cardPayPreview(draft)),
-      draft.amountChoice !== "none" && draft.billing !== "installments" && !(draft.already > 0)
+      !draft.variable && draft.amountChoice !== "none" && draft.billing !== "installments" && !(draft.already > 0)
         ? el("div", { class: "field" }, [
           el("label", {}, "Quais meses entram no cartão"),
           segmented("cardScope", [["month", "Só este mês"], ["following", "Este mês e os seguintes"]], draft.cardScope || "month"),
         ])
         : "",
-      draft.amountChoice !== "none" && draft.billing !== "installments" && !(draft.already > 0)
+      !draft.variable && draft.amountChoice !== "none" && draft.billing !== "installments" && !(draft.already > 0)
         ? el("p", { class: "muted" }, draft.cardScope === "following"
           ? "Os meses seguintes levam o valor cadastrado de cada um, no mesmo cartão. O que já estiver no cartão ou pago não é mexido."
           : "O valor inteiro do previsto entra na fatura e a conta fica com a tarja Tá no cartão, no fundo verde. Um valor menor continua em aberto, com a tarja Parcial no cartão.")
         : "",
-      draft.amountChoice === "none"
+      draft.variable
+        ? closeAfterField(draft)
+        : draft.amountChoice === "none"
         ? el("p", { class: "muted" }, "Encerra com o que já foi lançado. A tarja fica Pago, o nome riscado e o fundo verde.")
         : draft.amountChoice === "same" && !(draft.already > 0) && draft.billing !== "installments"
           ? ""
@@ -3836,7 +3861,12 @@ function sheet() {
         : "",
       draft.payment === "card" ? invoiceMonthField(draft, draft.billing === "installments" ? "A primeira fatura em que entra:" : "Este valor entra na fatura de:") : "",
       closeAfterField(draft),
-      el("p", { class: "muted" }, draft.payment === "card"
+      draft.variable
+        ? el("p", { class: "muted" }, "Custo variável. Este lançamento não encerra a despesa, mesmo que passe do previsto. Encerre só se quiser.")
+        : "",
+      el("p", { class: "muted" }, draft.variable
+        ? ""
+        : draft.payment === "card"
         ? "Se o valor for o previsto inteiro, a conta fica com a tarja Tá no cartão e o fundo verde. Um valor menor fica em aberto, com Em aberto e Parcial no cartão."
         : "Encerrar só depois do lançamento. A tarja fica Pago, com o nome riscado e o fundo verde."),
       el("div", { class: "actions" }, [
@@ -3888,7 +3918,7 @@ function sheet() {
         : "",
       recurring ? livingPay(draft) : "",
       cardSpend ? "" : field(amountLabel(draft), "amount", draft.amount, "decimal"),
-      recurring && draft.mode === "create" && draft.payment !== "card" ? recurringSpan(draft) : "",
+      recurring && draft.mode === "create" && !(draft.payment === "card" && draft.costKind !== "variavel") ? recurringSpan(draft) : "",
       cardSpend || recurring || surprise
         ? ""
         : el("div", { class: "field" }, [
@@ -4055,7 +4085,7 @@ async function saveSheet(event) {
       }
       setWorking(true, draft.closeAfter === "close" ? "Encerrando..." : "Lançando...");
       const cardCount = draft.billing === "installments" ? count : 1;
-      const fullCard = draft.payment === "card" && livingChargeIsFull(draft.planned || 0, draft.already || 0, amountCents);
+      const fullCard = !draft.variable && draft.payment === "card" && livingChargeIsFull(draft.planned || 0, draft.already || 0, amountCents);
       if (fullCard) {
         state.data = await request(`/api/expenses/${draft.id}/card-payment`, {
           method: "POST",
@@ -4158,7 +4188,7 @@ async function saveSheet(event) {
       const chargedTotal = draft.billing === "installments"
         ? (amountMode === "total" ? amountCents : amountCents * installmentCount)
         : amountCents;
-      const fullCard = livingChargeIsFull(draft.planned || draft.described || 0, draft.already || 0, chargedTotal);
+      const fullCard = !draft.variable && livingChargeIsFull(draft.planned || draft.described || 0, draft.already || 0, chargedTotal);
       const close = !fullCard && draft.closeAfter === "close";
       setWorking(true, close ? "Encerrando..." : "Lançando na fatura...");
       state.data = await request(`/api/expenses/${draft.id}/card-payment`, {
@@ -4299,7 +4329,10 @@ async function saveSheet(event) {
       let amountCents = parseMoney(draft.amount || "0");
       if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
       if (amountCents === null) throw new Error("Informe o valor. Exemplo: 75,90");
-      const livingOnCard = draft.mode === "create" && draft.section === "fixed" && !draft.cardExpense && draft.payment === "card";
+      const variableCard = draft.mode === "create" && draft.section === "fixed" && !draft.cardExpense && draft.payment === "card" && draft.costKind === "variavel";
+      const livingOnCard = draft.mode === "create" && draft.section === "fixed" && !draft.cardExpense && draft.payment === "card" && !variableCard;
+      if (variableCard && !String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão.");
+      if (variableCard && amountCents <= 0) throw new Error("Informe o valor previsto.");
       if (livingOnCard) {
         draft.onCard = false;
         draft.paid = false;
@@ -4364,11 +4397,12 @@ async function saveSheet(event) {
         payment: (draft.section === "fixed" && draft.onCard) || livingOnCard || wantsCard ? "card" : draft.payment,
         onCard: draft.section === "fixed" && draft.onCard && !relaunch,
         cardLabel: draft.cardLabel,
-        note: composeNote(draft.originId, draft.note, draft.partialId, draft.seriesId),
+        note: composeNote(draft.originId, draft.note, draft.partialId, draft.seriesId, draft.variable || draft.costKind === "variavel"),
         installment: onCardPurchase ? null : draft.installment,
         paid: draft.paid,
         installmentPlan: onCardPurchase ? { totalCount, paidCount, amountMode: draft.amountMode || "installment" } : undefined,
         cardLaunch: livingOnCard ? (draft.cardLaunch === "following" ? "following" : "month") : undefined,
+        costKind: variableCard ? "variavel" : undefined,
       };
       if (onCardPurchase) {
         const remaining = totalCount - paidCount;
@@ -4385,7 +4419,9 @@ async function saveSheet(event) {
             monthIds: recurringMonths || undefined,
           },
         });
-        if (livingOnCard) {
+        if (variableCard) {
+          state.notice = "Valor previsto. Nada entrou na fatura. Lance o total ou um parcial quando quiser. A despesa só encerra quando você pedir.";
+        } else if (livingOnCard) {
           state.notice = draft.cardLaunch === "following"
             ? "Lancei este custo no cartão deste mês e dos seguintes."
             : "Lancei este custo no cartão só deste mês.";

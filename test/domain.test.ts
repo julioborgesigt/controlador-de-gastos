@@ -18,6 +18,8 @@ import {
   cardDeletionEffects,
   partialIdFromNote,
   livingCardChargeKind,
+  isVariableCost,
+  noteWithVariable,
   normalizeExpense,
   expenseCountForCard,
   listMonthRange,
@@ -430,6 +432,14 @@ test("excluir custo ou gasto no cartão pode ser só deste mês ou de todos", ()
     { id: "m1", name: "Internet", section: "fixed" as const, monthId: "2026-11", cardLabel: null, createdAt: "2026-11-02T11:00:00.000Z" },
   ];
   assert.deepEqual(expenseDeleteTargets(legacy, "l1", "series"), ["l1", "l2"]);
+});
+
+test("custo variável no cartão fica marcado na observação interna", () => {
+  assert.equal(isVariableCost("tipo:variavel"), true);
+  assert.equal(isVariableCost("serie:a\ntipo:variavel"), true);
+  assert.equal(isVariableCost("tipo:fixo"), false);
+  assert.equal(noteWithVariable("energia", true), "tipo:variavel\nenergia");
+  assert.equal(noteWithVariable("tipo:variavel\nenergia", false), "energia");
 });
 
 test("editar pergunta o mês, os seguintes ou todos os registros da mesma conta", () => {
