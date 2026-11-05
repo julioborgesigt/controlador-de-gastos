@@ -11,6 +11,8 @@ import {
   expensesForCard,
   isFixedOnCard,
   livingCostMonths,
+  livingCardSendTargets,
+  livingCardUndoTargets,
   normalizeExpense,
   expenseCountForCard,
   listMonthRange,
@@ -327,6 +329,25 @@ test("parcela do cartão avança no mês seguinte e o gasto fixo lançado pelo u
   assert.equal(nextMonth?.payment, "pix");
   assert.equal(nextMonth?.cardLabel, null);
   assert.equal(nextMonth?.paid, false);
+});
+
+test("enviar pro cartão fica neste mês, ou segue os meses seguintes ainda em aberto", () => {
+  const costs = [
+    { id: "nov", name: "Aluguel", section: "fixed" as const, monthId: "2026-11", onCard: false, paid: false },
+    { id: "dez", name: " aluguel ", section: "fixed" as const, monthId: "2026-12", onCard: false, paid: false },
+    { id: "jan", name: "Aluguel", section: "fixed" as const, monthId: "2027-01", onCard: true, paid: true },
+    { id: "mai", name: "Aluguel", section: "fixed" as const, monthId: "2027-05", onCard: true, paid: true },
+    { id: "fev", name: "Aluguel", section: "fixed" as const, monthId: "2027-02", onCard: false, paid: true },
+    { id: "mar", name: "Aluguel", section: "fixed" as const, monthId: "2027-03", onCard: false, paid: false, hasPartials: true },
+    { id: "luz", name: "Luz", section: "fixed" as const, monthId: "2026-12", onCard: false, paid: false },
+  ];
+  assert.deepEqual(livingCardSendTargets(costs, "dez", "month"), ["dez"]);
+  assert.deepEqual(livingCardSendTargets(costs, "dez", "following"), ["dez"]);
+  assert.deepEqual(livingCardSendTargets(costs, "nov", "following"), ["nov", "dez"]);
+  assert.deepEqual(livingCardSendTargets(costs, "luz", "following"), ["luz"]);
+  assert.deepEqual(livingCardUndoTargets(costs, "jan", "month"), ["jan"]);
+  assert.deepEqual(livingCardUndoTargets(costs, "jan", "series"), ["jan", "mai"]);
+  assert.deepEqual(livingCardUndoTargets(costs, "nov", "series"), []);
 });
 
 test("custo de vida no cartão começa na primeira fatura escolhida", () => {

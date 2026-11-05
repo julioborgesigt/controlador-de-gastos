@@ -147,7 +147,7 @@ async function loadMonth(monthId) {
   state.data = data;
   if (data.theme) applyTheme(data.theme);
   state.monthId = data.month.id;
-  sessionStorage.setItem("monthId", data.month.id);
+  try { sessionStorage.setItem("monthId", data.month.id); } catch { /* o mês segue só nesta aba */ }
   rememberMonth(data);
 }
 
@@ -261,7 +261,7 @@ function syncOverlayHistory() {
     overlayPushed = false;
     if (history.state && history.state.overlay) {
       suppressHistory = true;
-      history.back();
+      setTimeout(() => history.back(), 0);
     }
   }
 }
@@ -525,7 +525,7 @@ async function submitAuth(event) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -544,7 +544,7 @@ async function loginWithPasskey() {
     state.error = passkeyMessage(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -562,7 +562,7 @@ async function registerPasskey() {
     state.error = passkeyMessage(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -578,7 +578,7 @@ async function removePasskey(id) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -714,7 +714,7 @@ async function chooseSpace(ownerId) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -759,7 +759,7 @@ async function openShares() {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -779,7 +779,7 @@ async function saveShare(event) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -793,7 +793,7 @@ async function setSharePermission(share, permission) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -810,7 +810,7 @@ async function removeShare(share) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -866,7 +866,7 @@ function shell() {
         accountButton(),
       ]),
     ]),
-    el("div", { class: "months" }, data.months.map(monthChip)),
+    el("div", { class: "months" }, (data.months || []).map(monthChip)),
     el("main", { class: "content" }, [
       state.error && !state.sheet ? el("p", { class: "error" }, state.error) : "",
       state.notice && !state.sheet ? el("p", { class: "note" }, state.notice) : "",
@@ -916,7 +916,7 @@ async function changeMonth(monthId) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -975,7 +975,7 @@ function summary(data) {
 }
 
 function accountCpf() {
-  return state.spaces.find((space) => space.permission === "own")?.detail || "";
+  return (state.spaces || []).find((space) => space.permission === "own")?.detail || "";
 }
 
 function accountButton() {
@@ -1310,7 +1310,7 @@ async function offerDevice(after) {
   } catch (error) {
     state.error = passkeyMessage(error);
     setWorking(false);
-    render();
+    renderSafely();
     return;
   }
   setWorking(false);
@@ -1503,7 +1503,7 @@ async function saveSetup(draft) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -1590,7 +1590,7 @@ async function savePeriod(draft, first) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -1661,7 +1661,7 @@ async function executeReset() {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -2090,7 +2090,7 @@ async function removeCard(card) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -2201,7 +2201,7 @@ function undoCardPayment(card) {
     state.error = messageOf(error);
   }).finally(() => {
     setWorking(false);
-    render();
+    renderSafely();
   });
 }
 
@@ -2219,7 +2219,7 @@ function payCardPix(card) {
     state.error = messageOf(error);
   }).finally(() => {
     setWorking(false);
-    render();
+    renderSafely();
   });
 }
 
@@ -2555,7 +2555,7 @@ async function undoCardPay(id) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -2813,9 +2813,12 @@ function expenseRow(expense, section, options = {}) {
     ]),
   ]);
   if (!editable()) return front;
-  const living = section === "fixed" && !onInvoice;
+  const onCardHere = section === "fixed" && expense.onCard;
+  const living = section === "fixed" && !expense.onCard;
   const cardFirst = expense.payment === "card" && !expense.onCard;
-  const leads = living
+  const leads = onCardHere
+    ? [{ label: "Desfazer", tone: "undo", commit: true, run: () => openUndoCard(expense) }]
+    : living
     ? [
       expense.paid
         ? { label: "Desfazer", tone: "undo", commit: true, run: () => patchExpense(expense, { paid: false }) }
@@ -2874,13 +2877,29 @@ function managedMonthSelect(draft, key, label) {
 
 function livingPay(draft) {
   const payment = draft.payment === "cash" || draft.payment === "card" ? draft.payment : "pix";
+  const editing = draft.mode === "edit";
+  const cardLaunch = draft.cardLaunch === "following" ? "following" : "month";
   return el("div", {}, [
     el("div", { class: "field" }, [
-      el("label", {}, "Como pretende pagar"),
+      el("label", {}, editing ? "Como fica o pagamento" : "Como pretende pagar"),
       segmented("payment", [["pix", "Pix"], ["cash", "Espécie"], ["card", "Cartão"]], payment),
     ]),
     payment === "card" ? cardSelect(draft) : "",
-    el("p", { class: "muted" }, "O valor fica previsto. Ele só entra na fatura ou sai da receita quando você lançar Pago no Pix, Enviar pro cartão ou Pagamento parcial. Na hora, o valor pode ser outro."),
+    !editing && payment === "card"
+      ? el("div", { class: "field" }, [
+        el("label", {}, "Lançar no cartão"),
+        segmented("cardLaunch", [["month", "Só este mês"], ["following", "Este mês e os seguintes"]], cardLaunch),
+      ])
+      : "",
+    el("p", { class: "muted" }, editing
+      ? (payment === "card"
+        ? "Pix ou espécie tira este mês da fatura. Cartão lança o valor cadastrado neste mês."
+        : "Trocar para cartão lança o valor cadastrado na fatura deste mês.")
+      : payment === "card"
+        ? (cardLaunch === "following"
+          ? "O valor entra agora na fatura deste mês e dos meses seguintes em que a conta existir."
+          : "O valor entra agora na fatura só deste mês. Os outros meses do plano continuam em aberto.")
+        : "O valor fica previsto. Ele só entra na fatura ou sai da receita quando você lançar Pago no Pix, Enviar pro cartão ou Pagamento parcial. Na hora, o valor pode ser outro."),
   ]);
 }
 
@@ -2920,6 +2939,7 @@ function openCreate(section, payment) {
     repeat: "all",
     repeatStart: state.monthId,
     repeatEnd: (state.data?.months || []).at(-1)?.id || state.monthId,
+    cardLaunch: "month",
     paid: false,
     source: "user",
   };
@@ -3064,7 +3084,7 @@ async function removePartial(expenseId, partialId) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -3145,6 +3165,11 @@ function openEdit(expense, options = {}) {
     amountMode: "installment",
     paid: expense.paid,
     source: expense.source,
+    wasOnCard: Boolean(expense.onCard),
+    originalAmount: expense.amountCents,
+    originalCard: expense.cardLabel || "",
+    originalName: expense.name,
+    monthId: expense.monthId,
   };
   state.error = "";
   render();
@@ -3181,6 +3206,18 @@ function linkedInvoice(expense) {
   return (state.data?.expenses || []).some((item) => originIdFrom(item.note) === expense.id);
 }
 
+function openUndoCard(expense) {
+  state.expenseInfo = null;
+  state.sheet = {
+    mode: "undo-card",
+    id: expense.id,
+    name: expense.name,
+    scope: "month",
+  };
+  state.error = "";
+  render();
+}
+
 function openCardPay(expense) {
   const cards = state.data?.cards ?? [];
   if (!cards.length) {
@@ -3205,6 +3242,7 @@ function openCardPay(expense) {
     installmentAmount: "",
     amountEdits: [],
     invoiceMonthId: expense.monthId || state.monthId,
+    cardScope: "month",
     linked: linkedInvoice(expense) || expense.onCard,
   };
   state.error = "";
@@ -3449,6 +3487,22 @@ function sheet() {
         el("button", { class: "primary", type: "button", onclick: askReset }, "Apagar"),
       ]),
     );
+  } else if (draft.mode === "undo-card") {
+    panel.append(
+      el("h2", {}, "Tirar do cartão"),
+      el("p", { class: "muted" }, `“${draft.name}” sai da fatura e volta a ficar em aberto.`),
+      el("div", { class: "field" }, [
+        el("label", {}, "Tirar de"),
+        segmented("scope", [["month", "Só este mês"], ["series", "Todos os meses no cartão"]], draft.scope || "month"),
+      ]),
+      el("p", { class: "muted" }, draft.scope === "series"
+        ? "Cada mês em que este custo está lançado no cartão volta a ficar em aberto."
+        : "Os outros meses em que ele já está no cartão continuam na fatura."),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
+        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : "Tirar do cartão"),
+      ]),
+    );
   } else if (draft.mode === "card-pay") {
     const described = money(draft.described || 0);
     const already = draft.already || 0;
@@ -3485,6 +3539,17 @@ function sheet() {
         : "",
       draft.amountChoice === "none" ? "" : invoiceMonthField(draft),
       draft.amountChoice === "none" ? "" : el("p", { class: "muted", id: "installment-preview" }, cardPayPreview(draft)),
+      draft.amountChoice !== "none" && draft.billing !== "installments"
+        ? el("div", { class: "field" }, [
+          el("label", {}, "Quais meses entram no cartão"),
+          segmented("cardScope", [["month", "Só este mês"], ["following", "Este mês e os seguintes"]], draft.cardScope || "month"),
+        ])
+        : "",
+      draft.amountChoice !== "none" && draft.billing !== "installments"
+        ? el("p", { class: "muted" }, draft.cardScope === "following"
+          ? "Os meses seguintes levam o valor cadastrado de cada um, no mesmo cartão. O que já estiver no cartão ou pago não é mexido."
+          : "Só este mês entra na fatura. Os outros meses desta conta continuam em aberto.")
+        : "",
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
         el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Lançando..." : "Lançar na fatura"),
@@ -3611,7 +3676,7 @@ function sheet() {
           segmented("payment", [["pix", "Pix"], ["debit", "Débito"], ["cash", "Espécie"], ["card", "Cartão"]], draft.payment),
         ])
         : "",
-      recurring && draft.mode === "create" ? livingPay(draft) : "",
+      recurring ? livingPay(draft) : "",
       cardSpend ? "" : field(amountLabel(draft), "amount", draft.amount, "decimal"),
       recurring && draft.mode === "create" ? recurringSpan(draft) : "",
       cardSpend || recurring || surprise
@@ -3634,7 +3699,7 @@ function sheet() {
       draft.mode === "edit" && !cardSpend && draft.section === "extra"
         ? field("Parcela", "installment", draft.installment, "text", "3/10, se houver")
         : "",
-      needsCard && !(recurring && draft.mode === "create" && draft.payment === "card") ? cardSelect(draft) : "",
+      needsCard && !(recurring && draft.payment === "card") ? cardSelect(draft) : "",
       surprise && draft.mode === "create" && draft.payment === "card" ? invoiceMonthField(draft) : "",
       field("Observação", "note", draft.note, "text"),
       el("div", { class: "actions" }, [
@@ -3657,7 +3722,7 @@ function cardSelect(draft) {
   const cards = state.data?.cards ?? [];
   const required = draft.mode === "card-pay" || draft.mode === "partial"
     || (draft.section === "extra" && (draft.payment === "card" || draft.cardExpense))
-    || (draft.section === "fixed" && draft.onCard)
+    || (draft.section === "fixed" && (draft.onCard || draft.payment === "card"))
     || (draft.section === "card" && (draft.cardExpense || draft.mode === "create"));
   const current = draft.cardLabel || "";
   const known = cards.some((card) => card.name === current);
@@ -3792,6 +3857,17 @@ async function saveSheet(event) {
       state.sheet = null;
       return;
     }
+    if (draft.mode === "undo-card") {
+      const scope = draft.scope === "series" ? "series" : "month";
+      setWorking(true, "Tirando do cartão...");
+      state.data = await request(`/api/expenses/${draft.id}/card-payment?scope=${scope}`, { method: "DELETE" });
+      rememberMonth(state.data);
+      state.notice = scope === "series"
+        ? `Tirei “${draft.name}” do cartão em todos os meses em que estava lançado.`
+        : `Tirei “${draft.name}” do cartão neste mês.`;
+      state.sheet = null;
+      return;
+    }
     if (draft.mode === "card-pay") {
       if (draft.amountChoice === "none") {
         setWorking(true, "Encerrando...");
@@ -3868,11 +3944,16 @@ async function saveSheet(event) {
           installmentCount,
           invoiceMonthId: draft.invoiceMonthId,
           amountMode,
+          scope: installmentCount > 1 ? "month" : (draft.cardScope === "following" ? "following" : "month"),
         },
       });
+      rememberMonth(state.data);
+      const several = installmentCount === 1 && draft.cardScope === "following";
       state.notice = installmentCount > 1
         ? `Lancei ${installmentCount} parcelas ${faturaWhen(draft.invoiceMonthId, true)}, com o apelido “${alias}”.`
-        : `Lancei “${alias}” ${faturaWhen(draft.invoiceMonthId)}.`;
+        : several
+          ? `Lancei “${alias}” no cartão neste mês e nos seguintes.`
+          : `Lancei “${alias}” ${faturaWhen(draft.invoiceMonthId)}.`;
       state.sheet = null;
       return;
     } else if (draft.mode === "share") {
@@ -3992,7 +4073,18 @@ async function saveSheet(event) {
         draft.onCard = false;
         draft.paid = false;
         if (!String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão.");
+        if (amountCents <= 0) throw new Error("Informe um valor maior que zero para lançar no cartão.");
       }
+      const editingLiving = draft.mode === "edit" && draft.section === "fixed" && !draft.cardExpense;
+      const wantsCard = editingLiving && draft.payment === "card";
+      const chargeChanged = editingLiving && (
+        amountCents !== draft.originalAmount
+        || String(draft.cardLabel || "") !== String(draft.originalCard || "")
+        || draft.name.trim() !== String(draft.originalName || "")
+      );
+      const relaunch = wantsCard && (!draft.wasOnCard || chargeChanged);
+      if (editingLiving && wantsCard && !String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão.");
+      if (relaunch && amountCents <= 0) throw new Error("Informe um valor maior que zero para lançar no cartão.");
       const needsCard = (draft.section === "extra" && draft.payment === "card")
         || (draft.section === "fixed" && draft.onCard)
         || (draft.cardExpense && draft.mode === "create");
@@ -4028,7 +4120,7 @@ async function saveSheet(event) {
       const startMonthId = surpriseCard ? (draft.invoiceMonthId || "") : state.monthId;
       if (surpriseCard && !startMonthId) throw new Error("Escolha a fatura em que o valor entra.");
       const invoiceLabel = (state.data?.months || []).find((month) => month.id === startMonthId)?.label || "";
-      const dueMonth = livingOnCard ? draft.invoiceMonthId : surpriseCard ? startMonthId : onCardPurchase ? state.monthId : "";
+      const dueMonth = livingOnCard || relaunch ? (relaunch ? draft.monthId : state.monthId) : surpriseCard ? startMonthId : onCardPurchase ? state.monthId : "";
       const dueCard = dueMonth ? draft.cardLabel : "";
       if (dueCard && !acceptPastDue(pastDueWarning(dueCard, dueMonth))) return;
       setWorking(true, "Salvando...");
@@ -4036,13 +4128,14 @@ async function saveSheet(event) {
         name: draft.name,
         amountCents,
         section: draft.section,
-        payment: (draft.section === "fixed" && draft.onCard) || livingOnCard ? "card" : draft.payment,
-        onCard: draft.section === "fixed" && draft.onCard,
+        payment: (draft.section === "fixed" && draft.onCard) || livingOnCard || wantsCard ? "card" : draft.payment,
+        onCard: draft.section === "fixed" && draft.onCard && !relaunch,
         cardLabel: draft.cardLabel,
         note: composeNote(draft.originId, draft.note, draft.partialId),
         installment: onCardPurchase ? null : draft.installment,
         paid: draft.paid,
         installmentPlan: onCardPurchase ? { totalCount, paidCount, amountMode: draft.amountMode || "installment" } : undefined,
+        cardLaunch: livingOnCard ? (draft.cardLaunch === "following" ? "following" : "month") : undefined,
       };
       if (onCardPurchase) {
         const remaining = totalCount - paidCount;
@@ -4059,13 +4152,52 @@ async function saveSheet(event) {
             monthIds: recurringMonths || undefined,
           },
         });
-        if (recurringMonths) {
+        if (livingOnCard) {
+          state.notice = draft.cardLaunch === "following"
+            ? "Lancei este custo no cartão neste mês e nos seguintes. O que já estava pago ou no cartão ficou como estava."
+            : "Lancei este custo no cartão só neste mês. Os outros meses continuam em aberto.";
+        } else if (recurringMonths) {
           const span = recurringMonths.length > 1 ? ` em ${recurringMonths.length} meses` : "";
           state.notice = `Valor previsto${span}. Lance Pago no Pix, Enviar pro cartão ou Pagamento parcial para ele entrar na conta.`;
         }
         if (surpriseCard && startMonthId !== state.monthId) await loadMonth(state.monthId);
+        rememberMonth(state.data);
+      } else if (editingLiving) {
+        if (draft.wasOnCard && (!wantsCard || relaunch)) {
+          await request(`/api/expenses/${draft.id}/card-payment?scope=month`, { method: "DELETE" });
+        }
+        state.data = await request(`/api/expenses/${draft.id}`, {
+          method: "PATCH",
+          body: {
+            ...body,
+            payment: wantsCard && !relaunch ? "card" : (wantsCard ? "pix" : (draft.payment === "cash" ? "cash" : "pix")),
+            onCard: Boolean(wantsCard && draft.wasOnCard && !relaunch),
+            paid: relaunch ? false : (wantsCard ? true : (draft.wasOnCard ? false : draft.paid)),
+          },
+        });
+        if (relaunch) {
+          state.data = await request(`/api/expenses/${draft.id}/card-payment`, {
+            method: "POST",
+            body: {
+              cardLabel: draft.cardLabel,
+              alias: draft.name.trim(),
+              amountCents,
+              installmentCount: 1,
+              invoiceMonthId: draft.monthId,
+              amountMode: "installment",
+              scope: "month",
+            },
+          });
+          state.notice = "Lancei o valor no cartão deste mês.";
+        } else if (draft.wasOnCard && !wantsCard) {
+          state.notice = draft.payment === "cash"
+            ? "Tirei este mês do cartão. O pagamento ficou em espécie."
+            : "Tirei este mês do cartão. O pagamento ficou no Pix.";
+        }
+        rememberMonth(state.data);
       } else {
         state.data = await request(`/api/expenses/${draft.id}`, { method: "PATCH", body });
+        rememberMonth(state.data);
       }
     }
     state.sheet = null;
@@ -4073,7 +4205,7 @@ async function saveSheet(event) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -4100,7 +4232,7 @@ async function patchExpense(expense, patch) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -4115,7 +4247,7 @@ async function deleteExpense(expense) {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -4172,7 +4304,7 @@ async function logout() {
     state.error = messageOf(error);
   } finally {
     setWorking(false);
-    render();
+    renderSafely();
   }
 }
 
@@ -4229,34 +4361,61 @@ async function request(path, options = {}) {
 }
 
 async function requestOnce(path, options) {
-  const response = await fetch(path, {
-    method: options.method || "GET",
-    headers: options.body ? { "content-type": "application/json" } : undefined,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-  const data = await response.json().catch(() => ({}));
-  if (response.status === 401 && path !== "/api/login" && path !== "/api/register" && path !== "/api/passkeys/login") {
-    state.booting = false;
-    state.authed = false;
-    state.authView = "login";
-    state.needsPeriod = false;
-    state.choosing = false;
-    state.data = null;
-    state.busy = false;
-    clearMonthCache();
-    render();
-  }
-  if (!response.ok) {
-    const error = new Error(data.error || "Não foi possível concluir.");
-    error.status = response.status;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+  try {
+    const response = await fetch(path, {
+      method: options.method || "GET",
+      headers: options.body ? { "content-type": "application/json" } : undefined,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+      signal: controller.signal,
+    });
+    const data = await response.json().catch(() => ({}));
+    if (response.status === 401 && path !== "/api/login" && path !== "/api/register" && path !== "/api/passkeys/login") {
+      state.booting = false;
+      state.authed = false;
+      state.authView = "login";
+      state.needsPeriod = false;
+      state.choosing = false;
+      state.data = null;
+      state.busy = false;
+      clearMonthCache();
+      renderSafely();
+    }
+    if (!response.ok) {
+      const error = new Error(data.error || "Não foi possível concluir.");
+      error.status = response.status;
+      throw error;
+    }
+    return data;
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("O servidor demorou para responder. Tente de novo.");
     throw error;
+  } finally {
+    clearTimeout(timer);
   }
-  return data;
 }
 
 function messageOf(error) {
-  if (error instanceof TypeError) return "Sem conexão. Tente de novo em instantes.";
-  return error.message || "Não foi possível concluir.";
+  if (error?.name === "AbortError") return "O servidor demorou para responder. Tente de novo.";
+  if (error instanceof TypeError && /fetch|network|Failed/i.test(String(error.message || ""))) {
+    return "Sem conexão. Tente de novo em instantes.";
+  }
+  return error?.message || "Não foi possível concluir.";
+}
+
+function renderSafely() {
+  try {
+    render();
+  } catch (error) {
+    console.error(error);
+    setWorking(false);
+    const note = document.createElement("p");
+    note.className = "error";
+    note.textContent = error?.message || "Não foi possível atualizar a tela.";
+    if (!root.querySelector(".shell, .screen")) root.replaceChildren(note);
+    else root.prepend(note);
+  }
 }
 
 function glyph(name) {
