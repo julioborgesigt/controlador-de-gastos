@@ -34,6 +34,7 @@ import {
 import {
   accessTo,
   applyBaseIncome,
+  applySeriesEdit,
   copyFromPreviousMonth,
   countUsers,
   createCard,
@@ -669,6 +670,22 @@ app.patch("/api/expenses/:id", async (c) => {
     paid: body.paid ?? current.paid,
   });
   if (!parsed.ok) return c.json({ error: parsed.error }, parsed.status);
+  const editScope = body.editScope === "forward" || body.editScope === "all" ? body.editScope : "month";
+  if (editScope !== "month" && (current.section === "fixed" || current.section === "card")) {
+    const edited = await applySeriesEdit(c.env.DB, {
+      ownerId: writer.scope.ownerId,
+      expenseId: current.id,
+      scope: editScope,
+      name: parsed.value.name,
+      amountCents: parsed.value.amountCents,
+      note: parsed.value.note,
+      payment: parsed.value.payment,
+      cardLabel: parsed.value.cardLabel,
+      installment: parsed.value.installment,
+    });
+    if (!edited.ok) return c.json({ error: edited.error }, 400);
+    return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
+  }
   await c.env.DB.prepare(
     `UPDATE expenses
      SET name = ?, section = ?, amount_cents = ?, payment = ?, on_card = ?, card_label = ?, paid = ?, note = ?, installment = ?

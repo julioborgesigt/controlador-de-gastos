@@ -303,6 +303,44 @@ export function expenseDeleteTargets(
     .map((item) => item.id);
 }
 
+export type EditScope = "month" | "forward" | "all";
+
+export function editTargets<T extends ExpenseDeleteRef>(
+  expenses: readonly T[],
+  currentId: string,
+  scope: EditScope,
+): T[] {
+  const current = expenses.find((item) => item.id === currentId);
+  if (!current) return [];
+  if (scope === "month" || (current.section !== "fixed" && current.section !== "card")) return [current];
+  return expenses
+    .filter((item) => {
+      if (item.section !== current.section || !sameAccount(current, item)) return false;
+      if (scope === "forward" && item.monthId < current.monthId) return false;
+      return true;
+    })
+    .sort((left, right) => left.monthId.localeCompare(right.monthId) || left.id.localeCompare(right.id));
+}
+
+const NOTE_MARKERS = ["serie:", "origem:", "parcial:", "quitado-cartao:", "parcelamento:"];
+
+export function visibleExpenseNote(note: string | null | undefined): string {
+  return String(note || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !NOTE_MARKERS.some((marker) => line.startsWith(marker)))
+    .join("\n");
+}
+
+export function noteWithVisibleText(existing: string | null | undefined, visible: string): string {
+  const markers = String(existing || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => NOTE_MARKERS.some((marker) => line.startsWith(marker)));
+  const text = visible.trim();
+  return [...markers, text].filter(Boolean).join("\n");
+}
+
 export function originExpenseId(note: string | null | undefined): string {
   const line = String(note || "").split("\n").find((item) => item.startsWith("origem:"));
   return line ? line.slice("origem:".length).trim() : "";

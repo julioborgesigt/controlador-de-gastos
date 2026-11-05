@@ -3019,6 +3019,26 @@ function livingChargeIsFull(planned, already, charged) {
   return already <= 0 && planned > 0 && charged >= planned;
 }
 
+function editScopeField(draft) {
+  const scope = draft.editScope === "forward" || draft.editScope === "all" ? draft.editScope : "month";
+  const card = draft.section === "card";
+  return el("div", { class: "field" }, [
+    el("label", {}, "Aplicar a alteração em"),
+    segmented("editScope", [
+      ["month", "Só este mês"],
+      ["forward", "Daqui pra frente"],
+      ["all", "Todos os registros"],
+    ], scope),
+    el("p", { class: "muted" }, scope === "all"
+      ? (card
+        ? "Nome, valor e cartão mudam em todas as parcelas deste gasto."
+        : "Nome, valor e forma de pagamento mudam em todos os meses desta conta.")
+      : scope === "forward"
+        ? "Muda neste mês e nos seguintes. Os meses anteriores ficam como estão."
+        : "Muda só o mês que está aberto."),
+  ]);
+}
+
 function closeAfterField(draft) {
   const closeAfter = draft.closeAfter === "close" ? "close" : "open";
   return el("div", { class: "field" }, [
@@ -3296,6 +3316,7 @@ function openEdit(expense, options = {}) {
     originalCard: expense.cardLabel || "",
     originalName: expense.name,
     monthId: expense.monthId,
+    editScope: "month",
   };
   state.error = "";
   render();
@@ -3890,6 +3911,7 @@ function sheet() {
         : "",
       needsCard && !(recurring && draft.payment === "card") ? cardSelect(draft) : "",
       surprise && draft.mode === "create" && draft.payment === "card" ? invoiceMonthField(draft) : "",
+      draft.mode === "edit" && (recurring || cardSpend) ? editScopeField(draft) : "",
       field("Observação", "note", draft.note, "text"),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
@@ -4285,6 +4307,8 @@ async function saveSheet(event) {
         if (amountCents <= 0) throw new Error("Informe um valor maior que zero para lançar no cartão.");
       }
       const editingLiving = draft.mode === "edit" && draft.section === "fixed" && !draft.cardExpense;
+      const seriesEdit = (editingLiving || (draft.mode === "edit" && draft.section === "card"))
+        && (draft.editScope === "forward" || draft.editScope === "all");
       const wantsCard = editingLiving && draft.payment === "card";
       const chargeChanged = editingLiving && (
         amountCents !== draft.originalAmount
@@ -4371,6 +4395,27 @@ async function saveSheet(event) {
         }
         if (surpriseCard && startMonthId !== state.monthId) await loadMonth(state.monthId);
         rememberMonth(state.data);
+      } else if (seriesEdit) {
+        const payment = draft.section === "card" || draft.payment === "card"
+          ? "card"
+          : draft.payment === "cash"
+            ? "cash"
+            : draft.payment === "debit"
+              ? "debit"
+              : "pix";
+        state.data = await request(`/api/expenses/${draft.id}`, {
+          method: "PATCH",
+          body: {
+            ...body,
+            payment,
+            cardLabel: draft.cardLabel,
+            editScope: draft.editScope,
+          },
+        });
+        rememberMonth(state.data);
+        state.notice = draft.editScope === "all"
+          ? "Alterei todos os registros."
+          : "Alterei este mês e os seguintes.";
       } else if (editingLiving) {
         if (draft.wasOnCard && (!wantsCard || relaunch)) {
           await request(`/api/expenses/${draft.id}/card-payment?scope=month`, { method: "DELETE" });
