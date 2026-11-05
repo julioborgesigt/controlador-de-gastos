@@ -20,8 +20,10 @@ import { loginOptions, loginWithPasskey, registerPasskey, registrationOptions } 
 import {
   cardLinkRequired,
   countsTowardPayment,
+  isPlannedCost,
   isVariableCost,
   livingCardChargeKind,
+  noteWithPlanned,
   noteWithSeries,
   noteWithVariable,
   normalizeExpense,
@@ -53,6 +55,7 @@ import {
   clearLivingCardCharges,
   clearRecurringCardLines,
   getExpense,
+  reclassifyExpense,
   getMonth,
   getSetting,
   getTheme,
@@ -592,9 +595,15 @@ app.post("/api/expenses", async (c) => {
   if (!isMonthId(body.monthId) || !(await getMonth(c.env.DB, writer.scope.ownerId, body.monthId))) {
     return c.json({ error: "Mês não encontrado." }, 404);
   }
+  const classifiedNote = parsed.value.section === "extra"
+    ? noteWithPlanned(parsed.value.note, body.kind === "planejado" || (body.kind !== "imprevisto" && isPlannedCost(parsed.value.note)))
+    : parsed.value.note;
   const plan = readInstallmentPlan(body.installmentPlan);
   if (plan) {
     if (!plan.ok) return c.json({ error: plan.error }, 400);
+    if (parsed.value.section === "card") {
+      return c.json({ error: "Lance o gasto em Custo de vida, Imprevisto ou Planejado." }, 400);
+    }
     const created = await insertCardPurchase(c.env.DB, {
       ownerId: writer.scope.ownerId,
       startMonthId: body.monthId,
@@ -602,7 +611,7 @@ app.post("/api/expenses", async (c) => {
       section: parsed.value.section === "fixed" ? "card" : parsed.value.section,
       payment: "card",
       cardLabel: parsed.value.cardLabel,
-      note: parsed.value.note,
+      note: classifiedNote,
       totalCount: plan.totalCount,
       paidCount: plan.paidCount,
       amountCents: parsed.value.amountCents,
@@ -629,7 +638,7 @@ app.post("/api/expenses", async (c) => {
     onCard: parsed.value.section === "fixed" ? false : parsed.value.onCard,
     cardLabel: launchOnCard ? null : parsed.value.cardLabel,
     paid: parsed.value.section === "fixed" ? false : parsed.value.paid,
-    note: variableCard ? noteWithVariable(parsed.value.note, true) : parsed.value.note,
+    note: variableCard ? noteWithVariable(classifiedNote, true) : classifiedNote,
     installment: parsed.value.installment,
     livingCard: false,
   });
@@ -708,6 +717,37 @@ app.patch("/api/expenses/:id", async (c) => {
     )
     .run();
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
+});
+
+app.post("/api/expenses/:id/classification", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const current = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
+  if (!current) return c.json({ error: "Gasto não encontrado." }, 404);
+  const body = await readJson(c);
+  const track = body.classification;
+  if (track !== "imprevisto" && track !== "planejado" && track !== "casa") {
+    return c.json({ error: "Escolha Imprevisto, Planejado ou Custo de vida." }, 400);
+  }
+  if (!isCents(body.amountCents) || body.amountCents <= 0) return c.json({ error: "Informe um valor maior que zero." }, 400);
+  if (typeof body.name !== "string" || !body.name.trim() || body.name.trim().length > 120) {
+    return c.json({ error: "Dê um nome ao gasto, com até 120 caracteres." }, 400);
+  }
+  const cards = await listCards(c.env.DB, writer.scope.ownerId);
+  const card = resolveCardLabel(cards, typeof body.cardLabel === "string" ? body.cardLabel : null, true);
+  if (!card.ok) return c.json({ error: card.error }, 400);
+  const note = typeof body.note === "string" ? body.note.trim().slice(0, 300) : "";
+  const saved = await reclassifyExpense(c.env.DB, {
+    ownerId: writer.scope.ownerId,
+    expenseId: current.id,
+    track,
+    name: body.name.trim(),
+    amountCents: body.amountCents,
+    cardLabel: card.cardLabel || "",
+    note,
+  });
+  if (!saved.ok) return c.json({ error: saved.error }, 400);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, saved.monthId), writer.scope));
 });
 
 app.post("/api/expenses/:id/card-payment", async (c) => {
