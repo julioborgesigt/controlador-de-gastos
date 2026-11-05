@@ -45,6 +45,7 @@ export type Totals = {
   fixedCents: number;
   fixedOnCardCents: number;
   fixedCashCents: number;
+  fixedPixPaidCents: number;
   fixedPixForecastCents: number;
   fixedForecastCents: number;
   fixedLaunchedCents: number;
@@ -77,6 +78,7 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
   let extrasCardCents = 0;
   let fixedCents = 0;
   let fixedOnCardCents = 0;
+  let fixedPixPaidCents = 0;
   let fixedPixForecastCents = 0;
   let fixedForecastCents = 0;
   let fixedLaunchedCents = 0;
@@ -87,7 +89,10 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
   let remainingCents = 0;
 
   for (const expense of expenses) {
-    if (expense.section === "fixed") fixedPixForecastCents += pixStillDue(expense);
+    if (expense.section === "fixed") {
+      fixedPixForecastCents += pixStillDue(expense);
+      fixedPixPaidCents += pixAlreadyPaid(expense);
+    }
     if (expense.section === "card") invoiceCents += expense.amountCents;
     if (expense.section === "extra" && expense.payment === "card") extrasCardCents += expense.amountCents;
     if (expense.section === "extra" && expense.payment !== "card") extrasPixCents += expense.amountCents;
@@ -139,6 +144,7 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
     fixedCents,
     fixedOnCardCents,
     fixedCashCents,
+    fixedPixPaidCents,
     fixedPixForecastCents,
     fixedForecastCents,
     fixedLaunchedCents,
@@ -153,6 +159,17 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
     forecastExpenseCents: commitmentsCents + fixedHeldCents,
     partialExpenseCents: commitmentsCents,
   };
+}
+
+function pixAlreadyPaid(expense: Expense): number {
+  if (isFixedOnCard(expense)) return 0;
+  const partials = expense.partials ?? [];
+  const fromPartials = partials
+    .filter((item) => item.payment === "pix")
+    .reduce((sum, item) => sum + item.amountCents, 0);
+  if (partials.length) return fromPartials;
+  if (expense.paid && expense.payment === "pix") return expense.amountCents;
+  return 0;
 }
 
 function pixStillDue(expense: Expense): number {

@@ -2291,7 +2291,7 @@ function sectionList(data, section) {
     el("div", { class: "section-head" }, [
       el("p", { class: "eyebrow" }, section === "fixed" ? "Custo de vida" : data.month.label),
       section === "fixed" ? el("p", { class: "muted" }, data.month.label) : "",
-      el("h2", {}, money(total)),
+      section === "fixed" ? "" : el("h2", {}, money(total)),
       section === "fixed" ? costSplit(totals) : el("p", { class: "muted" }, blurb(section, totals)),
     ]),
   ];
@@ -2758,16 +2758,19 @@ function blurb(section, totals) {
   return "Imprevistos deste mês, fora da projeção.";
 }
 
+function costCard(label, cents, wide = false) {
+  return el("div", { class: wide ? "wide" : "" }, [
+    el("small", {}, label),
+    el("strong", {}, money(cents)),
+  ]);
+}
+
 function costSplit(totals) {
   return el("div", { class: "cost-split" }, [
-    el("div", {}, [
-      el("small", {}, "Já no cartão"),
-      el("strong", {}, money(totals.fixedOnCardCents)),
-    ]),
-    el("div", {}, [
-      el("small", {}, "Previsto no Pix"),
-      el("strong", {}, money(totals.fixedPixForecastCents)),
-    ]),
+    costCard("Previsão geral Pix/cartão", totals.fixedForecastCents, true),
+    costCard("Já pago no cartão", totals.fixedOnCardCents),
+    costCard("Já pago no Pix", totals.fixedPixPaidCents),
+    costCard("Previsto pagar no Pix", totals.fixedPixForecastCents, true),
   ]);
 }
 
