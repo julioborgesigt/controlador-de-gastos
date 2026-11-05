@@ -567,6 +567,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   padding: 12px 14px;
 }
 
+.cost-split .wide { grid-column: 1 / -1; }
+
+.cost-split .wide strong { font-size: 28px; }
+
 .cost-split small {
   display: block;
   color: var(--muted);
