@@ -55,6 +55,7 @@ import {
   setCardDueDay,
   insertCardPurchase,
   insertPartialPayment,
+  deleteMatchingExpenses,
   deletePartialPayment,
   deletePartialsForExpenses,
   payLivingSeriesOnCard,
@@ -852,14 +853,10 @@ app.post("/api/expenses/:id/settle", async (c) => {
 app.delete("/api/expenses/:id", async (c) => {
   const writer = await requireWriter(c);
   if (!writer.ok) return c.json({ error: writer.error }, writer.status);
-  const current = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
-  if (!current) return c.json({ error: "Gasto não encontrado." }, 404);
-  if (current.section === "fixed") {
-    await deletePartialsForExpenses(c.env.DB, writer.scope.ownerId, [current.id]);
-    await clearRecurringCardLines(c.env.DB, writer.scope.ownerId, current.id);
-  }
-  await c.env.DB.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(writer.scope.ownerId, current.id).run();
-  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
+  const scope = c.req.query("scope") === "series" ? "series" : "month";
+  const removed = await deleteMatchingExpenses(c.env.DB, writer.scope.ownerId, c.req.param("id"), scope);
+  if (!removed.ok) return c.json({ error: removed.error }, 404);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, removed.monthId), writer.scope));
 });
 
 app.all("*", async (c) => {

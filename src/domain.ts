@@ -236,6 +236,37 @@ export function livingCardUndoTargets(
     .map((item) => item.id);
 }
 
+export type ExpenseDeleteRef = {
+  id: string;
+  name: string;
+  section: Section;
+  monthId: string;
+  cardLabel: string | null;
+};
+
+export function expenseDeleteTargets(
+  expenses: readonly ExpenseDeleteRef[],
+  currentId: string,
+  scope: "month" | "series",
+): string[] {
+  const current = expenses.find((item) => item.id === currentId);
+  if (!current) return [];
+  if (scope !== "series" || (current.section !== "fixed" && current.section !== "card")) return [current.id];
+  return expenses
+    .filter((item) => {
+      if (item.section !== current.section || !sameLivingName(item.name, current.name)) return false;
+      if (current.section === "card" && cardKey(item.cardLabel) !== cardKey(current.cardLabel)) return false;
+      return true;
+    })
+    .sort((left, right) => left.monthId.localeCompare(right.monthId) || left.id.localeCompare(right.id))
+    .map((item) => item.id);
+}
+
+export function originExpenseId(note: string | null | undefined): string {
+  const line = String(note || "").split("\n").find((item) => item.startsWith("origem:"));
+  return line ? line.slice("origem:".length).trim() : "";
+}
+
 export function parseInstallment(value: unknown): { ok: true; value: string | null } | { ok: false; error: string } {
   if (value === undefined || value === null || value === "") return { ok: true, value: null };
   if (typeof value !== "string") return { ok: false, error: "Parcela inválida." };

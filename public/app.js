@@ -2843,7 +2843,7 @@ function expenseRow(expense, section, options = {}) {
     },
     actions: [
       { label: "Editar", tone: "edit", run: edit },
-      { label: "Excluir", tone: "delete", run: () => deleteExpense(expense) },
+      { label: "Excluir", tone: "delete", run: () => openDeleteExpense(expense) },
     ],
   });
 }
@@ -3487,6 +3487,27 @@ function sheet() {
         el("button", { class: "primary", type: "button", onclick: askReset }, "Apagar"),
       ]),
     );
+  } else if (draft.mode === "delete-expense") {
+    const living = draft.section === "fixed";
+    panel.append(
+      el("h2", {}, "Excluir despesa"),
+      el("p", { class: "muted" }, living
+        ? `“${draft.name}” é um custo de vida. Dá para tirar só deste mês ou de todos os meses em que esta conta existe.`
+        : `“${draft.name}” está no cartão. Dá para tirar só desta fatura ou de todos os meses em que esta despesa aparece.`),
+      el("div", { class: "field" }, [
+        el("label", {}, "Excluir de"),
+        segmented("scope", [["month", "Só este mês"], ["series", "Todos os meses"]], draft.scope || "month"),
+      ]),
+      el("p", { class: "muted" }, draft.scope === "series"
+        ? (living
+          ? "A conta some de todos os meses. O valor que já estava na fatura desses meses também sai."
+          : "A despesa some de todos os meses deste cartão.")
+        : "Os outros meses continuam como estão."),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
+        el("button", { class: "danger", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Excluindo..." : "Excluir"),
+      ]),
+    );
   } else if (draft.mode === "undo-card") {
     panel.append(
       el("h2", {}, "Tirar do cartão"),
@@ -3707,7 +3728,7 @@ function sheet() {
         el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : "Salvar"),
       ]),
       draft.mode === "edit"
-        ? el("button", { class: "danger", type: "button", onclick: removeExpense }, "Excluir gasto")
+        ? el("button", { class: "danger", type: "button", onclick: () => openDeleteExpense(draft) }, "Excluir gasto")
         : "",
     );
   }
@@ -3855,6 +3876,10 @@ async function saveSheet(event) {
       rememberMonth(state.data);
       state.notice = `Pagamento parcial de ${money(amountCents)} lançado em “${draft.name}”.`;
       state.sheet = null;
+      return;
+    }
+    if (draft.mode === "delete-expense") {
+      await deleteExpenseNow(draft, draft.scope === "series" ? "series" : "month");
       return;
     }
     if (draft.mode === "undo-card") {
@@ -4236,13 +4261,36 @@ async function patchExpense(expense, patch) {
   }
 }
 
-async function deleteExpense(expense) {
-  if (!window.confirm(`Excluir “${expense.name}” deste mês?`)) return;
+function openDeleteExpense(expense) {
+  if (!expense?.id) return;
+  if (expense.section !== "fixed" && expense.section !== "card") {
+    if (!window.confirm(`Excluir “${expense.name}” deste mês?`)) return;
+    deleteExpenseNow(expense, "month");
+    return;
+  }
+  state.expenseInfo = null;
+  state.sheet = {
+    mode: "delete-expense",
+    id: expense.id,
+    name: expense.name,
+    section: expense.section,
+    scope: "month",
+  };
+  state.error = "";
+  render();
+}
+
+async function deleteExpenseNow(expense, scope = "month") {
   state.error = "";
   setWorking(true, "Excluindo...");
   try {
-    state.data = await request(`/api/expenses/${expense.id}`, { method: "DELETE" });
-    if (state.sheet?.id === expense.id) state.sheet = null;
+    const query = scope === "series" ? "?scope=series" : "";
+    state.data = await request(`/api/expenses/${expense.id}${query}`, { method: "DELETE" });
+    if (state.sheet?.id === expense.id || state.sheet?.mode === "delete-expense") state.sheet = null;
+    state.notice = scope === "series"
+      ? `Excluí “${expense.name}” de todos os meses.`
+      : `Excluí “${expense.name}” deste mês.`;
+    rememberMonth(state.data);
   } catch (error) {
     state.error = messageOf(error);
   } finally {
@@ -4252,7 +4300,7 @@ async function deleteExpense(expense) {
 }
 
 async function removeExpense() {
-  await deleteExpense(state.sheet);
+  openDeleteExpense(state.sheet);
 }
 
 async function copyPrevious() {

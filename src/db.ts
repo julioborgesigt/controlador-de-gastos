@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, PartialPayment, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { carryForward, cardKey, cardOpenExpenses, computeTotals, expenseCountForCard, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, planCardPayoff, planCardPurchase, previousMonthId, resetTargets } from "./domain.ts";
+import { carryForward, cardKey, cardOpenExpenses, computeTotals, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, originExpenseId, planCardPayoff, planCardPurchase, previousMonthId, resetTargets } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -548,6 +548,50 @@ export async function listFixedExpenses(db: D1Database, ownerId: string): Promis
     .bind(ownerId)
     .all<ExpenseRow & { partial_count: number }>();
   return (result.results ?? []).map((row) => ({ ...mapExpense(row), hasPartials: Number(row.partial_count) > 0 }));
+}
+
+async function listSectionExpenses(db: D1Database, ownerId: string, section: Section): Promise<Expense[]> {
+  const result = await db
+    .prepare("SELECT * FROM expenses WHERE owner_id = ? AND section = ?")
+    .bind(ownerId, section)
+    .all<ExpenseRow>();
+  return (result.results ?? []).map(mapExpense);
+}
+
+export async function deleteMatchingExpenses(
+  db: D1Database,
+  ownerId: string,
+  expenseId: string,
+  scope: "month" | "series",
+): Promise<{ ok: true; monthId: string; count: number } | { ok: false; error: string }> {
+  const current = await getExpense(db, ownerId, expenseId);
+  if (!current) return { ok: false, error: "Gasto não encontrado." };
+  const pool = current.section === "fixed" || current.section === "card"
+    ? await listSectionExpenses(db, ownerId, current.section)
+    : [current];
+  const ids = expenseDeleteTargets(pool, current.id, scope);
+  if (!ids.length) return { ok: false, error: "Gasto não encontrado." };
+  const selected = pool.filter((item) => ids.includes(item.id));
+  const fixedIds = selected.filter((item) => item.section === "fixed").map((item) => item.id);
+  if (fixedIds.length) {
+    await deletePartialsForExpenses(db, ownerId, fixedIds);
+    for (const id of fixedIds) await clearRecurringCardLines(db, ownerId, id);
+  }
+  const origins = [...new Set(selected.map((item) => originExpenseId(item.note)).filter(Boolean))];
+  await db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND id IN (${sqlMarks(ids)})`).bind(ownerId, ...ids).run();
+  for (const origin of origins) {
+    if (ids.includes(origin)) continue;
+    const left = await db
+      .prepare("SELECT id FROM expenses WHERE owner_id = ? AND (note = ? OR note LIKE ?) LIMIT 1")
+      .bind(ownerId, `origem:${origin}`, `origem:${origin}\n%`)
+      .first<{ id: string }>();
+    if (left) continue;
+    await db
+      .prepare("UPDATE expenses SET payment = 'pix', on_card = 0, card_label = NULL, paid = 0 WHERE owner_id = ? AND id = ? AND section = 'fixed'")
+      .bind(ownerId, origin)
+      .run();
+  }
+  return { ok: true, monthId: current.monthId, count: ids.length };
 }
 
 export function mapExpense(row: ExpenseRow): Expense {

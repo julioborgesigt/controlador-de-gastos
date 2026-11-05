@@ -13,6 +13,7 @@ import {
   livingCostMonths,
   livingCardSendTargets,
   livingCardUndoTargets,
+  expenseDeleteTargets,
   normalizeExpense,
   expenseCountForCard,
   listMonthRange,
@@ -348,6 +349,24 @@ test("enviar pro cartão fica neste mês, ou segue os meses seguintes ainda em a
   assert.deepEqual(livingCardUndoTargets(costs, "jan", "month"), ["jan"]);
   assert.deepEqual(livingCardUndoTargets(costs, "jan", "series"), ["jan", "mai"]);
   assert.deepEqual(livingCardUndoTargets(costs, "nov", "series"), []);
+});
+
+test("excluir custo ou gasto no cartão pode ser só deste mês ou de todos", () => {
+  const rows = [
+    { id: "a1", name: "Aluguel", section: "fixed" as const, monthId: "2026-11", cardLabel: null },
+    { id: "a2", name: " aluguel ", section: "fixed" as const, monthId: "2026-12", cardLabel: "Nubank" },
+    { id: "luz", name: "Luz", section: "fixed" as const, monthId: "2026-11", cardLabel: null },
+    { id: "c1", name: "Farmácia", section: "card" as const, monthId: "2026-11", cardLabel: "Nubank" },
+    { id: "c2", name: "Farmácia", section: "card" as const, monthId: "2026-12", cardLabel: " Nubank " },
+    { id: "c3", name: "Farmácia", section: "card" as const, monthId: "2026-12", cardLabel: "Neon" },
+    { id: "e1", name: "Táxi", section: "extra" as const, monthId: "2026-11", cardLabel: null },
+    { id: "e2", name: "Táxi", section: "extra" as const, monthId: "2026-12", cardLabel: null },
+  ];
+  assert.deepEqual(expenseDeleteTargets(rows, "a1", "month"), ["a1"]);
+  assert.deepEqual(expenseDeleteTargets(rows, "a1", "series"), ["a1", "a2"]);
+  assert.deepEqual(expenseDeleteTargets(rows, "c1", "series"), ["c1", "c2"]);
+  assert.deepEqual(expenseDeleteTargets(rows, "c3", "month"), ["c3"]);
+  assert.deepEqual(expenseDeleteTargets(rows, "e1", "series"), ["e1"]);
 });
 
 test("custo de vida no cartão começa na primeira fatura escolhida", () => {
