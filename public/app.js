@@ -2771,6 +2771,13 @@ function costSplit(totals) {
   ]);
 }
 
+function cardSourceLabel(expense) {
+  if (expense.section === "extra" && expense.payment === "card") return "Imprevisto";
+  if (expense.section === "fixed" && expense.onCard) return "Custo de vida";
+  if (expense.section === "card" && originIdFrom(expense.note)) return "Custo de vida";
+  return "";
+}
+
 function expenseRow(expense, section, options = {}) {
   const onInvoice = expense.section === "fixed" && expense.onCard;
   const lockedCard = Boolean(options.cardExpense) && expense.section !== "fixed";
@@ -2800,6 +2807,10 @@ function expenseRow(expense, section, options = {}) {
         : forecast
           ? [el("span", { class: "badge forecast" }, "Previsto")]
           : [el("span", { class: "badge open" }, "Em aberto")];
+  if (section === "card") {
+    const source = cardSourceLabel(expense);
+    if (source) badges.unshift(el("span", { class: source === "Imprevisto" ? "badge source-extra" : "badge source-fixed" }, source));
+  }
   const front = el("article", { class: `item${tone}` }, [
     el("div", { class: "item-copy" }, [
       el("button", { type: "button", class: "item-main", onclick: () => openExpenseInfo(expense, section) }, [
