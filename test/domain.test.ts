@@ -14,6 +14,7 @@ import {
   livingCardSendTargets,
   livingCardUndoTargets,
   expenseDeleteTargets,
+  editTargets,
   cardDeletionEffects,
   partialIdFromNote,
   livingCardChargeKind,
@@ -429,6 +430,22 @@ test("excluir custo ou gasto no cartão pode ser só deste mês ou de todos", ()
     { id: "m1", name: "Internet", section: "fixed" as const, monthId: "2026-11", cardLabel: null, createdAt: "2026-11-02T11:00:00.000Z" },
   ];
   assert.deepEqual(expenseDeleteTargets(legacy, "l1", "series"), ["l1", "l2"]);
+});
+
+test("editar pergunta o mês, os seguintes ou todos os registros da mesma conta", () => {
+  const rows = [
+    { id: "a1", name: "Internet", section: "fixed" as const, monthId: "2026-11", cardLabel: null, note: "serie:a" },
+    { id: "a2", name: "Internet", section: "fixed" as const, monthId: "2026-12", cardLabel: null, note: "serie:a" },
+    { id: "a3", name: "Internet", section: "fixed" as const, monthId: "2027-01", cardLabel: null, note: "serie:a" },
+    { id: "b1", name: "Internet", section: "fixed" as const, monthId: "2026-12", cardLabel: null, note: "serie:b" },
+    { id: "p2", name: "Notebook", section: "card" as const, monthId: "2026-12", cardLabel: "Nubank", note: "serie:parcela" },
+    { id: "p3", name: "Notebook", section: "card" as const, monthId: "2027-01", cardLabel: "Nubank", note: "serie:parcela" },
+  ];
+  assert.deepEqual(editTargets(rows, "a2", "month").map((item) => item.id), ["a2"]);
+  assert.deepEqual(editTargets(rows, "a2", "forward").map((item) => item.id), ["a2", "a3"]);
+  assert.deepEqual(editTargets(rows, "a2", "all").map((item) => item.id), ["a1", "a2", "a3"]);
+  assert.deepEqual(editTargets(rows, "p2", "forward").map((item) => item.id), ["p2", "p3"]);
+  assert.deepEqual(editTargets(rows, "p2", "all").map((item) => item.id), ["p2", "p3"]);
 });
 
 test("custo de vida no cartão começa na primeira fatura escolhida", () => {

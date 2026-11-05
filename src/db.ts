@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, PartialPayment, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, computeTotals, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteWithSeries, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, resetTargets, sameAccount, seriesIdFromNote } from "./domain.ts";
+import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteWithSeries, noteWithVisibleText, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -612,6 +612,117 @@ export async function deleteMatchingExpenses(
     await deletePartialPayment(db, ownerId, row.expense_id, partialId);
   }
   return { ok: true, monthId: current.monthId, count: ids.length };
+}
+
+export async function applySeriesEdit(
+  db: D1Database,
+  input: {
+    ownerId: string;
+    expenseId: string;
+    scope: Exclude<EditScope, "month">;
+    name: string;
+    amountCents: number;
+    note: string | null;
+    payment: Payment;
+    cardLabel: string | null;
+    installment: string | null;
+  },
+): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+  const current = await getExpense(db, input.ownerId, input.expenseId);
+  if (!current) return { ok: false, error: "Gasto não encontrado." };
+  if (current.section !== "fixed" && current.section !== "card") {
+    return { ok: false, error: "Este gasto não se repete nos meses." };
+  }
+  if (current.section === "fixed" && input.payment === "card" && input.amountCents <= 0) {
+    return { ok: false, error: "Informe um valor maior que zero para lançar no cartão." };
+  }
+  if ((current.section === "card" || input.payment === "card") && !input.cardLabel) {
+    return { ok: false, error: "Escolha o cartão." };
+  }
+  const pool = current.section === "fixed"
+    ? await listFixedExpenses(db, input.ownerId)
+    : await listSectionExpenses(db, input.ownerId, "card");
+  const targets = editTargets(pool, current.id, input.scope);
+  if (!targets.length) return { ok: false, error: "Gasto não encontrado." };
+  const visible = visibleExpenseNote(input.note);
+  const cardLines = await listSectionExpenses(db, input.ownerId, "card");
+  const statements: D1PreparedStatement[] = [];
+  for (const row of targets) {
+    const note = noteWithVisibleText(row.note, visible);
+    if (current.section === "card") {
+      statements.push(
+        db.prepare(
+          "UPDATE expenses SET name = ?, amount_cents = ?, card_label = ?, note = ?, installment = ? WHERE owner_id = ? AND id = ?",
+        ).bind(
+          input.name,
+          input.amountCents,
+          input.cardLabel,
+          note,
+          row.id === current.id ? input.installment : row.installment,
+          input.ownerId,
+          row.id,
+        ),
+      );
+      continue;
+    }
+    if (input.payment !== "card") {
+      statements.push(
+        db.prepare(
+          "UPDATE expenses SET name = ?, amount_cents = ?, payment = ?, on_card = 0, card_label = NULL, paid = ?, note = ? WHERE owner_id = ? AND id = ?",
+        ).bind(
+          input.name,
+          input.amountCents,
+          input.payment,
+          row.onCard ? 0 : row.paid ? 1 : 0,
+          note,
+          input.ownerId,
+          row.id,
+        ),
+      );
+      if (row.onCard) {
+        for (const line of cardLines) {
+          if (originExpenseId(line.note) === row.id) {
+            statements.push(db.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(input.ownerId, line.id));
+          }
+        }
+      }
+      continue;
+    }
+    statements.push(
+      db.prepare(
+        "UPDATE expenses SET name = ?, amount_cents = ?, payment = 'card', card_label = ?, note = ? WHERE owner_id = ? AND id = ?",
+      ).bind(input.name, input.amountCents, input.cardLabel, note, input.ownerId, row.id),
+    );
+    if (row.onCard) {
+      for (const line of cardLines) {
+        if (originExpenseId(line.note) === row.id && !partialIdFromNote(line.note)) {
+          statements.push(
+            db.prepare("UPDATE expenses SET name = ?, amount_cents = ?, card_label = ? WHERE owner_id = ? AND id = ?")
+              .bind(input.name, input.amountCents, input.cardLabel, input.ownerId, line.id),
+          );
+        }
+      }
+    }
+  }
+  await runStatements(db, statements);
+  if (current.section === "fixed" && input.payment === "card") {
+    const pending = targets
+      .filter((row) => !row.onCard && !("hasPartials" in row && row.hasPartials))
+      .map((row) => ({ ...row, name: input.name, amountCents: input.amountCents }));
+    if (pending.length) {
+      const charged = await chargeLivingRowsOnCard(db, {
+        ownerId: input.ownerId,
+        rows: pending,
+        anchorId: current.id,
+        cardLabel: input.cardLabel || "",
+        alias: input.name,
+        amountCents: input.amountCents,
+        startMonthId: current.monthId,
+      });
+      if (!charged.ok) return charged;
+    }
+  }
+  return { ok: true, count: targets.length };
 }
 
 export function mapExpense(row: ExpenseRow): Expense {
