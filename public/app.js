@@ -2854,6 +2854,10 @@ function expenseRow(expense, section, options = {}) {
 
 function recurringMonthIds(draft) {
   const months = state.data?.months || [];
+  if (draft.payment === "card" && draft.section === "fixed" && !draft.cardExpense) {
+    if (draft.cardLaunch === "following") return months.map((month) => month.id).filter((id) => id >= state.monthId);
+    return state.monthId ? [state.monthId] : [];
+  }
   let ids;
   if (draft.repeat !== "period") {
     ids = months.map((month) => month.id);
@@ -2901,8 +2905,8 @@ function livingPay(draft) {
         : "Trocar para cartão lança o valor cadastrado na fatura deste mês.")
       : payment === "card"
         ? (cardLaunch === "following"
-          ? "O valor entra agora na fatura deste mês e dos meses seguintes em que a conta existir."
-          : "O valor entra agora na fatura só deste mês. Os outros meses do plano continuam em aberto.")
+          ? "O valor entra na fatura deste mês e de cada mês seguinte do período."
+          : "O valor entra na fatura só deste mês.")
         : "O valor fica previsto. Ele só entra na fatura ou sai da receita quando você lançar Pago no Pix, Enviar pro cartão ou Pagamento parcial. Na hora, o valor pode ser outro."),
   ]);
 }
@@ -2948,6 +2952,7 @@ function openCreate(section, payment) {
     source: "user",
   };
   state.error = "";
+  state.notice = "";
   render();
 }
 
@@ -3855,7 +3860,7 @@ function sheet() {
         : "",
       recurring ? livingPay(draft) : "",
       cardSpend ? "" : field(amountLabel(draft), "amount", draft.amount, "decimal"),
-      recurring && draft.mode === "create" ? recurringSpan(draft) : "",
+      recurring && draft.mode === "create" && draft.payment !== "card" ? recurringSpan(draft) : "",
       cardSpend || recurring || surprise
         ? ""
         : el("div", { class: "field" }, [
@@ -3983,6 +3988,7 @@ async function saveSheet(event) {
   event.preventDefault();
   const draft = state.sheet;
   state.error = "";
+  state.notice = "";
   try {
     if (draft.mode === "passkey" || draft.mode === "undo-payments") return;
     if (draft.mode === "close-living") {
@@ -4350,8 +4356,8 @@ async function saveSheet(event) {
         });
         if (livingOnCard) {
           state.notice = draft.cardLaunch === "following"
-            ? "Lancei este custo no cartão neste mês e nos seguintes. O que já estava pago ou no cartão ficou como estava."
-            : "Lancei este custo no cartão só neste mês. Os outros meses continuam em aberto.";
+            ? "Lancei este custo no cartão deste mês e dos seguintes."
+            : "Lancei este custo no cartão só deste mês.";
         } else if (recurringMonths) {
           const span = recurringMonths.length > 1 ? ` em ${recurringMonths.length} meses` : "";
           state.notice = `Valor previsto${span}. Lance Pago no Pix, Enviar pro cartão ou Pagamento parcial para ele entrar na conta.`;
