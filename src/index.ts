@@ -58,6 +58,7 @@ import {
   deleteMatchingExpenses,
   deletePartialPayment,
   deletePartialsForExpenses,
+  undoExpensePayments,
   payLivingSeriesOnCard,
   payCardInvoice,
   undoCardInvoice,
@@ -808,6 +809,17 @@ app.delete("/api/expenses/:id/partials/:partialId", async (c) => {
   if (!expense) return c.json({ error: "Gasto não encontrado." }, 404);
   const removed = await deletePartialPayment(c.env.DB, writer.scope.ownerId, expense.id, c.req.param("partialId"));
   if (!removed) return c.json({ error: "Pagamento parcial não encontrado." }, 404);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, expense.monthId), writer.scope));
+});
+
+app.delete("/api/expenses/:id/payments", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const expense = await getExpense(c.env.DB, writer.scope.ownerId, c.req.param("id"));
+  if (!expense) return c.json({ error: "Gasto não encontrado." }, 404);
+  const scope = c.req.query("scope") === "all" ? "all" : "last";
+  const undone = await undoExpensePayments(c.env.DB, writer.scope.ownerId, expense.id, scope);
+  if (!undone.ok) return c.json({ error: undone.error }, 400);
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, expense.monthId), writer.scope));
 });
 

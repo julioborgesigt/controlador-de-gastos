@@ -278,6 +278,32 @@ export function originExpenseId(note: string | null | undefined): string {
   return line ? line.slice("origem:".length).trim() : "";
 }
 
+export function partialIdFromNote(note: string | null | undefined): string {
+  const line = String(note || "").split("\n").find((item) => item.startsWith("parcial:"));
+  return line ? line.slice("parcial:".length).trim() : "";
+}
+
+export function cardDeletionEffects(
+  deletedNotes: readonly (string | null | undefined)[],
+  remainingNotes: readonly (string | null | undefined)[],
+): { resetOriginIds: string[]; dropPartialIds: string[] } {
+  const remainingOrigins = new Set(remainingNotes.map((note) => originExpenseId(note)).filter(Boolean));
+  const remainingPartials = new Set(remainingNotes.map((note) => partialIdFromNote(note)).filter(Boolean));
+  const resetOriginIds: string[] = [];
+  const dropPartialIds: string[] = [];
+  for (const note of deletedNotes) {
+    const origin = originExpenseId(note);
+    const partial = partialIdFromNote(note);
+    if (origin && !partial && !remainingOrigins.has(origin) && !resetOriginIds.includes(origin)) {
+      resetOriginIds.push(origin);
+    }
+    if (partial && !remainingPartials.has(partial) && !dropPartialIds.includes(partial)) {
+      dropPartialIds.push(partial);
+    }
+  }
+  return { resetOriginIds, dropPartialIds };
+}
+
 export function parseInstallment(value: unknown): { ok: true; value: string | null } | { ok: false; error: string } {
   if (value === undefined || value === null || value === "") return { ok: true, value: null };
   if (typeof value !== "string") return { ok: false, error: "Parcela inválida." };
