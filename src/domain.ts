@@ -45,6 +45,7 @@ export type Totals = {
   fixedCents: number;
   fixedOnCardCents: number;
   fixedCashCents: number;
+  fixedPixForecastCents: number;
   fixedForecastCents: number;
   fixedLaunchedCents: number;
   fixedAllSettled: boolean;
@@ -76,6 +77,7 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
   let extrasCardCents = 0;
   let fixedCents = 0;
   let fixedOnCardCents = 0;
+  let fixedPixForecastCents = 0;
   let fixedForecastCents = 0;
   let fixedLaunchedCents = 0;
   let fixedHeldCents = 0;
@@ -85,6 +87,7 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
   let remainingCents = 0;
 
   for (const expense of expenses) {
+    if (expense.section === "fixed") fixedPixForecastCents += pixStillDue(expense);
     if (expense.section === "card") invoiceCents += expense.amountCents;
     if (expense.section === "extra" && expense.payment === "card") extrasCardCents += expense.amountCents;
     if (expense.section === "extra" && expense.payment !== "card") extrasPixCents += expense.amountCents;
@@ -136,6 +139,7 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
     fixedCents,
     fixedOnCardCents,
     fixedCashCents,
+    fixedPixForecastCents,
     fixedForecastCents,
     fixedLaunchedCents,
     fixedAllSettled: fixedForecastCents > 0 && fixedOpen === 0,
@@ -149,6 +153,13 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
     forecastExpenseCents: commitmentsCents + fixedHeldCents,
     partialExpenseCents: commitmentsCents,
   };
+}
+
+function pixStillDue(expense: Expense): number {
+  if (expense.paid || isFixedOnCard(expense)) return 0;
+  if (expense.payment === "cash" || expense.payment === "card") return 0;
+  const paid = (expense.partials ?? []).reduce((sum, item) => sum + item.amountCents, 0);
+  return Math.max(0, expense.amountCents - paid);
 }
 
 export function normalizeExpense(input: {

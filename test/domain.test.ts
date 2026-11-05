@@ -133,6 +133,7 @@ test("gasto fixo marcado na fatura continua no indicador e sai do total a pagar"
   const held = unlaunchedFixed(expenses);
   assert.equal(totals.fixedForecastCents, 576500);
   assert.equal(totals.fixedOnCardCents, 60000);
+  assert.equal(totals.fixedPixForecastCents, 516500);
   assert.equal(totals.fixedLaunchedCents, 60000);
   assert.equal(totals.fixedCashCents, 0);
   assert.equal(totals.commitmentsCents, 789766 - 60000 - held);
@@ -212,6 +213,7 @@ test("pagamento parcial deixa a feira em aberto e não soma o cartão duas vezes
   assert.equal(open.fixedForecastCents, 80000);
   assert.equal(open.fixedLaunchedCents, 35000);
   assert.equal(open.fixedOnCardCents, 15000);
+  assert.equal(open.fixedPixForecastCents, 45000);
   assert.equal(open.paidCents, 20000);
   assert.equal(open.remainingCents, 60000);
   assert.equal(open.launchedRemainingCents, 15000);
@@ -235,6 +237,7 @@ test("pagamento parcial deixa a feira em aberto e não soma o cartão duas vezes
   assert.equal(closed.fixedCents, 45000);
   assert.equal(closed.commitmentsCents, 45000);
   assert.equal(closed.remainingCents, 0);
+  assert.equal(closed.fixedPixForecastCents, 0);
   assert.equal(closed.launchedRemainingCents, 0);
   assert.equal(closed.paidCents, 45000);
   assert.equal(monthCanSettle(closed), true);
