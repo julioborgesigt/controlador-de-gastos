@@ -1429,6 +1429,66 @@ export async function clearRecurringCardCharge(
   return { ok: true };
 }
 
+async function chargeLivingRowsOnCard(
+  db: D1Database,
+  input: {
+    ownerId: string;
+    rows: Array<Expense & { hasPartials?: boolean }>;
+    anchorId: string;
+    cardLabel: string;
+    alias: string;
+    amountCents: number;
+    startMonthId: string;
+  },
+): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
+  const alias = input.alias.trim().replace(/\s+/g, " ").slice(0, 80);
+  if (!alias) return { ok: false, error: "Escolha o apelido que vai aparecer na fatura." };
+  const charges: Array<{ id: string; name: string; monthId: string; amountCents: number }> = [];
+  for (const row of input.rows) {
+    const own = row.id !== input.anchorId;
+    const amount = own ? row.amountCents : input.amountCents;
+    if (amount <= 0) continue;
+    const startMonthId = own ? row.monthId : input.startMonthId || row.monthId;
+    const plan = planCardPurchase({
+      startMonthId,
+      totalCount: 1,
+      paidCount: 0,
+      amountCents: amount,
+      mode: "installment",
+    });
+    if (!plan.ok) return plan;
+    const part = plan.plan.schedule[0];
+    if (!part) continue;
+    charges.push({ id: row.id, name: own ? row.name : alias, monthId: part.monthId, amountCents: part.amountCents });
+  }
+  if (!charges.length) return { ok: false, error: "Não há valor para lançar no cartão." };
+  await ensureMonths(db, input.ownerId, charges.map((charge) => charge.monthId));
+  const used = await nextSorts(db, input.ownerId, charges.map((charge) => charge.monthId));
+  const createdAt = new Date().toISOString();
+  const statements: D1PreparedStatement[] = [];
+  for (const charge of charges) {
+    const marker = recurringOriginNote(charge.id);
+    statements.push(
+      db.prepare("DELETE FROM expenses WHERE owner_id = ? AND (note = ? OR note LIKE ?)").bind(input.ownerId, marker, `${marker}\n%`),
+    );
+    statements.push(
+      db.prepare("UPDATE expenses SET payment = 'card', on_card = 1, card_label = ?, paid = 1 WHERE owner_id = ? AND id = ?")
+        .bind(input.cardLabel, input.ownerId, charge.id),
+    );
+    const sort = (used.get(charge.monthId) ?? 0) + 1;
+    used.set(charge.monthId, sort);
+    statements.push(
+      db.prepare(
+        `INSERT INTO expenses
+          (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
+         VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, NULL, ?, 'user', ?)`,
+      ).bind(crypto.randomUUID(), input.ownerId, charge.monthId, charge.name, charge.amountCents, input.cardLabel, marker, sort, createdAt),
+    );
+  }
+  await runStatements(db, statements);
+  return { ok: true, count: charges.length };
+}
+
 export async function payLivingSeriesOnCard(
   db: D1Database,
   input: {
@@ -1447,6 +1507,21 @@ export async function payLivingSeriesOnCard(
   const all = await listFixedExpenses(db, input.ownerId);
   const ids = livingCardSendTargets(all, input.expenseId, scope);
   if (!ids.length) return { ok: false, error: "Gasto não encontrado." };
+  if (input.totalCount <= 1) {
+    const rows = ids.flatMap((id) => {
+      const row = all.find((item) => item.id === id);
+      return row ? [row] : [];
+    });
+    return chargeLivingRowsOnCard(db, {
+      ownerId: input.ownerId,
+      rows,
+      anchorId: input.expenseId,
+      cardLabel: input.cardLabel,
+      alias: input.alias,
+      amountCents: input.amountCents,
+      startMonthId: input.startMonthId || rows.find((row) => row.id === input.expenseId)?.monthId || "",
+    });
+  }
   let count = 0;
   for (const id of ids) {
     const row = all.find((item) => item.id === id);
