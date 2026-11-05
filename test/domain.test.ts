@@ -430,6 +430,15 @@ test("excluir custo ou gasto no cartão pode ser só deste mês ou de todos", ()
     { id: "m1", name: "Internet", section: "fixed" as const, monthId: "2026-11", cardLabel: null, createdAt: "2026-11-02T11:00:00.000Z" },
   ];
   assert.deepEqual(expenseDeleteTargets(legacy, "l1", "series"), ["l1", "l2"]);
+  const surprise = [
+    { id: "s1", name: "Oficina", section: "extra" as const, monthId: "2026-11", cardLabel: "Nubank", payment: "card" as const, note: "serie:oficina" },
+    { id: "s2", name: "Oficina", section: "extra" as const, monthId: "2026-12", cardLabel: "Nubank", payment: "card" as const, note: "serie:oficina" },
+    { id: "s3", name: "Oficina", section: "extra" as const, monthId: "2027-01", cardLabel: "Nubank", payment: "card" as const, note: "serie:oficina" },
+    { id: "t1", name: "Oficina", section: "extra" as const, monthId: "2026-12", cardLabel: "Nubank", payment: "card" as const, note: "serie:outra" },
+  ];
+  assert.deepEqual(expenseDeleteTargets(surprise, "s2", "month"), ["s2"]);
+  assert.deepEqual(expenseDeleteTargets(surprise, "s2", "forward"), ["s2", "s3"]);
+  assert.deepEqual(expenseDeleteTargets(surprise, "s2", "series"), ["s1", "s2", "s3"]);
 });
 
 test("editar pergunta o mês, os seguintes ou todos os registros da mesma conta", () => {

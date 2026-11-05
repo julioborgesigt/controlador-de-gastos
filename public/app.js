@@ -3644,16 +3644,25 @@ function sheet() {
     );
   } else if (draft.mode === "delete-expense") {
     const living = draft.section === "fixed";
+    const futureCard = draft.section === "extra";
     panel.append(
-      el("h2", {}, "Excluir despesa"),
-      el("p", { class: "muted" }, living
+      el("h2", {}, futureCard ? "Excluir imprevisto do cartão" : "Excluir despesa"),
+      el("p", { class: "muted" }, futureCard
+        ? `“${draft.name}” está na fatura. Dá para tirar só desta fatura ou também de todas as faturas seguintes.`
+        : living
         ? `“${draft.name}” é um custo de vida. Dá para tirar só deste mês ou de todos os meses em que esta conta existe.`
         : `“${draft.name}” está no cartão. Dá para tirar só desta fatura ou de todos os meses em que esta despesa aparece.`),
       el("div", { class: "field" }, [
         el("label", {}, "Excluir de"),
-        segmented("scope", [["month", "Só este mês"], ["series", "Todos os meses"]], draft.scope || "month"),
+        segmented("scope", futureCard
+          ? [["month", "Só esta fatura"], ["forward", "Esta e as seguintes"]]
+          : [["month", "Só este mês"], ["series", "Todos os meses"]], draft.scope || "month"),
       ]),
-      el("p", { class: "muted" }, draft.scope === "series"
+      el("p", { class: "muted" }, futureCard
+        ? (draft.scope === "forward"
+          ? "Some desta fatura e de todas as faturas seguintes. As faturas anteriores continuam."
+          : "As outras faturas continuam com este imprevisto.")
+        : draft.scope === "series"
         ? (living
           ? "A conta some de todos os meses. O valor que já estava na fatura desses meses também sai."
           : "A despesa some de todos os meses deste cartão.")
@@ -4096,7 +4105,8 @@ async function saveSheet(event) {
       return;
     }
     if (draft.mode === "delete-expense") {
-      await deleteExpenseNow(draft, draft.scope === "series" ? "series" : "month");
+      const scope = draft.scope === "series" || draft.scope === "forward" ? draft.scope : "month";
+      await deleteExpenseNow(draft, scope);
       return;
     }
     if (draft.mode === "undo-card") {
@@ -4492,7 +4502,8 @@ async function patchExpense(expense, patch) {
 
 function openDeleteExpense(expense) {
   if (!expense?.id) return;
-  if (expense.section !== "fixed" && expense.section !== "card") {
+  const cardSurprise = expense.section === "extra" && expense.payment === "card";
+  if (expense.section !== "fixed" && expense.section !== "card" && !cardSurprise) {
     if (!window.confirm(`Excluir “${expense.name}” deste mês?`)) return;
     deleteExpenseNow(expense, "month");
     return;
@@ -4503,7 +4514,7 @@ function openDeleteExpense(expense) {
     id: expense.id,
     name: expense.name,
     section: expense.section,
-    scope: "month",
+    scope: cardSurprise ? "forward" : "month",
   };
   state.error = "";
   render();
@@ -4513,12 +4524,14 @@ async function deleteExpenseNow(expense, scope = "month") {
   state.error = "";
   setWorking(true, "Excluindo...");
   try {
-    const query = scope === "series" ? "?scope=series" : "";
+    const query = scope === "month" ? "" : `?scope=${scope}`;
     state.data = await request(`/api/expenses/${expense.id}${query}`, { method: "DELETE" });
     if (state.sheet?.id === expense.id || state.sheet?.mode === "delete-expense") state.sheet = null;
     state.notice = scope === "series"
       ? `Excluí “${expense.name}” de todos os meses.`
-      : `Excluí “${expense.name}” deste mês.`;
+      : scope === "forward"
+        ? `Tirei “${expense.name}” desta fatura e das seguintes.`
+        : `Excluí “${expense.name}” deste mês.`;
     rememberMonth(state.data);
   } catch (error) {
     state.error = messageOf(error);

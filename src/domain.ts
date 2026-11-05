@@ -285,6 +285,7 @@ export type ExpenseDeleteRef = {
   section: Section;
   monthId: string;
   cardLabel: string | null;
+  payment?: Payment | null;
   note?: string | null;
   createdAt?: string | null;
 };
@@ -292,13 +293,20 @@ export type ExpenseDeleteRef = {
 export function expenseDeleteTargets(
   expenses: readonly ExpenseDeleteRef[],
   currentId: string,
-  scope: "month" | "series",
+  scope: "month" | "forward" | "series",
 ): string[] {
   const current = expenses.find((item) => item.id === currentId);
-  if (!current) return [];
-  if (scope !== "series" || (current.section !== "fixed" && current.section !== "card")) return [current.id];
+  if (!current || scope === "month") return current ? [current.id] : [];
+  const cardSurprise = current.section === "extra" && current.payment === "card";
+  const repeatable = current.section === "fixed" || current.section === "card" || cardSurprise;
+  if (!repeatable || (scope !== "series" && scope !== "forward")) return [current.id];
   return expenses
-    .filter((item) => item.section === current.section && sameAccount(current, item))
+    .filter((item) => {
+      if (item.section !== current.section || !sameAccount(current, item)) return false;
+      if (cardSurprise && item.payment !== "card") return false;
+      if (scope === "forward" && item.monthId < current.monthId) return false;
+      return true;
+    })
     .sort((left, right) => left.monthId.localeCompare(right.monthId) || left.id.localeCompare(right.id))
     .map((item) => item.id);
 }
