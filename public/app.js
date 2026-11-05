@@ -2787,9 +2787,18 @@ function expenseRow(expense, section, options = {}) {
   };
   const mirror = cardMirror(expense, section);
   const forecast = section === "fixed" && !onInvoice && !expense.paid && !partials.length;
-  const tone = mirror && !(onInvoice && section === "card") ? " on-card" : onInvoice && section === "card" ? " aside" : expense.paid ? " paid" : " open";
-  const badgeClass = mirror ? "badge on-card" : expense.paid ? "badge paid" : forecast ? "badge" : "badge open";
-  const badgeText = mirror ? "Tá no cartão" : expense.paid ? "Pago" : forecast ? "Previsto" : "Em aberto";
+  const partialOnCard = section === "fixed" && !onInvoice && !expense.paid && cardPartialCents(expense) > 0;
+  const fullOnCard = section === "fixed" && onInvoice;
+  const tone = fullOnCard ? " on-card-full" : mirror && !(onInvoice && section === "card") ? " on-card" : onInvoice && section === "card" ? " aside" : expense.paid ? " paid" : " open";
+  const badges = mirror
+    ? [el("span", { class: "badge on-card" }, "Tá no cartão")]
+    : expense.paid
+      ? [el("span", { class: "badge paid" }, "Pago")]
+      : partialOnCard
+        ? [el("span", { class: "badge open" }, "Em aberto"), el("span", { class: "badge on-card" }, "Parcial no cartão")]
+        : forecast
+          ? [el("span", { class: "badge forecast" }, "Previsto")]
+          : [el("span", { class: "badge open" }, "Em aberto")];
   const front = el("article", { class: `item${tone}` }, [
     el("div", { class: "item-copy" }, [
       el("button", { type: "button", class: "item-main", onclick: () => openExpenseInfo(expense, section) }, [
@@ -2800,7 +2809,7 @@ function expenseRow(expense, section, options = {}) {
       expense.section === "extra" && expense.payment !== "card" ? el("span", { class: "badge pix" }, paymentLabel(expense.payment)) : "",
     ]),
     el("div", { class: "item-end" }, [
-      el("span", { class: badgeClass }, badgeText),
+      el("div", { class: "badges" }, badges),
       el("span", { class: `amount${onInvoice && section === "card" ? " aside" : ""}` }, expense.amountCents === 0 ? "—" : money(expense.amountCents)),
     ]),
   ]);
@@ -2824,6 +2833,9 @@ function expenseRow(expense, section, options = {}) {
       expense.paid ? null : cardFirst
         ? { label: "Pago\nno Pix", tone: "pay", run: () => openCloseLiving(expense) }
         : { label: "Enviar pro\ncartão", tone: "send", run: () => openCardPay(expense) },
+      !expense.paid && partials.length
+        ? { label: "Desfazer", tone: "undo", commit: true, run: () => openUndoPayments(expense) }
+        : null,
     ].filter(Boolean)
     : null;
   return swipeRow(front, {
@@ -2974,13 +2986,43 @@ function openCreateCard() {
   render();
 }
 
+function cardPartialCents(expense) {
+  return (expense.partials || [])
+    .filter((item) => item.payment === "card")
+    .reduce((sum, item) => sum + item.amountCents, 0);
+}
+
 function partialSummary(expense) {
   const partials = expense.partials || [];
   const paid = partials.reduce((sum, item) => sum + item.amountCents, 0);
+  const card = cardPartialCents(expense);
   const left = expense.amountCents - paid;
+  if (card > 0) {
+    const bits = [`No cartão ${money(card)}`];
+    const other = paid - card;
+    if (other > 0) bits.push(`Pago ${money(other)}`);
+    if (!expense.paid && left > 0) bits.push(`falta ${money(left)}`);
+    bits.push(`previsto ${money(expense.amountCents)}`);
+    return bits.join(" · ");
+  }
   if (!expense.paid && left > 0) return `Pago ${money(paid)} · falta ${money(left)}`;
   const count = `${partials.length} ${partials.length === 1 ? "pagamento" : "pagamentos"}`;
   return `Pago ${money(paid)} em ${count}`;
+}
+
+function livingChargeIsFull(planned, already, charged) {
+  return already <= 0 && planned > 0 && charged >= planned;
+}
+
+function closeAfterField(draft) {
+  const closeAfter = draft.closeAfter === "close" ? "close" : "open";
+  return el("div", { class: "field" }, [
+    el("label", {}, "Depois deste lançamento"),
+    segmented("closeAfter", [["open", "Deixar em aberto"], ["close", "Encerrar despesa"]], closeAfter),
+    el("p", { class: "muted" }, closeAfter === "close"
+      ? "Encerrar coloca a tarja Pago, risca o nome e deixa o fundo verde."
+      : "A conta continua em aberto. Dá para lançar outro pagamento depois, tocando nela."),
+  ]);
 }
 
 function partialLine(partial) {
@@ -2992,7 +3034,7 @@ function partialLine(partial) {
 
 function openExpenseInfo(expense, section) {
   const mirror = cardMirror(expense, section);
-  const living = expense.section === "fixed" && !expense.onCard && expense.payment !== "card";
+  const living = expense.section === "fixed" && !expense.onCard;
   state.expenseInfo = {
     id: expense.id,
     name: expense.name,
@@ -3047,6 +3089,7 @@ function openCloseLiving(expense) {
 
 function openPartialPayment(info) {
   state.expenseInfo = null;
+  const already = (info.partials || []).reduce((sum, item) => sum + item.amountCents, 0);
   state.sheet = {
     mode: "partial",
     id: info.id,
@@ -3057,6 +3100,9 @@ function openPartialPayment(info) {
     billing: "once",
     installmentCount: "2",
     invoiceMonthId: info.monthId || state.monthId,
+    planned: info.amountCents || 0,
+    already,
+    closeAfter: "open",
   };
   state.error = "";
   render();
@@ -3306,7 +3352,9 @@ function openCardPay(expense) {
     mode: "card-pay",
     id: expense.id,
     described: already > 0 ? rest : expense.amountCents,
+    planned: expense.amountCents,
     already,
+    closeAfter: "open",
     alias: expense.name,
     cardLabel: selected,
     amountChoice: already > 0 ? (rest > 0 ? "same" : "none") : "same",
@@ -3659,20 +3707,25 @@ function sheet() {
         : "",
       draft.amountChoice === "none" ? "" : invoiceMonthField(draft),
       draft.amountChoice === "none" ? "" : el("p", { class: "muted", id: "installment-preview" }, cardPayPreview(draft)),
-      draft.amountChoice !== "none" && draft.billing !== "installments"
+      draft.amountChoice !== "none" && draft.billing !== "installments" && !(draft.already > 0)
         ? el("div", { class: "field" }, [
           el("label", {}, "Quais meses entram no cartão"),
           segmented("cardScope", [["month", "Só este mês"], ["following", "Este mês e os seguintes"]], draft.cardScope || "month"),
         ])
         : "",
-      draft.amountChoice !== "none" && draft.billing !== "installments"
+      draft.amountChoice !== "none" && draft.billing !== "installments" && !(draft.already > 0)
         ? el("p", { class: "muted" }, draft.cardScope === "following"
           ? "Os meses seguintes levam o valor cadastrado de cada um, no mesmo cartão. O que já estiver no cartão ou pago não é mexido."
-          : "Só este mês entra na fatura. Os outros meses desta conta continuam em aberto.")
+          : "O valor inteiro do previsto entra na fatura e a conta fica com a tarja Tá no cartão, no fundo verde. Um valor menor continua em aberto, com a tarja Parcial no cartão.")
         : "",
+      draft.amountChoice === "none"
+        ? el("p", { class: "muted" }, "Encerra com o que já foi lançado. A tarja fica Pago, o nome riscado e o fundo verde.")
+        : draft.amountChoice === "same" && !(draft.already > 0) && draft.billing !== "installments"
+          ? ""
+          : closeAfterField(draft),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
-        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Lançando..." : "Lançar na fatura"),
+        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Lançando..." : (draft.amountChoice === "none" ? "Encerrar despesa" : draft.closeAfter === "close" ? "Lançar e encerrar" : "Lançar na fatura")),
       ]),
       draft.linked
         ? el("button", { class: "danger", type: "button", onclick: () => undoCardPay(draft.id) }, "Desfazer pagamento no cartão")
@@ -3749,9 +3802,13 @@ function sheet() {
         ? field("Quantidade de parcelas", "installmentCount", draft.installmentCount || "2", "numeric")
         : "",
       draft.payment === "card" ? invoiceMonthField(draft, draft.billing === "installments" ? "A primeira fatura em que entra:" : "Este valor entra na fatura de:") : "",
+      closeAfterField(draft),
+      el("p", { class: "muted" }, draft.payment === "card"
+        ? "Se o valor for o previsto inteiro, a conta fica com a tarja Tá no cartão e o fundo verde. Um valor menor fica em aberto, com Em aberto e Parcial no cartão."
+        : "Encerrar só depois do lançamento. A tarja fica Pago, com o nome riscado e o fundo verde."),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
-        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : "Lançar parcial"),
+        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : (draft.closeAfter === "close" ? "Lançar e encerrar" : "Lançar parcial")),
       ]),
     );
   } else if (draft.mode === "card") {
@@ -3961,19 +4018,45 @@ async function saveSheet(event) {
         }
         if (!acceptPastDue(pastDueWarning(draft.cardLabel, draft.invoiceMonthId))) return;
       }
-      setWorking(true, "Lançando...");
-      state.data = await request(`/api/expenses/${draft.id}/partials`, {
-        method: "POST",
-        body: {
-          amountCents,
-          payment: draft.payment,
-          cardLabel: draft.payment === "card" ? draft.cardLabel : undefined,
-          installmentCount: draft.payment === "card" && draft.billing === "installments" ? count : 1,
-          invoiceMonthId: draft.payment === "card" ? draft.invoiceMonthId : undefined,
-        },
-      });
+      setWorking(true, draft.closeAfter === "close" ? "Encerrando..." : "Lançando...");
+      const cardCount = draft.billing === "installments" ? count : 1;
+      const fullCard = draft.payment === "card" && livingChargeIsFull(draft.planned || 0, draft.already || 0, amountCents);
+      if (fullCard) {
+        state.data = await request(`/api/expenses/${draft.id}/card-payment`, {
+          method: "POST",
+          body: {
+            cardLabel: draft.cardLabel,
+            alias: draft.name,
+            amountCents,
+            installmentCount: cardCount,
+            invoiceMonthId: draft.invoiceMonthId,
+            amountMode: "total",
+            scope: "month",
+          },
+        });
+        state.notice = `Enviei o valor inteiro de “${draft.name}” para o cartão.`;
+      } else {
+        state.data = await request(`/api/expenses/${draft.id}/partials`, {
+          method: "POST",
+          body: {
+            amountCents,
+            payment: draft.payment,
+            cardLabel: draft.payment === "card" ? draft.cardLabel : undefined,
+            installmentCount: draft.payment === "card" ? cardCount : 1,
+            invoiceMonthId: draft.payment === "card" ? draft.invoiceMonthId : undefined,
+          },
+        });
+        if (draft.closeAfter === "close") {
+          state.data = await request(`/api/expenses/${draft.id}/settle`, {
+            method: "POST",
+            body: { noAddition: true, amountCents: 0, useRegistered: false },
+          });
+        }
+        state.notice = draft.closeAfter === "close"
+          ? `Lancei ${money(amountCents)} e encerrei “${draft.name}”.`
+          : `Pagamento parcial de ${money(amountCents)} lançado em “${draft.name}”.`;
+      }
       rememberMonth(state.data);
-      state.notice = `Pagamento parcial de ${money(amountCents)} lançado em “${draft.name}”.`;
       state.sheet = null;
       return;
     }
@@ -4037,28 +4120,12 @@ async function saveSheet(event) {
         throw new Error("Este gasto está sem valor. Informe outro valor.");
       }
       if (!acceptPastDue(pastDueWarning(draft.cardLabel, draft.invoiceMonthId))) return;
-      setWorking(true, "Lançando na fatura...");
-      if ((draft.already || 0) > 0) {
-        const charged = draft.billing === "installments" ? parseMoney(draft.chargedAmount || "") : amountCents;
-        state.data = await request(`/api/expenses/${draft.id}/partials`, {
-          method: "POST",
-          body: {
-            amountCents: charged,
-            payment: "card",
-            cardLabel: draft.cardLabel,
-            installmentCount,
-            invoiceMonthId: draft.invoiceMonthId,
-          },
-        });
-        state.data = await request(`/api/expenses/${draft.id}/settle`, {
-          method: "POST",
-          body: { noAddition: true, amountCents: 0, useRegistered: false },
-        });
-        rememberMonth(state.data);
-        state.notice = `Lancei o restante no cartão e encerrei “${alias}”.`;
-        state.sheet = null;
-        return;
-      }
+      const chargedTotal = draft.billing === "installments"
+        ? (amountMode === "total" ? amountCents : amountCents * installmentCount)
+        : amountCents;
+      const fullCard = livingChargeIsFull(draft.planned || draft.described || 0, draft.already || 0, chargedTotal);
+      const close = !fullCard && draft.closeAfter === "close";
+      setWorking(true, close ? "Encerrando..." : "Lançando na fatura...");
       state.data = await request(`/api/expenses/${draft.id}/card-payment`, {
         method: "POST",
         body: {
@@ -4068,16 +4135,21 @@ async function saveSheet(event) {
           installmentCount,
           invoiceMonthId: draft.invoiceMonthId,
           amountMode,
-          scope: installmentCount > 1 ? "month" : (draft.cardScope === "following" ? "following" : "month"),
+          scope: !fullCard || installmentCount > 1 ? "month" : (draft.cardScope === "following" ? "following" : "month"),
+          close,
         },
       });
       rememberMonth(state.data);
-      const several = installmentCount === 1 && draft.cardScope === "following";
-      state.notice = installmentCount > 1
-        ? `Lancei ${installmentCount} parcelas ${faturaWhen(draft.invoiceMonthId, true)}, com o apelido “${alias}”.`
-        : several
-          ? `Lancei “${alias}” no cartão neste mês e nos seguintes.`
-          : `Lancei “${alias}” ${faturaWhen(draft.invoiceMonthId)}.`;
+      const several = fullCard && installmentCount === 1 && draft.cardScope === "following";
+      state.notice = close
+        ? `Lancei ${money(chargedTotal)} no cartão e encerrei “${alias}”.`
+        : fullCard
+          ? (installmentCount > 1
+            ? `Lancei ${installmentCount} parcelas ${faturaWhen(draft.invoiceMonthId, true)}, com o apelido “${alias}”.`
+            : several
+              ? `Lancei “${alias}” no cartão neste mês e nos seguintes.`
+              : `Lancei “${alias}” ${faturaWhen(draft.invoiceMonthId)}.`)
+          : `Lancei ${money(chargedTotal)} no cartão. “${alias}” continua em aberto.`;
       state.sheet = null;
       return;
     } else if (draft.mode === "share") {

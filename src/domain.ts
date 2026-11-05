@@ -283,6 +283,16 @@ export function partialIdFromNote(note: string | null | undefined): string {
   return line ? line.slice("parcial:".length).trim() : "";
 }
 
+export function livingCardChargeKind(input: {
+  plannedCents: number;
+  alreadyCents: number;
+  chargedCents: number;
+}): "full" | "partial" {
+  if (input.alreadyCents > 0) return "partial";
+  if (input.plannedCents > 0 && input.chargedCents >= input.plannedCents) return "full";
+  return "partial";
+}
+
 export function cardDeletionEffects(
   deletedNotes: readonly (string | null | undefined)[],
   remainingNotes: readonly (string | null | undefined)[],
