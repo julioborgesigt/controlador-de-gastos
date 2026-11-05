@@ -1,5 +1,9 @@
 export type Section = "card" | "fixed" | "extra";
-export type Payment = "pix" | "card" | "debit" | "cash";
+export type Payment = "pix" | "card";
+
+export function coercePayment(value: unknown): Payment {
+  return value === "card" ? "card" : "pix";
+}
 
 export type PartialPayment = {
   id: string;
@@ -174,32 +178,31 @@ function pixAlreadyPaid(expense: Expense): number {
 
 function pixStillDue(expense: Expense): number {
   if (expense.paid || isFixedOnCard(expense)) return 0;
-  if (expense.payment === "cash" || expense.payment === "card") return 0;
+  if (expense.payment === "card") return 0;
   const paid = (expense.partials ?? []).reduce((sum, item) => sum + item.amountCents, 0);
   return Math.max(0, expense.amountCents - paid);
 }
 
 export function normalizeExpense(input: {
   section: Section;
-  payment: Payment;
+  payment: Payment | string;
   onCard: boolean;
   cardLabel: string | null;
 }): { section: Section; payment: Payment; onCard: boolean; cardLabel: string | null } {
   const cardLabel = cleanCardLabel(input.cardLabel);
+  const method = coercePayment(input.payment);
   if (input.section === "card") {
     return { section: "card", payment: "card", onCard: false, cardLabel };
   }
   if (input.section === "extra") {
-    const payment: Payment =
-      input.payment === "card" || input.payment === "debit" || input.payment === "cash" ? input.payment : "pix";
     return {
       section: "extra",
-      payment,
+      payment: method,
       onCard: false,
-      cardLabel: payment === "card" ? cardLabel : null,
+      cardLabel: method === "card" ? cardLabel : null,
     };
   }
-  const payment: Payment = input.onCard || input.payment === "card" ? "card" : input.payment === "cash" ? "cash" : "pix";
+  const payment: Payment = input.onCard || method === "card" ? "card" : "pix";
   return {
     section: "fixed",
     payment,

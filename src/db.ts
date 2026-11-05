@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, PartialPayment, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteWithSeries, noteWithVisibleText, isVariableCost, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope } from "./domain.ts";
+import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, coercePayment, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteWithSeries, noteWithVisibleText, isVariableCost, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -731,7 +731,7 @@ export function mapExpense(row: ExpenseRow): Expense {
     name: row.name,
     section: row.section as Section,
     amountCents: row.amount_cents,
-    payment: row.payment as Payment,
+    payment: coercePayment(row.payment),
     onCard: row.on_card === 1,
     cardLabel: row.card_label,
     paid: row.paid === 1,
@@ -892,7 +892,7 @@ async function attachPartials(db: D1Database, ownerId: string, expenses: Expense
     const partial: PartialPayment = {
       id: row.id,
       amountCents: row.amount_cents,
-      payment: row.payment,
+      payment: coercePayment(row.payment),
       cardLabel: row.card_label,
       installment: row.installment,
       createdAt: row.created_at,
