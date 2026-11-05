@@ -16,6 +16,7 @@ import {
   expenseDeleteTargets,
   cardDeletionEffects,
   partialIdFromNote,
+  livingCardChargeKind,
   normalizeExpense,
   expenseCountForCard,
   listMonthRange,
@@ -180,6 +181,13 @@ test("pagar a fatura não quita o mês enquanto o custo de vida previsto estiver
   const closed = computeTotals([living, invoice], 100000);
   assert.equal(closed.remainingCents, 0);
   assert.equal(monthCanSettle(closed), true);
+});
+
+test("valor menor que o previsto no cartão continua parcial", () => {
+  assert.equal(livingCardChargeKind({ plannedCents: 20000, alreadyCents: 0, chargedCents: 20000 }), "full");
+  assert.equal(livingCardChargeKind({ plannedCents: 20000, alreadyCents: 0, chargedCents: 25000 }), "full");
+  assert.equal(livingCardChargeKind({ plannedCents: 20000, alreadyCents: 0, chargedCents: 8000 }), "partial");
+  assert.equal(livingCardChargeKind({ plannedCents: 20000, alreadyCents: 5000, chargedCents: 15000 }), "partial");
 });
 
 test("excluir a linha do cartão solta o parcial e o custo que estava inteiro na fatura", () => {

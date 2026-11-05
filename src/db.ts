@@ -805,6 +805,69 @@ export async function insertPartialPayment(
   return id;
 }
 
+export async function addLivingCardPartial(
+  db: D1Database,
+  input: {
+    ownerId: string;
+    expenseId: string;
+    amountCents: number;
+    cardLabel: string;
+    installmentCount: number;
+    invoiceMonthId: string;
+    name: string;
+  },
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const expense = await getExpense(db, input.ownerId, input.expenseId);
+  if (!expense || expense.section !== "fixed") return { ok: false, error: "Gasto não encontrado." };
+  if (expense.onCard) return { ok: false, error: "Esta conta já foi inteira para o cartão." };
+  if (expense.paid) return { ok: false, error: "Esta despesa já foi encerrada." };
+  const count = input.installmentCount;
+  const known = await listMonths(db, input.ownerId);
+  const plan = planCardPurchase({
+    startMonthId: input.invoiceMonthId,
+    totalCount: count,
+    paidCount: 0,
+    amountCents: input.amountCents,
+    mode: "total",
+  });
+  if (!plan.ok) return plan;
+  if (plan.plan.schedule.some((part) => !known.some((month) => month.id === part.monthId))) {
+    return { ok: false, error: "O parcelamento passa do período gerenciado. Aumente o período ou reduza as parcelas." };
+  }
+  if (expense.payment === "card") {
+    await db
+      .prepare("UPDATE expenses SET payment = 'pix', on_card = 0, card_label = NULL, paid = 0 WHERE owner_id = ? AND id = ?")
+      .bind(input.ownerId, expense.id)
+      .run();
+  }
+  const partialId = await insertPartialPayment(db, {
+    ownerId: input.ownerId,
+    expenseId: expense.id,
+    amountCents: input.amountCents,
+    payment: "card",
+    cardLabel: input.cardLabel,
+    installment: count > 1 ? `${count} parcelas` : null,
+  });
+  const created = await insertCardPurchase(db, {
+    ownerId: input.ownerId,
+    startMonthId: input.invoiceMonthId,
+    name: input.name,
+    section: "card",
+    payment: "card",
+    cardLabel: input.cardLabel,
+    note: `origem:${expense.id}\nparcial:${partialId}`,
+    totalCount: count,
+    paidCount: 0,
+    amountCents: input.amountCents,
+    mode: "total",
+  });
+  if (!created.ok) {
+    await deletePartialPayment(db, input.ownerId, expense.id, partialId);
+    return created;
+  }
+  return { ok: true };
+}
+
 export async function deletePartialPayment(db: D1Database, ownerId: string, expenseId: string, partialId: string): Promise<boolean> {
   const row = await db
     .prepare("SELECT id FROM partial_payments WHERE owner_id = ? AND expense_id = ? AND id = ?")

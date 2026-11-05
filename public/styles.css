@@ -486,7 +486,15 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .card-manage .item-end { padding-top: 0; }
 
-.item.paid { background: #f4faf6; }
+.item.paid,
+.item.on-card-full { background: #f4faf6; }
+
+.badges {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
 
 .item.paid .item-main strong {
   color: var(--muted);
@@ -539,6 +547,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 .badge.paid { background: #e5f6ee; color: var(--good); }
 
 .badge.open { background: #fff1e8; color: #9a3412; }
+
+.badge.forecast { background: #fde68a; color: #92400e; }
 
 .cost-split {
   display: grid;
@@ -641,6 +651,7 @@ html[data-theme="dark"] .cost-split div {
 html[data-theme="dark"] .note { background: #222831; }
 
 html[data-theme="dark"] .item.paid,
+html[data-theme="dark"] .item.on-card-full,
 html[data-theme="dark"] .card-manage.paid { background: #17362e; }
 
 html[data-theme="dark"] .item.on-card,
@@ -651,6 +662,8 @@ html[data-theme="dark"] .badge.on-card { background: #243044; color: #b7d4ff; }
 html[data-theme="dark"] .badge.paid { background: #17362e; color: var(--good); }
 
 html[data-theme="dark"] .badge.open { background: #3a271c; color: #fdba74; }
+
+html[data-theme="dark"] .badge.forecast { background: #3f2e12; color: #fcd34d; }
 
 html[data-theme="dark"] .nav button.active { background: #2a313b; }
 
