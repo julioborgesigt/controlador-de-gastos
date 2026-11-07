@@ -719,10 +719,10 @@ app.post("/api/expenses", async (c) => {
   }
   const monthIds = recurringMonthIds(body, parsed.value.section);
   if (!monthIds.ok) return c.json({ error: monthIds.error }, 400);
-  const launchOnCard = parsed.value.section === "fixed" && parsed.value.payment === "card" && !variableCard;
-  if ((launchOnCard || variableCard) && !parsed.value.cardLabel) return c.json({ error: "Escolha o cartão." }, 400);
-  if (launchOnCard && parsed.value.amountCents <= 0) {
-    return c.json({ error: "Informe um valor maior que zero para lançar no cartão." }, 400);
+  const intendsCard = parsed.value.section === "fixed" && parsed.value.payment === "card";
+  if (intendsCard && !parsed.value.cardLabel) return c.json({ error: "Escolha o cartão." }, 400);
+  if (intendsCard && parsed.value.amountCents <= 0) {
+    return c.json({ error: "Informe um valor maior que zero." }, 400);
   }
   const inserted = await insertRepeatedExpenses(c.env.DB, {
     ownerId: writer.scope.ownerId,
@@ -730,35 +730,63 @@ app.post("/api/expenses", async (c) => {
     name: parsed.value.name,
     section: parsed.value.section,
     amountCents: parsed.value.amountCents,
-    payment: launchOnCard ? "pix" : parsed.value.payment,
+    payment: parsed.value.payment,
     onCard: parsed.value.section === "fixed" ? false : parsed.value.onCard,
-    cardLabel: launchOnCard ? null : parsed.value.cardLabel,
+    cardLabel: parsed.value.cardLabel,
     paid: parsed.value.section === "fixed" ? false : parsed.value.paid,
     note: variableCard ? noteWithVariable(classifiedNote, true) : classifiedNote,
     installment: parsed.value.installment,
     livingCard: false,
   });
   if (!inserted.ok) return c.json({ error: inserted.error }, 404);
-  if (launchOnCard) {
-    const scope = body.cardLaunch === "following" ? "following" : "month";
-    const ordered = inserted.rows.slice().sort((left, right) => left.monthId.localeCompare(right.monthId));
-    const anchor = scope === "following"
-      ? ordered[0]
-      : inserted.rows.find((row) => row.monthId === body.monthId) ?? ordered[0];
-    if (!anchor) return c.json({ error: "Mês não encontrado." }, 404);
-    const paid = await payLivingSeriesOnCard(c.env.DB, {
-      ownerId: writer.scope.ownerId,
-      expenseId: anchor.id,
-      scope,
-      cardLabel: parsed.value.cardLabel || "",
-      alias: parsed.value.name,
-      amountCents: parsed.value.amountCents,
-      totalCount: 1,
-      startMonthId: anchor.monthId,
-      mode: "installment",
-    });
-    if (!paid.ok) return c.json({ error: paid.error }, 400);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.monthId), writer.scope), 201);
+});
+
+app.post("/api/cash-spend", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const body = await readJson(c);
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!isCents(body.amountCents) || body.amountCents <= 0) return c.json({ error: "Informe um valor maior que zero." }, 400);
+  const kind = body.classification;
+  if (kind !== "casa" && kind !== "imprevisto" && kind !== "planejado") {
+    return c.json({ error: "Escolha Custo de vida, Imprevisto ou Planejado." }, 400);
   }
+  if (!isMonthId(body.monthId) || !(await getMonth(c.env.DB, writer.scope.ownerId, body.monthId))) {
+    return c.json({ error: "Escolha o mês." }, 400);
+  }
+  const linkId = typeof body.linkExpenseId === "string" ? body.linkExpenseId.trim() : "";
+  if (kind === "casa") {
+    if (!linkId) return c.json({ error: "Escolha o custo de vida que este Pix paga." }, 400);
+    const origin = await getExpense(c.env.DB, writer.scope.ownerId, linkId);
+    if (!origin || origin.section !== "fixed") return c.json({ error: "Escolha um custo de vida." }, 400);
+    if (origin.paid || origin.onCard) return c.json({ error: "Este custo já foi encerrado." }, 400);
+    await insertPartialPayment(c.env.DB, {
+      ownerId: writer.scope.ownerId,
+      expenseId: origin.id,
+      amountCents: body.amountCents,
+      payment: "pix",
+      cardLabel: null,
+      installment: null,
+    });
+    return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, origin.monthId), writer.scope), 201);
+  }
+  if (!name || name.length > 120) return c.json({ error: "Dê um nome ao gasto, com até 120 caracteres." }, 400);
+  const inserted = await insertRepeatedExpenses(c.env.DB, {
+    ownerId: writer.scope.ownerId,
+    monthIds: [body.monthId],
+    name,
+    section: "extra",
+    amountCents: body.amountCents,
+    payment: "pix",
+    onCard: false,
+    cardLabel: null,
+    paid: true,
+    note: noteWithChargeContext(kind === "planejado" ? noteWithPlanned("", true) : "", { referenceMonthId: body.monthId }),
+    installment: null,
+    livingCard: false,
+  });
+  if (!inserted.ok) return c.json({ error: inserted.error }, 400);
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.monthId), writer.scope), 201);
 });
 

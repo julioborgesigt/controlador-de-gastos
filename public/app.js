@@ -52,6 +52,7 @@ let allowLeave = false;
 const views = [
   ["resumo", "Resumo mensal"],
   ["cartoes", "Cartões de crédito"],
+  ["avista", "À vista"],
   ["casa", "Custo de vida"],
   ["extras", "Imprevisto / Planejado"],
   ["receita", "Receita mensal"],
@@ -924,6 +925,7 @@ function viewBody(data) {
   if (state.view === "resumo") return summary(data);
   if (state.view === "receita") return incomeView(data);
   if (state.view === "cartoes") return state.cardFocus ? cardDetail(data) : cardsHome(data);
+  if (state.view === "avista") return cashHome(data);
   if (state.view === "casa") return sectionList(data, "fixed");
   return sectionList(data, "extra");
 }
@@ -1522,12 +1524,11 @@ function setupGuide() {
   const guides = [
     ["Resumo mensal", "O panorama do mês: o que falta pagar, o saldo e o caminho para as outras abas."],
     ["Cartões de crédito", onDesktop()
-      ? "A fatura de cada cartão. Clique no cartão para ver os lançamentos. O dia de vencimento aparece junto do apelido."
-      : "A fatura de cada cartão. Toque no cartão para ver os lançamentos. O dia de vencimento aparece junto do apelido."],
-    ["Custo de vida", onDesktop()
-      ? "As contas que voltam todo mês. Use os botões ao lado para pagar no Pix, enviar pro cartão, editar ou excluir."
-      : "As contas que voltam todo mês. Puxe para a direita para pagar no Pix ou enviar pro cartão. Puxe para a esquerda para editar ou excluir."],
-    ["Imprevisto / Planejado", "Imprevistos e gastos planejados. Os dois podem sair no Pix ou no crédito."],
+      ? "A fatura de cada cartão. O gasto no crédito nasce aqui e segue para a aba da classificação."
+      : "A fatura de cada cartão. O gasto no crédito nasce aqui e segue para a aba da classificação."],
+    ["À vista", "O pagamento no Pix nasce aqui, ligado a um custo de vida ou criando um imprevisto ou planejado."],
+    ["Custo de vida", "Mostra o previsto, o que já foi pago no cartão e no Pix, e o que ainda falta em cada um. O pagamento é feito em Cartões de crédito ou À vista."],
+    ["Imprevisto / Planejado", "Consulta do que já foi lançado. O gasto novo entra por Cartões de crédito ou À vista."],
     ["Receita mensal", "A renda base e os extras do mês, como décimo terceiro ou um valor avulso."],
   ];
   return el("main", { class: "screen auth" }, [
@@ -1721,6 +1722,83 @@ function jump(view, title, amount, detail) {
     el("div", { class: "row-between" }, [el("span", {}, title), el("strong", {}, amount)]),
     el("small", {}, detail),
   ]);
+}
+
+function cashHome(data) {
+  return el("section", {}, [
+    el("div", { class: "section-head" }, [
+      el("p", { class: "eyebrow" }, data.month.label),
+      el("h2", {}, "À vista"),
+      el("p", { class: "muted" }, "Pagamento no Pix, ligado a um custo de vida ou lançado como imprevisto ou planejado."),
+    ]),
+    el("p", { class: "note" }, "O custo de vida precisa já estar previsto. Imprevisto e planejado nascem aqui, pagos no Pix."),
+    editable() ? el("button", { class: "primary add-top", type: "button", onclick: openCashSpend }, "Lançar à vista") : "",
+  ]);
+}
+
+function openCashSpend() {
+  state.sheet = {
+    mode: "cash-spend",
+    name: "",
+    amount: "",
+    expenseKind: "casa",
+    invoiceMonthId: state.monthId,
+    invoiceTouched: true,
+    linkExpenseId: "",
+  };
+  state.error = "";
+  render();
+}
+
+function cashSpendFields(draft) {
+  const months = state.data?.months || [];
+  const invoiceLabel = monthName(draft.invoiceMonthId) || "este mês";
+  const links = linkChoicesFor(draft);
+  const linkWaiting = draft.linkLoading === `${draft.invoiceMonthId}:${draft.expenseKind}`;
+  const monthSelect = el("select", { id: "invoiceMonthId" }, months.map((month) => el("option", { value: month.id }, month.label)));
+  if (draft.invoiceMonthId) monthSelect.value = draft.invoiceMonthId;
+  monthSelect.addEventListener("change", () => {
+    if (draft.invoiceMonthId !== monthSelect.value) {
+      draft.linkExpenseId = "";
+      draft.linkChoices = null;
+      draft.linkKey = "";
+    }
+    draft.invoiceMonthId = monthSelect.value;
+    render();
+  });
+  const link = el("select", { id: "linkExpenseId" }, [
+    draft.expenseKind === "casa" ? el("option", { value: "" }, "Escolha o custo") : el("option", { value: "" }, "Criar este gasto"),
+    ...links.map((expense) => el("option", { value: expense.id }, `${expense.name} · ${money(expense.amountCents)}`)),
+  ]);
+  link.value = draft.linkExpenseId || "";
+  link.addEventListener("change", () => { draft.linkExpenseId = link.value; });
+  return [
+    el("h2", {}, "Lançar à vista"),
+    field("Valor", "amount", draft.amount, "decimal"),
+    el("div", { class: "field" }, [
+      el("label", {}, "Classificação"),
+      segmented("expenseKind", [
+        ["casa", "Custo de vida"],
+        ["imprevisto", "Imprevisto"],
+        ["planejado", "Planejado"],
+      ], draft.expenseKind || "casa"),
+    ]),
+    el("div", { class: "field" }, [el("label", { for: "invoiceMonthId" }, "Mês"), monthSelect]),
+    draft.expenseKind === "casa"
+      ? el("div", { class: "field" }, [el("label", { for: "linkExpenseId" }, `Custo de vida de ${invoiceLabel}`), link])
+      : field("Nome", "name", draft.name, "text"),
+    el("p", { class: "muted" }, linkWaiting && draft.expenseKind === "casa"
+      ? `Buscando os custos de ${invoiceLabel}.`
+      : draft.expenseKind === "casa"
+        ? (links.length
+          ? "O Pix abate o custo previsto. O que faltar continua em falta no Pix ou no cartão, conforme o custo foi cadastrado."
+          : `Não há custo de vida em aberto em ${invoiceLabel}. Cadastre o previsto em Custo de vida.`)
+        : "Este valor cria o imprevisto ou o planejado e já fica pago no Pix."),
+    el("div", { class: "actions" }, [
+      el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
+      el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Lançando..." : "Lançar"),
+    ]),
+  ];
 }
 
 function cardsHome(data) {
@@ -2306,16 +2384,13 @@ function sectionList(data, section) {
     ]),
   ];
   if (section === "fixed") {
-    children.push(el("p", { class: "note" }, "O valor cadastrado é previsto. Pague no Pix, envie pro cartão ou lance um parcial para ele entrar na conta. O valor pode ser diferente do cadastrado."));
+    children.push(el("p", { class: "note" }, "Aqui fica o previsto. O pagamento no Pix é feito em À vista e o do crédito em Cartões de crédito."));
   }
   if (section === "extra") {
-    children.push(el("p", { class: "note" }, "Imprevisto é o que fugiu do plano. Planejado é o gasto que você já contava. Os dois podem sair no Pix ou no crédito."));
+    children.push(el("p", { class: "note" }, "Consulta dos imprevistos e planejados. Um gasto novo entra por Cartões de crédito ou À vista."));
   }
   if (editable() && section === "extra") {
-    children.push(el("div", { class: "stack-actions" }, [
-      el("button", { class: "primary", type: "button", onclick: () => openCreate("extra", "pix", "imprevisto") }, "Adicionar imprevisto"),
-      el("button", { class: "secondary", type: "button", onclick: () => openCreate("extra", "pix", "planejado") }, "Adicionar planejado"),
-    ]));
+    children.push(el("p", { class: "muted" }, "Nada é pago nesta aba."));
   } else if (editable()) {
     children.push(el("button", {
       class: "primary add-top",
@@ -2781,11 +2856,14 @@ function costCard(label, cents, wide = false) {
 }
 
 function costSplit(totals) {
+  const paidMonth = (totals.fixedOnCardCents || 0) + (totals.fixedPixPaidCents || 0);
   return el("div", { class: "cost-split" }, [
-    costCard("Previsão geral Pix/cartão", totals.fixedForecastCents, true),
-    costCard("Já pago no cartão", totals.fixedOnCardCents),
-    costCard("Já pago no Pix", totals.fixedPixPaidCents),
-    costCard("Previsto pagar no Pix", totals.fixedPixForecastCents, true),
+    costCard("Previsto", totals.fixedForecastCents, true),
+    costCard("Já pago no mês", paidMonth, true),
+    costCard("Pago no cartão", totals.fixedOnCardCents),
+    costCard("Pago no Pix", totals.fixedPixPaidCents),
+    costCard("Falta no cartão", totals.fixedCardDueCents || 0),
+    costCard("Falta no Pix", totals.fixedPixForecastCents),
   ]);
 }
 
@@ -2862,10 +2940,13 @@ function expenseRow(expense, section, options = {}) {
     ]),
   ]);
   if (!editable()) return front;
+  const informational = section === "fixed" || section === "extra";
   const onCardHere = section === "fixed" && expense.onCard;
   const living = section === "fixed" && !expense.onCard;
   const cardFirst = expense.payment === "card" && !expense.onCard;
-  const leads = onCardHere
+  const leads = informational
+    ? null
+    : onCardHere
     ? [{ label: "Desfazer", tone: "undo", commit: true, run: () => openUndoCard(expense) }]
     : living
     ? [
@@ -2888,7 +2969,7 @@ function expenseRow(expense, section, options = {}) {
     : null;
   return swipeRow(front, {
     leads,
-    pay: living || onInvoice ? null : {
+    pay: informational || living || onInvoice ? null : {
       label: expense.paid ? "Desfazer" : "Pago",
       undo: expense.paid,
       run: () => patchExpense(expense, { paid: !expense.paid }),
@@ -2951,10 +3032,10 @@ function livingPay(draft) {
         ? "Pix tira este mês da fatura. Crédito lança o valor cadastrado neste mês."
         : "Trocar para crédito lança o valor cadastrado na fatura deste mês.")
       : payment === "card" && draft.costKind === "variavel"
-        ? "O valor fica previsto e não entra na fatura agora. Cada gasto lançado depois pode ir para a fatura deste mês ou para a do mês seguinte, como acontece depois do fechamento do cartão."
+        ? "O valor fica previsto. O que faltar entra em falta no cartão. O pagamento é feito em Cartões de crédito."
         : payment === "card"
-        ? "O valor entra na fatura dos meses escolhidos abaixo."
-        : "O valor fica previsto. Ele só entra na fatura ou sai da receita quando você lançar Pago no Pix, Enviar pro cartão ou Pagamento parcial. Na hora, o valor pode ser outro."),
+        ? "O valor fica previsto e entra em falta no cartão. Nada vai para a fatura agora. O pagamento é feito em Cartões de crédito."
+        : "O valor fica previsto e entra em falta no Pix. O pagamento é feito em À vista."),
   ]);
 }
 
@@ -2962,12 +3043,12 @@ function recurringSpan(draft) {
   const span = draft.span || "all";
   const fixedCard = draft.payment === "card" && draft.costKind !== "variavel";
   const copy = span === "period"
-    ? (fixedCard ? "O valor entra na fatura de cada mês do intervalo." : "A conta entra em cada mês do intervalo, em aberto.")
+    ? "A conta prevista entra em cada mês do intervalo."
     : span === "month"
-      ? (fixedCard ? "O valor entra na fatura só deste mês." : "A conta entra só neste mês, em aberto.")
+      ? "A conta prevista entra só neste mês."
       : span === "following"
-        ? (fixedCard ? "O valor entra na fatura deste mês e de cada mês seguinte." : "A conta entra neste mês e nos seguintes, em aberto.")
-        : (fixedCard ? "O valor entra na fatura de todos os meses do período." : "A conta entra em todos os meses do período, em aberto.");
+        ? "A conta prevista entra neste mês e nos seguintes."
+        : "A conta prevista entra em todos os meses do período.";
   return el("div", { class: "field" }, [
     el("label", {}, "Em quais meses"),
     segmented("span", [
@@ -3086,13 +3167,21 @@ function livingBalance(expense) {
   };
 }
 
-function livingCostsForInvoice(monthId) {
-  return (state.data?.expenses || []).filter((expense) => expense.section === "fixed" && expense.monthId === monthId && !expense.paid && !expense.onCard);
+function matchesLink(expense, kind) {
+  if (expense.paid) return false;
+  if (kind === "casa") return expense.section === "fixed" && !expense.onCard;
+  if (kind === "planejado") return expense.section === "extra" && isPlannedNote(expense.note);
+  return expense.section === "extra" && !isPlannedNote(expense.note);
+}
+
+function livingCostsForInvoice(monthId, kind = "casa") {
+  return (state.data?.expenses || []).filter((expense) => expense.monthId === monthId && matchesLink(expense, kind));
 }
 
 function rememberLinkChoices(draft, monthId, expenses) {
   draft.linkMonthId = monthId;
-  draft.linkChoices = (expenses || []).filter((expense) => expense.section === "fixed" && !expense.paid && !expense.onCard);
+  draft.linkKey = `${monthId}:${draft.expenseKind}`;
+  draft.linkChoices = (expenses || []).filter((expense) => matchesLink(expense, draft.expenseKind));
   draft.linkLoading = "";
   draft.linkError = "";
   if (draft.linkExpenseId && !draft.linkChoices.some((expense) => expense.id === draft.linkExpenseId)) draft.linkExpenseId = "";
@@ -3100,21 +3189,24 @@ function rememberLinkChoices(draft, monthId, expenses) {
 
 function linkChoicesFor(draft) {
   const monthId = draft.invoiceMonthId;
-  if (!monthId || draft.expenseKind !== "casa") return [];
+  if (!monthId) return [];
+  if (draft.mode === "card-spend" && draft.expenseKind !== "casa") return [];
+  const cacheKey = `${monthId}:${draft.expenseKind || "casa"}`;
   if (monthId === state.monthId) {
     draft.linkError = "";
-    return livingCostsForInvoice(monthId);
+    return livingCostsForInvoice(monthId, draft.expenseKind || "casa");
   }
-  if (draft.linkMonthId === monthId && Array.isArray(draft.linkChoices)) return draft.linkChoices;
-  if (draft.linkLoading !== monthId) {
-    draft.linkLoading = monthId;
+  if (draft.linkKey === cacheKey && Array.isArray(draft.linkChoices)) return draft.linkChoices;
+  if (draft.linkLoading !== cacheKey) {
+    draft.linkLoading = cacheKey;
     request(`/api/months/${monthId}`).then((data) => {
-      if (state.sheet?.mode !== "card-spend" || state.sheet.invoiceMonthId !== monthId) return;
+      if (!state.sheet || state.sheet.invoiceMonthId !== monthId || `${monthId}:${state.sheet.expenseKind}` !== cacheKey) return;
       rememberLinkChoices(state.sheet, monthId, data.expenses || []);
       render();
     }).catch((error) => {
-      if (state.sheet?.mode !== "card-spend" || state.sheet.invoiceMonthId !== monthId) return;
+      if (!state.sheet || state.sheet.invoiceMonthId !== monthId) return;
       state.sheet.linkLoading = "";
+      state.sheet.linkKey = cacheKey;
       state.sheet.linkMonthId = monthId;
       state.sheet.linkChoices = [];
       state.sheet.linkError = messageOf(error);
@@ -3138,7 +3230,7 @@ function cardSpendFields(draft) {
         : `Sugerido pelo fechamento no dia ${card.closingDay}. Dá para escolher outra fatura.`;
   const invoiceLabel = monthName(draft.invoiceMonthId) || "esta fatura";
   const links = linkChoicesFor(draft);
-  const linkWaiting = draft.expenseKind === "casa" && draft.linkLoading === draft.invoiceMonthId;
+  const linkWaiting = draft.expenseKind === "casa" && draft.linkLoading === `${draft.invoiceMonthId}:casa`;
   const date = el("input", { id: "purchaseDate", type: "date", value: draft.purchaseDate || "" });
   date.addEventListener("input", () => {
     draft.purchaseDate = date.value;
@@ -3205,7 +3297,11 @@ function livingBalanceLine(expense) {
   if (balance.pix) spent.push(`Pix ${money(balance.pix)}`);
   if (balance.credit) spent.push(`Crédito ${money(balance.credit)}`);
   const spentLabel = spent.length ? spent.join(" · ") : money(0);
-  const rest = balance.over > 0 ? `Passou ${money(balance.over)}` : `Ainda previsto ${money(balance.remaining)}`;
+  const rest = balance.over > 0
+    ? `Passou ${money(balance.over)}`
+    : expense.payment === "card"
+      ? `Falta no cartão ${money(balance.remaining)}`
+      : `Falta no Pix ${money(balance.remaining)}`;
   return `Previsto ${money(balance.forecast)} · Já gasto ${spentLabel} · ${rest}`;
 }
 
@@ -4163,6 +4259,8 @@ function sheet() {
       ]),
       el("button", { class: "danger", type: "button", onclick: () => openDeleteExpense(draft) }, "Excluir gasto"),
     );
+  } else if (draft.mode === "cash-spend") {
+    panel.append(...cashSpendFields(draft).filter(Boolean));
   } else if (draft.mode === "card-spend") {
     panel.append(...cardSpendFields(draft).filter(Boolean));
   } else if (draft.mode === "card") {
@@ -4334,6 +4432,11 @@ function segmented(key, options, current) {
         }
         if (value === "extra") state.sheet.onCard = false;
         if (value === "fixed") state.sheet.payment = state.sheet.onCard ? "card" : "pix";
+      }
+      if (key === "expenseKind") {
+        state.sheet.linkExpenseId = "";
+        state.sheet.linkChoices = null;
+        state.sheet.linkKey = "";
       }
       if (key === "span") state.sheet.spanChosen = true;
       if ((key === "payment" || key === "costKind") && state.sheet.section === "fixed" && state.sheet.mode === "create" && !state.sheet.spanChosen) {
@@ -4621,6 +4724,34 @@ async function saveSheet(event) {
       });
       rememberMonth(state.data);
       state.notice = `Fatura de ${draft.cardName} parcelada em ${count} vezes.`;
+    } else if (draft.mode === "cash-spend") {
+      const amountCents = parseMoney(draft.amount || "");
+      if (amountCents === null || amountCents <= 0) throw new Error("Informe um valor maior que zero.");
+      if (!["casa", "imprevisto", "planejado"].includes(draft.expenseKind)) throw new Error("Escolha a classificação.");
+      if (!draft.invoiceMonthId) throw new Error("Escolha o mês.");
+      if (draft.expenseKind === "casa" && !draft.linkExpenseId) throw new Error("Escolha o custo de vida.");
+      if (draft.expenseKind !== "casa" && !draft.linkExpenseId && !draft.name.trim()) throw new Error("Dê um nome ao gasto.");
+      setWorking(true, "Lançando...");
+      state.data = await request("/api/cash-spend", {
+        method: "POST",
+        body: {
+          name: draft.name.trim(),
+          amountCents,
+          classification: draft.expenseKind,
+          monthId: draft.invoiceMonthId,
+          linkExpenseId: draft.linkExpenseId || "",
+        },
+      });
+      if (state.data?.month?.id) {
+        state.monthId = state.data.month.id;
+        sessionStorage.setItem("monthId", state.monthId);
+      }
+      rememberMonth(state.data);
+      state.notice = draft.expenseKind === "casa"
+        ? "Pix lançado no custo de vida."
+        : draft.linkExpenseId
+          ? "Pix vinculado ao gasto."
+          : `Lancei em ${draft.expenseKind === "planejado" ? "Planejado" : "Imprevisto"}, pago no Pix.`;
     } else if (draft.mode === "card-spend") {
       if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
       const amountCents = parseMoney(draft.amount || "");
@@ -4710,7 +4841,7 @@ async function saveSheet(event) {
       if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
       if (amountCents === null) throw new Error("Informe o valor. Exemplo: 75,90");
       const variableCard = draft.mode === "create" && draft.section === "fixed" && !draft.cardExpense && draft.payment === "card" && draft.costKind === "variavel";
-      const livingOnCard = draft.mode === "create" && draft.section === "fixed" && !draft.cardExpense && draft.payment === "card" && !variableCard;
+      const livingOnCard = false;
       if (variableCard && !String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão.");
       if (variableCard && amountCents <= 0) throw new Error("Informe o valor previsto.");
       if (livingOnCard) {
@@ -4814,7 +4945,9 @@ async function saveSheet(event) {
             : "Lancei este custo no cartão de todos os meses.";
         } else if (recurringMonths) {
           const span = recurringMonths.length > 1 ? ` em ${recurringMonths.length} meses` : "";
-          state.notice = `Valor previsto${span}. Lance Pago no Pix, Enviar pro cartão ou Pagamento parcial para ele entrar na conta.`;
+          state.notice = draft.payment === "card"
+            ? `Valor previsto${span}. O que faltar fica no cartão e o pagamento é feito em Cartões de crédito.`
+            : `Valor previsto${span}. O que faltar fica no Pix e o pagamento é feito em À vista.`;
         }
         if (surpriseCard && startMonthId !== state.monthId) await loadMonth(state.monthId);
         rememberMonth(state.data);
@@ -4836,35 +4969,16 @@ async function saveSheet(event) {
           ? "Alterei todos os registros."
           : "Alterei este mês e os seguintes.";
       } else if (editingLiving) {
-        if (draft.wasOnCard && (!wantsCard || relaunch)) {
-          await request(`/api/expenses/${draft.id}/card-payment?scope=month`, { method: "DELETE" });
-        }
         state.data = await request(`/api/expenses/${draft.id}`, {
           method: "PATCH",
           body: {
             ...body,
-            payment: wantsCard && !relaunch ? "card" : "pix",
-            onCard: Boolean(wantsCard && draft.wasOnCard && !relaunch),
-            paid: relaunch ? false : (wantsCard ? true : (draft.wasOnCard ? false : draft.paid)),
+            payment: draft.wasOnCard ? "card" : draft.payment,
+            onCard: draft.wasOnCard,
+            paid: draft.paid,
           },
         });
-        if (relaunch) {
-          state.data = await request(`/api/expenses/${draft.id}/card-payment`, {
-            method: "POST",
-            body: {
-              cardLabel: draft.cardLabel,
-              alias: draft.name.trim(),
-              amountCents,
-              installmentCount: 1,
-              invoiceMonthId: draft.monthId,
-              amountMode: "installment",
-              scope: "month",
-            },
-          });
-          state.notice = "Lancei o valor no cartão deste mês.";
-        } else if (draft.wasOnCard && !wantsCard) {
-          state.notice = "Tirei este mês do cartão. O pagamento ficou no Pix.";
-        }
+        state.notice = "Atualizei o previsto. O pagamento continua em Cartões de crédito ou À vista.";
         rememberMonth(state.data);
       } else {
         state.data = await request(`/api/expenses/${draft.id}`, { method: "PATCH", body });
@@ -5116,6 +5230,7 @@ function glyph(name) {
   const paths = {
     resumo: "M4 12h16M4 6h16M4 18h10",
     cartoes: "M3 7h18v10H3zM3 11h18",
+    avista: "M4 7h16v10H4zM8 12h8",
     casa: "M4 11l8-7 8 7v8H4z",
     extras: "M12 5v14M5 12h14",
     receita: "M12 3v18M8 7h6a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h7",
