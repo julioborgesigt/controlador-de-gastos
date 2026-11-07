@@ -525,6 +525,26 @@ export async function listIncomeExtras(db: D1Database, ownerId: string): Promise
   }));
 }
 
+export async function listCardPurchasesInMonth(db: D1Database, ownerId: string, monthId: string): Promise<Expense[]> {
+  if (!/^\d{4}-\d{2}$/.test(monthId)) return [];
+  const result = await db
+    .prepare(
+      `SELECT * FROM expenses
+       WHERE owner_id = ? AND note LIKE ?
+         AND (section = 'card' OR (section = 'extra' AND payment = 'card'))
+       ORDER BY month_id, name`,
+    )
+    .bind(ownerId, `%compra:${monthId}-%`)
+    .all<ExpenseRow>();
+  return (result.results ?? [])
+    .map(mapExpense)
+    .filter((expense) => {
+      const note = String(expense.note || "");
+      if (note.includes("parcelamento:") || note.includes("quitado-cartao:")) return false;
+      return note.split("\n").some((line) => line.trim().startsWith(`compra:${monthId}-`));
+    });
+}
+
 export async function listExpenses(db: D1Database, ownerId: string, monthId: string): Promise<Expense[]> {
   const result = await db
     .prepare("SELECT * FROM expenses WHERE owner_id = ? AND month_id = ? ORDER BY sort_order, name")

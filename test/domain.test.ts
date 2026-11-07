@@ -25,6 +25,7 @@ import {
   noteWithOrigin,
   noteWithPlanned,
   cardChargeTitle,
+  purchaseMonthFromNote,
   noteWithChargeContext,
   noteWithVariable,
   nextMonthId,
@@ -467,6 +468,11 @@ test("a tarja do cartão distingue imprevisto, planejado e custo de vida", () =>
   assert.equal(noteForTrack("origem:abc\ntipo:planejado\nviagem", "imprevisto"), "viagem");
   assert.equal(noteForTrack("viagem", "planejado"), "tipo:planejado\nviagem");
   assert.equal(noteWithOrigin("serie:s1", "abc"), "origem:abc\nserie:s1");
+});
+
+test("a data da compra identifica o mês do lançamento", () => {
+  assert.equal(purchaseMonthFromNote("compra:2026-11-20\norigem:abc"), "2026-11");
+  assert.equal(purchaseMonthFromNote("ref:2026-11"), "");
 });
 
 test("a fatura mostra a data da compra ou o mês de referência", () => {

@@ -924,7 +924,10 @@ async function changeMonth(monthId) {
 function viewBody(data) {
   if (state.view === "resumo") return summary(data);
   if (state.view === "receita") return incomeView(data);
-  if (state.view === "cartoes") return state.cardFocus ? cardDetail(data) : cardsHome(data);
+  if (state.view === "cartoes") {
+    if (state.cardFocus === "purchases") return purchaseDetail(data);
+    return state.cardFocus ? cardDetail(data) : cardsHome(data);
+  }
   if (state.view === "avista") return cashHome(data);
   if (state.view === "casa") return sectionList(data, "fixed");
   return sectionList(data, "extra");
@@ -1864,11 +1867,109 @@ function cashSpendFields(draft) {
   ];
 }
 
+function ensurePurchases(monthId) {
+  if (!monthId || state.purchasesLoading === monthId || state.purchasesMonthId === monthId) return;
+  state.purchasesLoading = monthId;
+  request(`/api/months/${monthId}/purchases`).then((payload) => {
+    if (state.monthId !== monthId) return;
+    state.purchases = payload;
+    state.purchasesMonthId = monthId;
+    state.purchasesLoading = "";
+    render();
+  }).catch((error) => {
+    if (state.monthId !== monthId) return;
+    state.purchases = { monthId, totalCents: 0, items: [], error: messageOf(error) };
+    state.purchasesMonthId = monthId;
+    state.purchasesLoading = "";
+    render();
+  });
+}
+
+function purchasesOf(monthId) {
+  if (state.purchasesMonthId === monthId && state.purchases) return state.purchases;
+  ensurePurchases(monthId);
+  return null;
+}
+
+function purchaseGroups(items) {
+  const groups = new Map();
+  for (const item of items || []) {
+    const key = item.invoiceMonthId || "";
+    const list = groups.get(key) || [];
+    list.push(item);
+    groups.set(key, list);
+  }
+  return [...groups.entries()]
+    .sort((left, right) => left[0].localeCompare(right[0]))
+    .map(([invoiceMonthId, rows]) => ({
+      invoiceMonthId,
+      totalCents: rows.reduce((sum, row) => sum + row.amountCents, 0),
+      rows: rows.slice().sort((left, right) => String(left.note || "").localeCompare(String(right.note || "")) || left.name.localeCompare(right.name)),
+    }));
+}
+
+function purchaseDetail(data) {
+  const payload = purchasesOf(data.month.id);
+  const items = payload?.items || [];
+  const groups = purchaseGroups(items);
+  const children = [
+    el("button", {
+      class: "linkish back",
+      type: "button",
+      onclick: () => {
+        state.cardFocus = null;
+        render();
+      },
+    }, [backArrow(), "Faturas"]),
+    el("div", { class: "section-head" }, [
+      el("p", { class: "eyebrow" }, "Lançamentos feitos"),
+      el("h2", {}, payload ? money(payload.totalCents || 0) : "…"),
+      el("p", { class: "muted" }, `Compras de ${monthPhrase(data.month.id)}, separadas pela fatura em que entraram.`),
+    ]),
+  ];
+  if (!payload) {
+    children.push(el("p", { class: "muted" }, "Carregando lançamentos..."));
+    return el("section", {}, children);
+  }
+  if (payload.error) children.push(el("p", { class: "error" }, payload.error));
+  if (!groups.length) children.push(el("p", { class: "muted" }, "Nenhum gasto com data de compra neste mês."));
+  for (const group of groups) {
+    const same = group.invoiceMonthId === data.month.id;
+    children.push(el("p", { class: "eyebrow group" }, same
+      ? `Ainda na fatura de ${monthPhrase(group.invoiceMonthId)} · ${money(group.totalCents)}`
+      : `Fatura de ${monthPhrase(group.invoiceMonthId)} · ${money(group.totalCents)}`));
+    children.push(el("div", { class: "list" }, group.rows.map((item) => el("article", { class: "item" }, [
+      el("div", { class: "item-copy" }, [
+        el("strong", {}, cardChargeTitle(item)),
+        el("small", {}, [item.cardLabel || "Sem cartão", cardSourceLabel(item) || "Crédito"].filter(Boolean).join(" · ")),
+      ]),
+      el("span", { class: "amount" }, money(item.amountCents)),
+    ]))));
+  }
+  return el("section", {}, children);
+}
+
 function cardsHome(data) {
   const cards = data.cards || [];
+  const purchases = purchasesOf(data.month.id);
+  const phrase = monthPhrase(data.month.id);
   const children = [
+    el("button", {
+      class: "jump",
+      type: "button",
+      onclick: () => {
+        state.cardFocus = "purchases";
+        render();
+      },
+    }, [
+      el("div", { class: "row-between" }, [
+        el("span", {}, `Ver lançamentos feitos em ${phrase}`),
+        el("strong", {}, purchases ? money(purchases.totalCents || 0) : "…"),
+      ]),
+      el("small", {}, purchases?.error || "O total já gasto neste mês, inclusive o que caiu na fatura do mês seguinte."),
+    ]),
     el("div", { class: "section-head" }, [
-      el("p", { class: "eyebrow" }, data.month.label),
+      el("p", { class: "eyebrow" }, `Faturas a serem pagas em ${phrase}`),
       el("h2", {}, money(data.totals.faturaCents)),
       el("p", { class: "muted" }, blurb("card", data.totals)),
     ]),
