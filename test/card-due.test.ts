@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { dueDatePassed, invoiceDueDate } from "../public/card-due.js";
+import { dueDatePassed, invoiceDueDate, suggestedInvoiceMonth } from "../public/card-due.js";
 
 test("vencimento da fatura usa o dia do cartão e o último dia do mês", () => {
   assert.equal(invoiceDueDate("2026-11", 2), "2026-11-02");
@@ -12,4 +12,12 @@ test("vencimento da fatura usa o dia do cartão e o último dia do mês", () => 
   assert.equal(dueDatePassed("2026-11", 3, "2026-11-03"), false);
   assert.equal(dueDatePassed("2026-12", 1, "2026-11-03"), false);
   assert.equal(dueDatePassed("2026-11", 31, "2026-12-01"), true);
+});
+
+test("fechamento sugere a fatura deste mês ou a do mês seguinte", () => {
+  assert.equal(suggestedInvoiceMonth("2026-11-05", 10), "2026-11");
+  assert.equal(suggestedInvoiceMonth("2026-11-10", 10), "2026-11");
+  assert.equal(suggestedInvoiceMonth("2026-11-20", 10), "2026-12");
+  assert.equal(suggestedInvoiceMonth("2026-12-20", 10), "2027-01");
+  assert.equal(suggestedInvoiceMonth("2026-11-20", null), "2026-11");
 });

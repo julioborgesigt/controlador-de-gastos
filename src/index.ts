@@ -547,7 +547,11 @@ app.post("/api/cards", async (c) => {
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   const due = parseDueDay(body.dueDay);
   if (!due.ok) return c.json({ error: due.error }, 400);
-  const created = await createCard(c.env.DB, writer.scope.ownerId, parsed.name, due.dueDay);
+  if (due.dueDay === null) return c.json({ error: "Informe o dia de vencimento, de 1 a 31." }, 400);
+  const closing = parseDueDay(body.closingDay);
+  if (!closing.ok) return c.json({ error: "O fechamento é um dia de 1 a 31." }, 400);
+  if (closing.dueDay === null) return c.json({ error: "Informe o dia de fechamento, de 1 a 31." }, 400);
+  const created = await createCard(c.env.DB, writer.scope.ownerId, parsed.name, due.dueDay, closing.dueDay);
   if (!created.ok) return c.json({ error: created.error }, 409);
   return c.json({ cards: await listCards(c.env.DB, writer.scope.ownerId) }, 201);
 });
@@ -560,12 +564,14 @@ app.patch("/api/cards/:id", async (c) => {
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
   const renamed = await renameCard(c.env.DB, writer.scope.ownerId, c.req.param("id"), parsed.name);
   if (!renamed.ok) return c.json({ error: renamed.error }, renamed.error === "Cartão não encontrado." ? 404 : 409);
-  if (body.dueDay !== undefined) {
-    const due = parseDueDay(body.dueDay);
-    if (!due.ok) return c.json({ error: due.error }, 400);
-    const dated = await setCardDueDay(c.env.DB, writer.scope.ownerId, c.req.param("id"), due.dueDay);
-    if (!dated.ok) return c.json({ error: dated.error }, 404);
-  }
+  const due = parseDueDay(body.dueDay);
+  if (!due.ok) return c.json({ error: due.error }, 400);
+  if (due.dueDay === null) return c.json({ error: "Informe o dia de vencimento, de 1 a 31." }, 400);
+  const closing = parseDueDay(body.closingDay);
+  if (!closing.ok) return c.json({ error: "O fechamento é um dia de 1 a 31." }, 400);
+  if (closing.dueDay === null) return c.json({ error: "Informe o dia de fechamento, de 1 a 31." }, 400);
+  const dated = await setCardDueDay(c.env.DB, writer.scope.ownerId, c.req.param("id"), due.dueDay, closing.dueDay);
+  if (!dated.ok) return c.json({ error: dated.error }, 404);
   return c.json({ cards: await listCards(c.env.DB, writer.scope.ownerId) });
 });
 
@@ -584,6 +590,89 @@ app.delete("/api/cards/:id", async (c) => {
   const removed = await deleteCard(c.env.DB, writer.scope.ownerId, c.req.param("id"));
   if (!removed.ok) return c.json({ error: removed.error }, removed.error === "Cartão não encontrado." ? 404 : 409);
   return c.json({ cards: await listCards(c.env.DB, writer.scope.ownerId) });
+});
+
+app.post("/api/card-spend", async (c) => {
+  const writer = await requireWriter(c);
+  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+  const body = await readJson(c);
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name || name.length > 120) return c.json({ error: "Dê um nome ao gasto, com até 120 caracteres." }, 400);
+  if (!isCents(body.amountCents) || body.amountCents <= 0) return c.json({ error: "Informe um valor maior que zero." }, 400);
+  const kind = body.classification;
+  if (kind !== "casa" && kind !== "imprevisto" && kind !== "planejado") {
+    return c.json({ error: "Escolha Custo de vida, Imprevisto ou Planejado." }, 400);
+  }
+  if (!isMonthId(body.invoiceMonthId) || !(await getMonth(c.env.DB, writer.scope.ownerId, body.invoiceMonthId))) {
+    return c.json({ error: "Escolha o mês da fatura." }, 400);
+  }
+  const cards = await listCards(c.env.DB, writer.scope.ownerId);
+  const card = resolveCardLabel(cards, typeof body.cardLabel === "string" ? body.cardLabel : null, true);
+  if (!card.ok) return c.json({ error: card.error }, 400);
+  const linkId = typeof body.linkExpenseId === "string" ? body.linkExpenseId.trim() : "";
+  if (linkId && kind !== "casa") return c.json({ error: "Só um custo de vida pode receber o vínculo." }, 400);
+  if (kind === "casa" && linkId) {
+    const origin = await getExpense(c.env.DB, writer.scope.ownerId, linkId);
+    if (!origin || origin.section !== "fixed") return c.json({ error: "Escolha um custo de vida para vincular." }, 400);
+    const added = await addLivingCardPartial(c.env.DB, {
+      ownerId: writer.scope.ownerId,
+      expenseId: origin.id,
+      amountCents: body.amountCents,
+      cardLabel: card.cardLabel || "",
+      installmentCount: 1,
+      invoiceMonthId: body.invoiceMonthId,
+      name,
+    });
+    if (!added.ok) return c.json({ error: added.error }, 400);
+    return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, origin.monthId), writer.scope), 201);
+  }
+  if (kind === "casa") {
+    const inserted = await insertRepeatedExpenses(c.env.DB, {
+      ownerId: writer.scope.ownerId,
+      monthIds: [body.invoiceMonthId],
+      name,
+      section: "fixed",
+      amountCents: body.amountCents,
+      payment: "pix",
+      onCard: false,
+      cardLabel: null,
+      paid: false,
+      note: "",
+      installment: null,
+      livingCard: false,
+    });
+    if (!inserted.ok) return c.json({ error: inserted.error }, 400);
+    const anchor = inserted.rows[0];
+    if (!anchor) return c.json({ error: "Mês não encontrado." }, 404);
+    const paid = await payLivingSeriesOnCard(c.env.DB, {
+      ownerId: writer.scope.ownerId,
+      expenseId: anchor.id,
+      scope: "month",
+      cardLabel: card.cardLabel || "",
+      alias: name,
+      amountCents: body.amountCents,
+      totalCount: 1,
+      startMonthId: body.invoiceMonthId,
+    });
+    if (!paid.ok) return c.json({ error: paid.error }, 400);
+    return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.invoiceMonthId), writer.scope), 201);
+  }
+  const inserted = await insertRepeatedExpenses(c.env.DB, {
+    ownerId: writer.scope.ownerId,
+    monthIds: [body.invoiceMonthId],
+    name,
+    section: "extra",
+    amountCents: body.amountCents,
+    payment: "card",
+    onCard: false,
+    cardLabel: card.cardLabel,
+    paid: false,
+    note: kind === "planejado" ? noteWithPlanned("", true) : "",
+    installment: null,
+    livingCard: false,
+  });
+  if (!inserted.ok) return c.json({ error: inserted.error }, 400);
+  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.invoiceMonthId), writer.scope), 201);
 });
 
 app.post("/api/expenses", async (c) => {

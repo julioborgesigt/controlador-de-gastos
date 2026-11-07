@@ -1,4 +1,4 @@
-import { dueDatePassed, invoiceDueDate } from "./card-due.js";
+import { dueDatePassed, invoiceDueDate, suggestedInvoiceMonth } from "./card-due.js";
 import { quoteInstallments, solveInstallmentTriple } from "./installment-link.js";
 
 function applyTheme(theme) {
@@ -1234,6 +1234,14 @@ function cardDueDay(value) {
   return day;
 }
 
+function cardClosingDay(value) {
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const day = Number(text);
+  if (!Number.isInteger(day) || day < 1 || day > 31) throw new Error("O fechamento é um dia de 1 a 31.");
+  return day;
+}
+
 async function toggleTheme() {
   const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
   applyTheme(next);
@@ -1324,7 +1332,7 @@ function ensureSetup() {
       step: 0,
       ...period,
       hasCards: "no",
-      cards: [{ name: "", dueDay: "10" }],
+      cards: [{ name: "", dueDay: "10", closingDay: "1" }],
       income: "",
       theme: document.documentElement.dataset.theme === "dark" ? "dark" : "light",
     };
@@ -1366,7 +1374,7 @@ function periodGate() {
   ];
   const notes = [
     "Escolha o primeiro e o último mês. Dá para alterar depois, no seu perfil.",
-    "Se usar, cadastre cada um com um apelido e o dia de vencimento da fatura.",
+    "Se usar, cadastre cada um com um apelido, o dia de fechamento e o dia de vencimento.",
     "Só o valor que entra todo mês, sem décimo, férias ou outros extras.",
     "Dá para trocar o modo claro ou escuro depois, no seu perfil.",
     "Se for um celular ou outro aparelho com leitor biométrico, você entra depois só com a digital, sem digitar CPF e senha.",
@@ -1380,8 +1388,9 @@ function periodGate() {
     }));
     if (draft.hasCards === "yes") {
       draft.cards.forEach((card, index) => {
+        body.push(setupInput(`card-name-${index}`, "Apelido", card.name, (value) => { card.name = value; }, "Nubank, Neon..."));
         body.push(el("div", { class: "pair" }, [
-          setupInput(`card-name-${index}`, "Apelido", card.name, (value) => { card.name = value; }, "Nubank, Neon..."),
+          setupInput(`card-close-${index}`, "Fechamento", card.closingDay, (value) => { card.closingDay = value; }, "1", "numeric"),
           setupInput(`card-due-${index}`, "Vencimento", card.dueDay, (value) => { card.dueDay = value; }, "10", "numeric"),
         ]));
       });
@@ -1394,7 +1403,7 @@ function periodGate() {
         el("button", {
           class: "secondary",
           type: "button",
-          onclick: () => { draft.cards.push({ name: "", dueDay: "10" }); render(); },
+          onclick: () => { draft.cards.push({ name: "", dueDay: "10", closingDay: "1" }); render(); },
         }, "Adicionar outro cartão"),
       ]));
     }
@@ -1454,7 +1463,9 @@ function advanceSetup(draft) {
         if (names.has(name)) throw new Error("Cada cartão precisa de um apelido diferente.");
         names.add(name);
         cardDueDay(card.dueDay);
+        cardClosingDay(card.closingDay);
         if (!String(card.dueDay || "").trim()) throw new Error("Informe o dia de vencimento, de 1 a 31.");
+        if (!String(card.closingDay || "").trim()) throw new Error("Informe o dia de fechamento, de 1 a 31.");
       }
     }
     if (draft.step === 2) {
@@ -1483,7 +1494,7 @@ async function saveSetup(draft) {
     state.data = await request("/api/period", { method: "POST", body: { startMonthId, endMonthId } });
     if (draft.hasCards === "yes") {
       for (const card of draft.cards) {
-        await request("/api/cards", { method: "POST", body: { name: card.name.trim(), dueDay: cardDueDay(card.dueDay) } });
+        await request("/api/cards", { method: "POST", body: { name: card.name.trim(), dueDay: cardDueDay(card.dueDay), closingDay: cardClosingDay(card.closingDay) } });
       }
     }
     const amountCents = parseMoney(draft.income || "0");
@@ -1723,8 +1734,9 @@ function cardsHome(data) {
     el("p", { class: "note" }, onDesktop()
       ? "Clique num cartão para ver o detalhamento. Os botões embaixo editam ou quitam o cartão. Excluir só quando ele não tiver gastos."
       : "Toque num cartão para ver o detalhamento. Dá para editar o cartão. Excluir só quando ele não tiver gastos."),
-    el("p", { class: "note" }, "Os gastos entram por Custo de vida, Imprevisto ou Planejado. Aqui a fatura só mostra o que já foi classificado."),
+    el("p", { class: "note" }, "Cada gasto no crédito pede a classificação. A data de fechamento sugere a fatura, e dá para escolher outro mês."),
     editable() ? el("div", { class: "stack-actions" }, [
+      el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto no crédito"),
       el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
     ]) : "",
   ];
@@ -1774,7 +1786,10 @@ function cardDetail(data) {
         : "Estes gastos ainda não têm um cartão cadastrado."),
     ]),
     editable() && card ? cardTools(card) : "",
-    el("p", { class: "note" }, "Esta fatura reúne custo de vida, imprevisto e planejado. Edite um gasto para mudar o valor e a tarja: ele continua no cartão e passa para a aba escolhida."),
+    editable() ? el("div", { class: "stack-actions" }, [
+      el("button", { class: "primary", type: "button", onclick: () => openCardExpense(card ? card.name : "") }, "+ Gasto no crédito"),
+    ]) : "",
+    el("p", { class: "note" }, "O gasto entra na aba da classificação escolhida. O fechamento sugere a fatura e você pode trocar o mês."),
   ];
   const groups = [
     ["Fatura prevista", visible.filter((expense) => expense.section === "card")],
@@ -1997,7 +2012,7 @@ function cardManageRow(card, amount, expenses) {
           el("strong", { class: "amount" }, money(amount)),
         ]),
       ]),
-      el("small", {}, [card.dueDay ? `Vence dia ${card.dueDay}` : "", count === 0 ? "Nenhum gasto neste mês" : `${count} ${count === 1 ? "gasto" : "gastos"}`].filter(Boolean).join(" · ")),
+      el("small", {}, [card.closingDay ? `Fecha dia ${card.closingDay}` : "", card.dueDay ? `Vence dia ${card.dueDay}` : "", count === 0 ? "Nenhum gasto neste mês" : `${count} ${count === 1 ? "gasto" : "gastos"}`].filter(Boolean).join(" · ")),
     ]),
   ]);
   if (!editable()) return front;
@@ -2056,7 +2071,7 @@ function backArrow() {
 
 function openEditCard(card) {
   state.error = "";
-  state.sheet = { mode: "card", id: card.id, name: card.name, dueDay: card.dueDay ? String(card.dueDay) : "", previousName: card.name };
+  state.sheet = { mode: "card", id: card.id, name: card.name, dueDay: card.dueDay ? String(card.dueDay) : "", closingDay: card.closingDay ? String(card.closingDay) : "", previousName: card.name };
   render();
 }
 
@@ -2806,11 +2821,7 @@ function expenseRow(expense, section, options = {}) {
   if (expense.payment !== "card" || onInvoice) meta.push(paymentLabel(expense.payment));
   if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Crédito ${expense.cardLabel}` : "Crédito");
   if (section === "fixed" && isVariableNote(expense.note)) meta.push("Variável");
-  if (section === "fixed" && isVariableNote(expense.note) && expense.payment === "card") {
-    const buckets = invoiceBuckets(expense);
-    meta.push(`Fatura de ${monthName(expense.monthId)} ${money(buckets.current)}`);
-    meta.push(`Fatura de ${monthName(buckets.nextMonthId)} ${money(buckets.following)}`);
-  }
+  if (expense.section === "fixed") meta.push(livingBalanceLine(expense));
   if (expense.installment) meta.push(expense.installment);
   const partials = expense.partials || [];
   if (section === "fixed" && !onInvoice && partials.length) meta.push(partialSummary(expense));
@@ -3017,31 +3028,130 @@ function openCardExpense(cardName = "") {
     return;
   }
   const selected = cards.some((card) => card.name === cardName) ? cardName : (cards.length === 1 ? cards[0].name : "");
+  const card = cards.find((item) => item.name === selected) || null;
+  const purchaseDate = localToday();
   state.sheet = {
-    mode: "create",
-    cardExpense: true,
-    id: "",
+    mode: "card-spend",
     name: "",
     amount: "",
-    section: "card",
-    payment: "card",
-    onCard: false,
     cardLabel: selected,
-    note: "",
-    installment: "",
-    installmentCount: "1",
-    installmentsPaid: "0",
-    amountMode: "installment",
-    paid: false,
-    source: "user",
+    expenseKind: "imprevisto",
+    purchaseDate,
+    invoiceMonthId: state.monthId,
+    invoiceTouched: false,
+    linkExpenseId: "",
   };
+  applyInvoiceSuggestion(state.sheet, card);
   state.error = "";
   render();
 }
 
 function openCreateCard() {
-  state.sheet = { mode: "card", id: "", name: "", dueDay: "", previousName: "" };
+  state.sheet = { mode: "card", id: "", name: "", dueDay: "", closingDay: "", previousName: "" };
   render();
+}
+
+function applyInvoiceSuggestion(draft, card = null) {
+  const chosen = card || (state.data?.cards || []).find((item) => item.name === draft.cardLabel) || null;
+  const suggested = suggestedInvoiceMonth(draft.purchaseDate, chosen?.closingDay ?? null);
+  draft.suggestedMonthId = suggested;
+  if (draft.invoiceTouched) return;
+  const known = (state.data?.months || []).some((month) => month.id === suggested);
+  if (known) draft.invoiceMonthId = suggested;
+}
+
+function livingBalance(expense) {
+  const partials = expense.partials || [];
+  let pix = 0;
+  let credit = 0;
+  for (const partial of partials) {
+    if (partial.payment === "card") credit += partial.amountCents;
+    else pix += partial.amountCents;
+  }
+  const charged = (expense.charges || []).reduce((sum, charge) => sum + charge.amountCents, 0);
+  if (charged > credit) credit = charged;
+  if (!partials.length && expense.paid && expense.payment !== "card") pix += expense.amountCents;
+  if (!partials.length && expense.onCard && credit === 0) credit += expense.amountCents;
+  const spent = pix + credit;
+  return {
+    forecast: expense.amountCents,
+    pix,
+    credit,
+    remaining: Math.max(0, expense.amountCents - spent),
+    over: Math.max(0, spent - expense.amountCents),
+  };
+}
+
+function cardSpendFields(draft) {
+  const card = (state.data?.cards || []).find((item) => item.name === draft.cardLabel) || null;
+  const months = state.data?.months || [];
+  const suggested = draft.suggestedMonthId || "";
+  const knownSuggestion = months.some((month) => month.id === suggested);
+  const hint = !card?.closingDay
+    ? "Este cartão ainda não tem dia de fechamento. A sugestão fica no mês da compra e você pode escolher outra fatura."
+    : !knownSuggestion
+      ? `O fechamento sugere ${monthName(suggested) || suggested}, que está fora do período.`
+      : draft.invoiceTouched
+        ? "Você escolheu a fatura manualmente."
+        : `Sugerido pelo fechamento no dia ${card.closingDay}. Dá para escolher outra fatura.`;
+  const links = (state.data?.expenses || []).filter((expense) => expense.section === "fixed" && !expense.paid);
+  const date = el("input", { id: "purchaseDate", type: "date", value: draft.purchaseDate || "" });
+  date.addEventListener("input", () => {
+    draft.purchaseDate = date.value;
+    applyInvoiceSuggestion(draft);
+    render();
+  });
+  const invoice = el("select", { id: "invoiceMonthId" }, months.map((month) => el("option", { value: month.id }, month.label)));
+  if (draft.invoiceMonthId) invoice.value = draft.invoiceMonthId;
+  invoice.addEventListener("change", () => {
+    draft.invoiceMonthId = invoice.value;
+    draft.invoiceTouched = true;
+    render();
+  });
+  const link = el("select", { id: "linkExpenseId" }, [
+    el("option", { value: "" }, "Criar um custo novo"),
+    ...links.map((expense) => el("option", { value: expense.id }, `${expense.name} · previsto ${money(expense.amountCents)}`)),
+  ]);
+  link.value = draft.linkExpenseId || "";
+  link.addEventListener("change", () => { draft.linkExpenseId = link.value; });
+  return [
+    el("h2", {}, "Gasto no crédito"),
+    field("Nome", "name", draft.name, "text"),
+    field("Valor", "amount", draft.amount, "decimal"),
+    cardSelect(draft),
+    el("div", { class: "field" }, [
+      el("label", {}, "Classificação"),
+      segmented("expenseKind", [
+        ["casa", "Custo de vida"],
+        ["imprevisto", "Imprevisto"],
+        ["planejado", "Planejado"],
+      ], draft.expenseKind || "imprevisto"),
+    ]),
+    el("p", { class: "muted" }, "O gasto vai para a aba da classificação e continua nesta fatura."),
+    el("div", { class: "field" }, [el("label", { for: "purchaseDate" }, "Data da compra"), date]),
+    el("div", { class: "field" }, [el("label", { for: "invoiceMonthId" }, "Entra na fatura de"), invoice]),
+    el("p", { class: "muted" }, hint),
+    draft.expenseKind === "casa"
+      ? el("div", { class: "field" }, [el("label", { for: "linkExpenseId" }, "Vincular a um custo previsto deste mês"), link])
+      : "",
+    draft.expenseKind === "casa"
+      ? el("p", { class: "muted" }, "Se vincular, o previsto do custo continua. Este valor entra em já gasto, no crédito, e o que falta continua previsto.")
+      : "",
+    el("div", { class: "actions" }, [
+      el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
+      el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Lançando..." : "Lançar"),
+    ]),
+  ];
+}
+
+function livingBalanceLine(expense) {
+  const balance = livingBalance(expense);
+  const spent = [];
+  if (balance.pix) spent.push(`Pix ${money(balance.pix)}`);
+  if (balance.credit) spent.push(`Crédito ${money(balance.credit)}`);
+  const spentLabel = spent.length ? spent.join(" · ") : money(0);
+  const rest = balance.over > 0 ? `Passou ${money(balance.over)}` : `Ainda previsto ${money(balance.remaining)}`;
+  return `Previsto ${money(balance.forecast)} · Já gasto ${spentLabel} · ${rest}`;
 }
 
 function cardPartialCents(expense) {
@@ -3985,11 +4095,15 @@ function sheet() {
       ]),
       el("button", { class: "danger", type: "button", onclick: () => openDeleteExpense(draft) }, "Excluir gasto"),
     );
+  } else if (draft.mode === "card-spend") {
+    panel.append(...cardSpendFields(draft).filter(Boolean));
   } else if (draft.mode === "card") {
     panel.append(
       el("h2", {}, draft.id ? "Editar cartão" : "Novo cartão"),
       field("Apelido", "name", draft.name, "text", "Nubank, Neon ou outro"),
+      field("Dia de fechamento", "closingDay", draft.closingDay || "", "numeric", "1"),
       field("Dia de vencimento", "dueDay", draft.dueDay || "", "numeric", "10"),
+      el("p", { class: "muted" }, "O fechamento sugere em qual fatura o gasto entra. O vencimento é o dia de pagar a fatura."),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
         el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : "Salvar"),
@@ -4079,7 +4193,7 @@ function sheet() {
 
 function cardSelect(draft) {
   const cards = state.data?.cards ?? [];
-  const required = draft.fromCard || draft.mode === "card-pay" || draft.mode === "partial"
+  const required = draft.fromCard || draft.mode === "card-spend" || draft.mode === "card-pay" || draft.mode === "partial"
     || (draft.section === "extra" && (draft.payment === "card" || draft.cardExpense))
     || (draft.section === "fixed" && (draft.onCard || draft.payment === "card"))
     || (draft.section === "card" && (draft.cardExpense || draft.mode === "create"));
@@ -4092,6 +4206,12 @@ function cardSelect(draft) {
   select.value = current;
   select.addEventListener("change", () => {
     state.sheet.cardLabel = select.value;
+    if (state.sheet.mode === "card-spend") {
+      state.sheet.invoiceTouched = false;
+      applyInvoiceSuggestion(state.sheet);
+      render();
+      return;
+    }
     refreshCardPayPreview();
   });
   return el("div", { class: "field" }, [el("label", { for: "cardLabel" }, "Cartão"), select]);
@@ -4433,13 +4553,48 @@ async function saveSheet(event) {
       });
       rememberMonth(state.data);
       state.notice = `Fatura de ${draft.cardName} parcelada em ${count} vezes.`;
+    } else if (draft.mode === "card-spend") {
+      if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
+      const amountCents = parseMoney(draft.amount || "");
+      if (amountCents === null || amountCents <= 0) throw new Error("Informe um valor maior que zero.");
+      if (!draft.cardLabel) throw new Error("Escolha o cartão.");
+      if (!["casa", "imprevisto", "planejado"].includes(draft.expenseKind)) throw new Error("Escolha a classificação.");
+      if (!draft.invoiceMonthId) throw new Error("Escolha o mês da fatura.");
+      if (!(state.data?.months || []).some((month) => month.id === draft.invoiceMonthId)) {
+        throw new Error("Essa fatura está fora do período. Aumente o período ou escolha outro mês.");
+      }
+      setWorking(true, "Lançando...");
+      state.data = await request("/api/card-spend", {
+        method: "POST",
+        body: {
+          name: draft.name.trim(),
+          amountCents,
+          cardLabel: draft.cardLabel,
+          classification: draft.expenseKind,
+          invoiceMonthId: draft.invoiceMonthId,
+          linkExpenseId: draft.expenseKind === "casa" ? draft.linkExpenseId : "",
+        },
+      });
+      if (state.data?.month?.id) {
+        state.monthId = state.data.month.id;
+        sessionStorage.setItem("monthId", state.monthId);
+      }
+      rememberMonth(state.data);
+      const invoice = monthName(draft.invoiceMonthId);
+      const place = draft.expenseKind === "casa" ? "Custo de vida" : draft.expenseKind === "planejado" ? "Planejado" : "Imprevisto";
+      state.notice = draft.expenseKind === "casa" && draft.linkExpenseId
+        ? "Vinculei ao custo de vida. O previsto continua e o valor já gasto foi atualizado."
+        : `Lancei em ${place}, na fatura de ${invoice}.`;
     } else if (draft.mode === "card") {
       if (!draft.name.trim()) throw new Error("Dê um apelido ao cartão.");
       const dueDay = cardDueDay(draft.dueDay);
+      const closingDay = cardClosingDay(draft.closingDay);
+      if (dueDay === null) throw new Error("Informe o dia de vencimento, de 1 a 31.");
+      if (closingDay === null) throw new Error("Informe o dia de fechamento, de 1 a 31.");
       setWorking(true, "Salvando...");
       const data = await request(draft.id ? `/api/cards/${draft.id}` : "/api/cards", {
         method: draft.id ? "PATCH" : "POST",
-        body: { name: draft.name, dueDay },
+        body: { name: draft.name, dueDay, closingDay },
       });
       const saved = (data.cards || []).find((card) => card.id === draft.id);
       const nextName = saved?.name || draft.name.trim();
