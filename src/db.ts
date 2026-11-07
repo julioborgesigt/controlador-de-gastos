@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, PartialPayment, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, coercePayment, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteForTrack, noteWithOrigin, noteWithSeries, noteWithVisibleText, isVariableCost, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope, type ExpenseTrack } from "./domain.ts";
+import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, coercePayment, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteForTrack, noteWithChargeContext, noteWithOrigin, noteWithSeries, noteWithVisibleText, isVariableCost, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope, type ExpenseTrack } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -942,6 +942,7 @@ export async function addLivingCardPartial(
     installmentCount: number;
     invoiceMonthId: string;
     name: string;
+    purchaseDate?: string | null;
   },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const expense = await getExpense(db, input.ownerId, input.expenseId);
@@ -982,7 +983,10 @@ export async function addLivingCardPartial(
     section: "card",
     payment: "card",
     cardLabel: input.cardLabel,
-    note: noteWithSeries(`origem:${expense.id}\nparcial:${partialId}`, seriesIdFromNote(expense.note)),
+    note: noteWithSeries(noteWithChargeContext(`origem:${expense.id}\nparcial:${partialId}`, {
+      purchaseDate: input.purchaseDate,
+      referenceMonthId: expense.monthId,
+    }), seriesIdFromNote(expense.note)),
     totalCount: count,
     paidCount: 0,
     amountCents: input.amountCents,
@@ -1882,6 +1886,7 @@ export async function payRecurringOnCard(
     totalCount: number;
     startMonthId?: string;
     mode?: "installment" | "total";
+    purchaseDate?: string | null;
   },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const expense = await getExpense(db, input.ownerId, input.expenseId);
@@ -1911,7 +1916,10 @@ export async function payRecurringOnCard(
     section: "card",
     payment: "card",
     cardLabel: input.cardLabel,
-    note: noteWithSeries(recurringOriginNote(input.expenseId), seriesIdFromNote(expense.note)),
+    note: noteWithSeries(noteWithChargeContext(recurringOriginNote(input.expenseId), {
+      purchaseDate: input.purchaseDate,
+      referenceMonthId: expense.monthId,
+    }), seriesIdFromNote(expense.note)),
     totalCount: input.totalCount,
     paidCount: 0,
     amountCents: input.amountCents,
@@ -1944,6 +1952,7 @@ async function chargeLivingRowsOnCard(
     alias: string;
     amountCents: number;
     startMonthId: string;
+    purchaseDate?: string | null;
   },
 ): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
   const alias = input.alias.trim().replace(/\s+/g, " ").slice(0, 80);
@@ -1969,7 +1978,10 @@ async function chargeLivingRowsOnCard(
       name: own ? row.name : alias,
       monthId: part.monthId,
       amountCents: part.amountCents,
-      note: noteWithSeries(recurringOriginNote(row.id), seriesIdFromNote(row.note)),
+      note: noteWithSeries(noteWithChargeContext(recurringOriginNote(row.id), {
+        purchaseDate: row.id === input.anchorId ? input.purchaseDate : "",
+        referenceMonthId: row.monthId,
+      }), seriesIdFromNote(row.note)),
     });
   }
   if (!charges.length) return { ok: false, error: "Não há valor para lançar no cartão." };
@@ -2012,6 +2024,7 @@ export async function payLivingSeriesOnCard(
     totalCount: number;
     startMonthId?: string;
     mode?: "installment" | "total";
+    purchaseDate?: string | null;
   },
 ): Promise<{ ok: true; count: number } | { ok: false; error: string }> {
   const scope = input.totalCount > 1 ? "month" : input.scope;
@@ -2031,6 +2044,7 @@ export async function payLivingSeriesOnCard(
       alias: input.alias,
       amountCents: input.amountCents,
       startMonthId: input.startMonthId || rows.find((row) => row.id === input.expenseId)?.monthId || "",
+      purchaseDate: input.purchaseDate,
     });
   }
   let count = 0;
@@ -2049,6 +2063,7 @@ export async function payLivingSeriesOnCard(
       totalCount: own ? 1 : input.totalCount,
       startMonthId: own ? row.monthId : input.startMonthId || row.monthId,
       mode: own ? "installment" : input.mode,
+      purchaseDate: own ? "" : input.purchaseDate,
     });
     if (!paid.ok) return paid;
     count += 1;

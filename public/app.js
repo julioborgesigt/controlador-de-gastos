@@ -2850,7 +2850,7 @@ function expenseRow(expense, section, options = {}) {
   const front = el("article", { class: `item${tone}` }, [
     el("div", { class: "item-copy" }, [
       el("button", { type: "button", class: "item-main", onclick: () => openExpenseInfo(expense, section) }, [
-        el("strong", {}, expense.name),
+        el("strong", {}, section === "card" ? cardChargeTitle(expense) : expense.name),
         el("small", {}, meta.filter(Boolean).join(" · ")),
       ]),
       onInvoice && section === "card" ? el("span", { class: "badge" }, "Já contabilizado, não soma de novo") : "",
@@ -3057,7 +3057,11 @@ function applyInvoiceSuggestion(draft, card = null) {
   draft.suggestedMonthId = suggested;
   if (draft.invoiceTouched) return;
   const known = (state.data?.months || []).some((month) => month.id === suggested);
-  if (known) draft.invoiceMonthId = suggested;
+  if (!known || draft.invoiceMonthId === suggested) return;
+  draft.invoiceMonthId = suggested;
+  draft.linkExpenseId = "";
+  draft.linkChoices = null;
+  draft.linkMonthId = "";
 }
 
 function livingBalance(expense) {
@@ -3082,6 +3086,44 @@ function livingBalance(expense) {
   };
 }
 
+function livingCostsForInvoice(monthId) {
+  return (state.data?.expenses || []).filter((expense) => expense.section === "fixed" && expense.monthId === monthId && !expense.paid && !expense.onCard);
+}
+
+function rememberLinkChoices(draft, monthId, expenses) {
+  draft.linkMonthId = monthId;
+  draft.linkChoices = (expenses || []).filter((expense) => expense.section === "fixed" && !expense.paid && !expense.onCard);
+  draft.linkLoading = "";
+  draft.linkError = "";
+  if (draft.linkExpenseId && !draft.linkChoices.some((expense) => expense.id === draft.linkExpenseId)) draft.linkExpenseId = "";
+}
+
+function linkChoicesFor(draft) {
+  const monthId = draft.invoiceMonthId;
+  if (!monthId || draft.expenseKind !== "casa") return [];
+  if (monthId === state.monthId) {
+    draft.linkError = "";
+    return livingCostsForInvoice(monthId);
+  }
+  if (draft.linkMonthId === monthId && Array.isArray(draft.linkChoices)) return draft.linkChoices;
+  if (draft.linkLoading !== monthId) {
+    draft.linkLoading = monthId;
+    request(`/api/months/${monthId}`).then((data) => {
+      if (state.sheet?.mode !== "card-spend" || state.sheet.invoiceMonthId !== monthId) return;
+      rememberLinkChoices(state.sheet, monthId, data.expenses || []);
+      render();
+    }).catch((error) => {
+      if (state.sheet?.mode !== "card-spend" || state.sheet.invoiceMonthId !== monthId) return;
+      state.sheet.linkLoading = "";
+      state.sheet.linkMonthId = monthId;
+      state.sheet.linkChoices = [];
+      state.sheet.linkError = messageOf(error);
+      render();
+    });
+  }
+  return [];
+}
+
 function cardSpendFields(draft) {
   const card = (state.data?.cards || []).find((item) => item.name === draft.cardLabel) || null;
   const months = state.data?.months || [];
@@ -3094,7 +3136,9 @@ function cardSpendFields(draft) {
       : draft.invoiceTouched
         ? "Você escolheu a fatura manualmente."
         : `Sugerido pelo fechamento no dia ${card.closingDay}. Dá para escolher outra fatura.`;
-  const links = (state.data?.expenses || []).filter((expense) => expense.section === "fixed" && !expense.paid);
+  const invoiceLabel = monthName(draft.invoiceMonthId) || "esta fatura";
+  const links = linkChoicesFor(draft);
+  const linkWaiting = draft.expenseKind === "casa" && draft.linkLoading === draft.invoiceMonthId;
   const date = el("input", { id: "purchaseDate", type: "date", value: draft.purchaseDate || "" });
   date.addEventListener("input", () => {
     draft.purchaseDate = date.value;
@@ -3104,6 +3148,11 @@ function cardSpendFields(draft) {
   const invoice = el("select", { id: "invoiceMonthId" }, months.map((month) => el("option", { value: month.id }, month.label)));
   if (draft.invoiceMonthId) invoice.value = draft.invoiceMonthId;
   invoice.addEventListener("change", () => {
+    if (draft.invoiceMonthId !== invoice.value) {
+      draft.linkExpenseId = "";
+      draft.linkChoices = null;
+      draft.linkMonthId = "";
+    }
     draft.invoiceMonthId = invoice.value;
     draft.invoiceTouched = true;
     render();
@@ -3132,10 +3181,16 @@ function cardSpendFields(draft) {
     el("div", { class: "field" }, [el("label", { for: "invoiceMonthId" }, "Entra na fatura de"), invoice]),
     el("p", { class: "muted" }, hint),
     draft.expenseKind === "casa"
-      ? el("div", { class: "field" }, [el("label", { for: "linkExpenseId" }, "Vincular a um custo previsto deste mês"), link])
+      ? el("div", { class: "field" }, [el("label", { for: "linkExpenseId" }, `Vincular a um custo previsto de ${invoiceLabel}`), link])
       : "",
     draft.expenseKind === "casa"
-      ? el("p", { class: "muted" }, "Se vincular, o previsto do custo continua. Este valor entra em já gasto, no crédito, e o que falta continua previsto.")
+      ? el("p", { class: "muted" }, linkWaiting
+        ? `Buscando os custos de vida de ${invoiceLabel}.`
+        : draft.linkError
+          ? draft.linkError
+          : links.length
+            ? "A lista é da fatura escolhida. Se vincular, o previsto continua e este valor entra em já gasto, no crédito."
+            : `Não há custo de vida em aberto em ${invoiceLabel}. O gasto cria um custo novo.`)
       : "",
     el("div", { class: "actions" }, [
       el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
@@ -3512,8 +3567,21 @@ function isVariableNote(note) {
   return String(note || "").split("\n").some((item) => item.trim() === "tipo:variavel");
 }
 
+function cardChargeTitle(expense) {
+  const name = String(expense.name || "").trim();
+  const note = String(expense.note || "");
+  const purchase = note.split("\n").map((item) => item.trim()).find((item) => item.startsWith("compra:"));
+  const date = purchase ? purchase.slice("compra:".length).trim() : "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return `${date.slice(8, 10)}/${date.slice(5, 7)} ${name}`;
+  const reference = note.split("\n").map((item) => item.trim()).find((item) => item.startsWith("ref:"));
+  const monthId = reference ? reference.slice("ref:".length).trim() : expense.monthId;
+  const names = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+  const label = /^\d{4}-\d{2}$/.test(String(monthId || "")) ? names[Number(String(monthId).slice(5, 7)) - 1] : "";
+  return label ? `${name} ${label}` : name;
+}
+
 function visibleNote(note) {
-  return String(note || "").split("\n").filter((item) => item && !item.startsWith("origem:") && !item.startsWith("parcial:") && !item.startsWith("serie:") && !item.startsWith("tipo:") && !item.startsWith("fatura:")).join("\n");
+  return String(note || "").split("\n").filter((item) => item && !item.startsWith("origem:") && !item.startsWith("parcial:") && !item.startsWith("serie:") && !item.startsWith("tipo:") && !item.startsWith("fatura:") && !item.startsWith("compra:") && !item.startsWith("ref:")).join("\n");
 }
 
 function composeNote(originId, note, partialId, seriesId, variable, planned, nextInvoice) {
@@ -4572,6 +4640,7 @@ async function saveSheet(event) {
           cardLabel: draft.cardLabel,
           classification: draft.expenseKind,
           invoiceMonthId: draft.invoiceMonthId,
+          purchaseDate: draft.purchaseDate,
           linkExpenseId: draft.expenseKind === "casa" ? draft.linkExpenseId : "",
         },
       });

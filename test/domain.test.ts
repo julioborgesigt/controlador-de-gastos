@@ -24,6 +24,8 @@ import {
   noteForTrack,
   noteWithOrigin,
   noteWithPlanned,
+  cardChargeTitle,
+  noteWithChargeContext,
   noteWithVariable,
   nextMonthId,
   invoiceShiftFromNote,
@@ -465,6 +467,13 @@ test("a tarja do cartão distingue imprevisto, planejado e custo de vida", () =>
   assert.equal(noteForTrack("origem:abc\ntipo:planejado\nviagem", "imprevisto"), "viagem");
   assert.equal(noteForTrack("viagem", "planejado"), "tipo:planejado\nviagem");
   assert.equal(noteWithOrigin("serie:s1", "abc"), "origem:abc\nserie:s1");
+});
+
+test("a fatura mostra a data da compra ou o mês de referência", () => {
+  assert.equal(cardChargeTitle("Feira", "compra:2026-11-01"), "01/11 Feira");
+  assert.equal(cardChargeTitle("Feira", "ref:2026-11"), "Feira novembro");
+  assert.equal(cardChargeTitle("Feira", noteWithChargeContext("origem:abc", { purchaseDate: "2026-12-03", referenceMonthId: "2026-11" })), "03/12 Feira");
+  assert.equal(visibleExpenseNote("compra:2026-11-01\nref:2026-11\nfeira"), "feira");
 });
 
 test("custo variável no crédito escolhe a fatura deste mês ou a do mês seguinte", () => {

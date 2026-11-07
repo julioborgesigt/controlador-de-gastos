@@ -350,7 +350,37 @@ export function editTargets<T extends ExpenseDeleteRef>(
     .sort((left, right) => left.monthId.localeCompare(right.monthId) || left.id.localeCompare(right.id));
 }
 
-const NOTE_MARKERS = ["serie:", "origem:", "parcial:", "tipo:", "fatura:", "quitado-cartao:", "parcelamento:"];
+const NOTE_MARKERS = ["serie:", "origem:", "parcial:", "tipo:", "fatura:", "compra:", "ref:", "quitado-cartao:", "parcelamento:"];
+
+const REFERENCE_MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+
+function noteMarker(note: string | null | undefined, prefix: string): string {
+  const line = String(note || "").split("\n").map((item) => item.trim()).find((item) => item.startsWith(prefix));
+  return line ? line.slice(prefix.length).trim() : "";
+}
+
+export function noteWithChargeContext(
+  note: string | null | undefined,
+  input: { purchaseDate?: string | null; referenceMonthId?: string | null },
+): string {
+  const lines = String(note || "")
+    .split("\n")
+    .map((item) => item.trim())
+    .filter((item) => item && !item.startsWith("compra:") && !item.startsWith("ref:"));
+  if (input.purchaseDate && /^\d{4}-\d{2}-\d{2}$/.test(input.purchaseDate)) lines.push(`compra:${input.purchaseDate}`);
+  if (input.referenceMonthId && /^\d{4}-\d{2}$/.test(input.referenceMonthId)) lines.push(`ref:${input.referenceMonthId}`);
+  return lines.join("\n");
+}
+
+export function cardChargeTitle(name: string, note: string | null | undefined, monthId = ""): string {
+  const clean = name.trim();
+  const purchase = noteMarker(note, "compra:");
+  if (/^\d{4}-\d{2}-\d{2}$/.test(purchase)) return `${purchase.slice(8, 10)}/${purchase.slice(5, 7)} ${clean}`;
+  const ref = noteMarker(note, "ref:") || monthId;
+  const label = REFERENCE_MONTHS[Number(ref.slice(5, 7)) - 1];
+  if (/^\d{4}-\d{2}$/.test(ref) && label) return `${clean} ${label}`;
+  return clean;
+}
 
 export function isVariableCost(note: string | null | undefined): boolean {
   return String(note || "").split("\n").some((line) => line.trim() === "tipo:variavel");
