@@ -350,7 +350,7 @@ export function editTargets<T extends ExpenseDeleteRef>(
     .sort((left, right) => left.monthId.localeCompare(right.monthId) || left.id.localeCompare(right.id));
 }
 
-const NOTE_MARKERS = ["serie:", "origem:", "parcial:", "tipo:", "quitado-cartao:", "parcelamento:"];
+const NOTE_MARKERS = ["serie:", "origem:", "parcial:", "tipo:", "fatura:", "quitado-cartao:", "parcelamento:"];
 
 export function isVariableCost(note: string | null | undefined): boolean {
   return String(note || "").split("\n").some((line) => line.trim() === "tipo:variavel");
@@ -475,6 +475,17 @@ export function previousMonthId(monthId: string): string | null {
   if (!match) return null;
   const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 2, 1));
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+export function nextMonthId(monthId: string): string | null {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthId);
+  if (!match) return null;
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]), 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+export function invoiceShiftFromNote(note: string | null | undefined): "mes" | "seguinte" {
+  return String(note || "").split("\n").some((line) => line.trim() === "fatura:seguinte") ? "seguinte" : "mes";
 }
 
 const MONTH_LABELS = [

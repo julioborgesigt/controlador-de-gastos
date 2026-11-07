@@ -25,6 +25,9 @@ import {
   noteWithOrigin,
   noteWithPlanned,
   noteWithVariable,
+  nextMonthId,
+  invoiceShiftFromNote,
+  visibleExpenseNote,
   normalizeExpense,
   expenseCountForCard,
   listMonthRange,
@@ -462,6 +465,14 @@ test("a tarja do cartão distingue imprevisto, planejado e custo de vida", () =>
   assert.equal(noteForTrack("origem:abc\ntipo:planejado\nviagem", "imprevisto"), "viagem");
   assert.equal(noteForTrack("viagem", "planejado"), "tipo:planejado\nviagem");
   assert.equal(noteWithOrigin("serie:s1", "abc"), "origem:abc\nserie:s1");
+});
+
+test("custo variável no crédito escolhe a fatura deste mês ou a do mês seguinte", () => {
+  assert.equal(nextMonthId("2026-11"), "2026-12");
+  assert.equal(nextMonthId("2026-12"), "2027-01");
+  assert.equal(invoiceShiftFromNote("tipo:variavel\nfatura:seguinte"), "seguinte");
+  assert.equal(invoiceShiftFromNote("tipo:variavel"), "mes");
+  assert.equal(visibleExpenseNote("fatura:seguinte\nfeira"), "feira");
 });
 
 test("planejado fica marcado sem se misturar com imprevisto", () => {

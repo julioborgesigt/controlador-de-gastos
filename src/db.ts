@@ -1064,18 +1064,42 @@ async function clearOrphanCardPartials(db: D1Database, ownerId: string): Promise
   }
 }
 
+async function livingInvoiceCharges(
+  db: D1Database,
+  ownerId: string,
+  expenseIds: string[],
+): Promise<Map<string, Array<{ monthId: string; amountCents: number }>>> {
+  const grouped = new Map<string, Array<{ monthId: string; amountCents: number }>>();
+  if (!expenseIds.length) return grouped;
+  const wanted = new Set(expenseIds);
+  const result = await db
+    .prepare("SELECT month_id, amount_cents, note FROM expenses WHERE owner_id = ? AND section = 'card' AND note LIKE '%origem:%'")
+    .bind(ownerId)
+    .all<{ month_id: string; amount_cents: number; note: string | null }>();
+  for (const row of result.results ?? []) {
+    const origin = originExpenseId(row.note);
+    if (!wanted.has(origin)) continue;
+    const list = grouped.get(origin) ?? [];
+    list.push({ monthId: row.month_id, amountCents: row.amount_cents });
+    grouped.set(origin, list);
+  }
+  return grouped;
+}
+
 export async function monthPayload(db: D1Database, ownerId: string, monthId: string) {
   const month = await getMonth(db, ownerId, monthId);
   if (!month) return null;
   await clearOrphanCardPartials(db, ownerId);
   const expenses = await attachPartials(db, ownerId, await listExpenses(db, ownerId, monthId));
+  const charges = await livingInvoiceCharges(db, ownerId, expenses.filter((expense) => expense.section === "fixed").map((expense) => expense.id));
+  const expensesWithCharges = expenses.map((expense) => ({ ...expense, charges: charges.get(expense.id) ?? [] }));
   const cards = await listCards(db, ownerId);
   const incomeExtras = await listIncomeExtras(db, ownerId);
   const extraIncomeCents = incomeExtras
     .filter((extra) => extra.monthId === monthId)
     .reduce((sum, extra) => sum + extra.amountCents, 0);
   const incomeCents = month.income_cents + extraIncomeCents;
-  const totals = computeTotals(expenses, incomeCents);
+  const totals = computeTotals(expensesWithCharges, incomeCents);
   const settled = monthCanSettle(totals);
   if (settled !== (month.settled === 1)) {
     await db.prepare("UPDATE months SET settled = ? WHERE owner_id = ? AND id = ?").bind(settled ? 1 : 0, ownerId, monthId).run();
@@ -1094,7 +1118,7 @@ export async function monthPayload(db: D1Database, ownerId: string, monthId: str
       sortOrder: month.sort_order,
     },
     months: months.map((item) => ({ ...item, settled: item.id === monthId ? settled : item.settled })),
-    expenses,
+    expenses: expensesWithCharges,
     cards,
     incomeExtras,
     baseIncomeCents: baseIncome === null ? null : Number(baseIncome),
