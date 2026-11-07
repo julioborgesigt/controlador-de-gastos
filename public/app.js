@@ -2850,7 +2850,7 @@ function expenseRow(expense, section, options = {}) {
   const front = el("article", { class: `item${tone}` }, [
     el("div", { class: "item-copy" }, [
       el("button", { type: "button", class: "item-main", onclick: () => openExpenseInfo(expense, section) }, [
-        el("strong", {}, expense.name),
+        el("strong", {}, section === "card" ? cardChargeTitle(expense) : expense.name),
         el("small", {}, meta.filter(Boolean).join(" · ")),
       ]),
       onInvoice && section === "card" ? el("span", { class: "badge" }, "Já contabilizado, não soma de novo") : "",
@@ -3567,8 +3567,21 @@ function isVariableNote(note) {
   return String(note || "").split("\n").some((item) => item.trim() === "tipo:variavel");
 }
 
+function cardChargeTitle(expense) {
+  const name = String(expense.name || "").trim();
+  const note = String(expense.note || "");
+  const purchase = note.split("\n").map((item) => item.trim()).find((item) => item.startsWith("compra:"));
+  const date = purchase ? purchase.slice("compra:".length).trim() : "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return `${date.slice(8, 10)}/${date.slice(5, 7)} ${name}`;
+  const reference = note.split("\n").map((item) => item.trim()).find((item) => item.startsWith("ref:"));
+  const monthId = reference ? reference.slice("ref:".length).trim() : expense.monthId;
+  const names = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
+  const label = /^\d{4}-\d{2}$/.test(String(monthId || "")) ? names[Number(String(monthId).slice(5, 7)) - 1] : "";
+  return label ? `${name} ${label}` : name;
+}
+
 function visibleNote(note) {
-  return String(note || "").split("\n").filter((item) => item && !item.startsWith("origem:") && !item.startsWith("parcial:") && !item.startsWith("serie:") && !item.startsWith("tipo:") && !item.startsWith("fatura:")).join("\n");
+  return String(note || "").split("\n").filter((item) => item && !item.startsWith("origem:") && !item.startsWith("parcial:") && !item.startsWith("serie:") && !item.startsWith("tipo:") && !item.startsWith("fatura:") && !item.startsWith("compra:") && !item.startsWith("ref:")).join("\n");
 }
 
 function composeNote(originId, note, partialId, seriesId, variable, planned, nextInvoice) {
@@ -4627,6 +4640,7 @@ async function saveSheet(event) {
           cardLabel: draft.cardLabel,
           classification: draft.expenseKind,
           invoiceMonthId: draft.invoiceMonthId,
+          purchaseDate: draft.purchaseDate,
           linkExpenseId: draft.expenseKind === "casa" ? draft.linkExpenseId : "",
         },
       });

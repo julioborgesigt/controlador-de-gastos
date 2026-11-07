@@ -23,6 +23,7 @@ import {
   isPlannedCost,
   isVariableCost,
   livingCardChargeKind,
+  noteWithChargeContext,
   noteWithPlanned,
   noteWithSeries,
   noteWithVariable,
@@ -609,6 +610,7 @@ app.post("/api/card-spend", async (c) => {
   const cards = await listCards(c.env.DB, writer.scope.ownerId);
   const card = resolveCardLabel(cards, typeof body.cardLabel === "string" ? body.cardLabel : null, true);
   if (!card.ok) return c.json({ error: card.error }, 400);
+  const purchaseDate = typeof body.purchaseDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.purchaseDate) ? body.purchaseDate : "";
   const linkId = typeof body.linkExpenseId === "string" ? body.linkExpenseId.trim() : "";
   if (linkId && kind !== "casa") return c.json({ error: "Só um custo de vida pode receber o vínculo." }, 400);
   if (kind === "casa" && linkId) {
@@ -622,6 +624,7 @@ app.post("/api/card-spend", async (c) => {
       installmentCount: 1,
       invoiceMonthId: body.invoiceMonthId,
       name,
+      purchaseDate,
     });
     if (!added.ok) return c.json({ error: added.error }, 400);
     return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, origin.monthId), writer.scope), 201);
@@ -653,6 +656,7 @@ app.post("/api/card-spend", async (c) => {
       amountCents: body.amountCents,
       totalCount: 1,
       startMonthId: body.invoiceMonthId,
+      purchaseDate,
     });
     if (!paid.ok) return c.json({ error: paid.error }, 400);
     return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.invoiceMonthId), writer.scope), 201);
@@ -667,7 +671,10 @@ app.post("/api/card-spend", async (c) => {
     onCard: false,
     cardLabel: card.cardLabel,
     paid: false,
-    note: kind === "planejado" ? noteWithPlanned("", true) : "",
+    note: noteWithChargeContext(kind === "planejado" ? noteWithPlanned("", true) : "", {
+      purchaseDate,
+      referenceMonthId: purchaseDate.slice(0, 7),
+    }),
     installment: null,
     livingCard: false,
   });
