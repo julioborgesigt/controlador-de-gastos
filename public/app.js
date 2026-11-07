@@ -54,7 +54,7 @@ const views = [
   ["cartoes", "Cartões de crédito"],
   ["avista", "À vista"],
   ["casa", "Custo de vida"],
-  ["extras", "Imprevisto / Planejado"],
+  ["extras", "Outros gastos"],
   ["receita", "Receita mensal"],
 ];
 
@@ -966,7 +966,7 @@ function summary(data) {
       ? `${money(totals.invoiceCents)} previstos + ${money(totals.extrasCardCents)} em imprevistos`
       : "Nubank, Neon e linhas da fatura"),
     livingJump(totals),
-    jump("extras", "Imprevisto / Planejado", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
+    jump("extras", "Outros gastos", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
     editable() && totals.launchedRemainingCents > 0
       ? el("button", { class: "primary", type: "button", onclick: () => askConfirm("settle") }, "Quitar o que falta")
       : editable() && month.settled
@@ -1528,7 +1528,7 @@ function setupGuide() {
       : "A fatura de cada cartão. O gasto no crédito nasce aqui e segue para a aba da classificação."],
     ["À vista", "O pagamento no Pix nasce aqui, ligado a um custo de vida ou criando um imprevisto ou planejado."],
     ["Custo de vida", "Mostra o previsto, o que já foi pago no cartão e no Pix, e o que ainda falta em cada um. O pagamento é feito em Cartões de crédito ou À vista."],
-    ["Imprevisto / Planejado", "Consulta do que já foi lançado. O gasto novo entra por Cartões de crédito ou À vista."],
+    ["Outros gastos", "Consulta dos imprevistos e planejados. O gasto novo entra por Cartões de crédito ou À vista."],
     ["Receita mensal", "A renda base e os extras do mês, como décimo terceiro ou um valor avulso."],
   ];
   return el("main", { class: "screen auth" }, [
@@ -1724,15 +1724,78 @@ function jump(view, title, amount, detail) {
   ]);
 }
 
+function cashKind(expense) {
+  if (expense.section === "fixed") return "Custo de vida";
+  return isPlannedNote(expense.note) ? "Planejado" : "Imprevisto";
+}
+
+function cashHistoryEntries(data) {
+  const entries = [];
+  for (const expense of data.expenses || []) {
+    const pixPartials = (expense.partials || []).filter((partial) => partial.payment !== "card");
+    if (pixPartials.length) {
+      for (const partial of pixPartials) {
+        entries.push({
+          id: partial.id,
+          at: partial.createdAt || "",
+          name: expense.name,
+          kind: cashKind(expense),
+          amountCents: partial.amountCents,
+        });
+      }
+      continue;
+    }
+    const wholePix = expense.amountCents > 0 && expense.payment !== "card" && (
+      (expense.section === "extra" && expense.paid)
+      || (expense.section === "fixed" && expense.paid)
+    );
+    if (!wholePix) continue;
+    entries.push({
+      id: expense.id,
+      at: expense.createdAt || "",
+      name: expense.name,
+      kind: cashKind(expense),
+      amountCents: expense.amountCents,
+    });
+  }
+  entries.sort((left, right) => String(right.at).localeCompare(String(left.at)) || right.id.localeCompare(left.id));
+  return entries;
+}
+
+function historyWhen(iso) {
+  if (!iso) return "";
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("pt-BR", {
+    timeZone: "America/Sao_Paulo",
+    day: "2-digit",
+    month: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 function cashHome(data) {
+  const entries = cashHistoryEntries(data);
+  const total = entries.reduce((sum, entry) => sum + entry.amountCents, 0);
   return el("section", {}, [
     el("div", { class: "section-head" }, [
       el("p", { class: "eyebrow" }, data.month.label),
-      el("h2", {}, "À vista"),
-      el("p", { class: "muted" }, "Pagamento no Pix, ligado a um custo de vida ou lançado como imprevisto ou planejado."),
+      el("h2", {}, money(total)),
+      el("p", { class: "muted" }, "Pagamentos à vista deste mês, no Pix."),
     ]),
     el("p", { class: "note" }, "O custo de vida precisa já estar previsto. Imprevisto e planejado nascem aqui, pagos no Pix."),
     editable() ? el("button", { class: "primary add-top", type: "button", onclick: openCashSpend }, "Lançar à vista") : "",
+    el("h2", { class: "subhead" }, "Histórico"),
+    entries.length
+      ? el("div", { class: "list" }, entries.map((entry) => el("article", { class: "item" }, [
+        el("div", { class: "item-copy" }, [
+          el("strong", {}, entry.name),
+          el("small", {}, [historyWhen(entry.at), entry.kind, "Pix"].filter(Boolean).join(" · ")),
+        ]),
+        el("span", { class: "amount" }, money(entry.amountCents)),
+      ])))
+      : el("p", { class: "muted" }, "Nenhum lançamento à vista neste mês."),
   ]);
 }
 
@@ -2377,8 +2440,8 @@ function sectionList(data, section) {
       : totals.extrasCardCents + totals.extrasPixCents;
   const children = [
     el("div", { class: "section-head" }, [
-      el("p", { class: "eyebrow" }, section === "fixed" ? "Custo de vida" : data.month.label),
-      section === "fixed" ? el("p", { class: "muted" }, data.month.label) : "",
+      el("p", { class: "eyebrow" }, section === "fixed" ? "Custo de vida" : section === "extra" ? "Outros gastos" : data.month.label),
+      section === "fixed" || section === "extra" ? el("p", { class: "muted" }, data.month.label) : "",
       section === "fixed" ? "" : el("h2", {}, money(total)),
       section === "fixed" ? costSplit(totals) : el("p", { class: "muted" }, blurb(section, totals)),
     ]),
