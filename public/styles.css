@@ -517,6 +517,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .item-main strong, .item-main small { display: block; }
 
+.item-main small + small { margin-top: 2px; }
+
 .item-main strong {
   white-space: nowrap;
   overflow: hidden;
