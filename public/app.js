@@ -2806,6 +2806,11 @@ function expenseRow(expense, section, options = {}) {
   if (expense.payment !== "card" || onInvoice) meta.push(paymentLabel(expense.payment));
   if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Crédito ${expense.cardLabel}` : "Crédito");
   if (section === "fixed" && isVariableNote(expense.note)) meta.push("Variável");
+  if (section === "fixed" && isVariableNote(expense.note) && expense.payment === "card") {
+    const buckets = invoiceBuckets(expense);
+    meta.push(`Fatura de ${monthName(expense.monthId)} ${money(buckets.current)}`);
+    meta.push(`Fatura de ${monthName(buckets.nextMonthId)} ${money(buckets.following)}`);
+  }
   if (expense.installment) meta.push(expense.installment);
   const partials = expense.partials || [];
   if (section === "fixed" && !onInvoice && partials.length) meta.push(partialSummary(expense));
@@ -2886,21 +2891,15 @@ function expenseRow(expense, section, options = {}) {
 
 function recurringMonthIds(draft) {
   const months = state.data?.months || [];
-  if (draft.payment === "card" && draft.costKind !== "variavel" && draft.section === "fixed" && !draft.cardExpense) {
-    if (draft.cardLaunch === "following") return months.map((month) => month.id).filter((id) => id >= state.monthId);
-    return state.monthId ? [state.monthId] : [];
-  }
-  let ids;
-  if (draft.repeat !== "period") {
-    ids = months.map((month) => month.id);
-  } else {
+  const ids = months.map((month) => month.id);
+  const span = draft.span || (draft.repeat === "period" ? "period" : "all");
+  if (span === "month") return state.monthId ? [state.monthId] : [];
+  if (span === "following") return ids.filter((id) => id >= state.monthId);
+  if (span === "period") {
     const start = months.findIndex((month) => month.id === draft.repeatStart);
     const end = months.findIndex((month) => month.id === draft.repeatEnd);
     if (start < 0 || end < 0 || end < start) return [];
-    ids = months.slice(start, end + 1).map((month) => month.id);
-  }
-  if (draft.payment === "card" && draft.invoiceMonthId) {
-    ids = ids.filter((id) => id >= draft.invoiceMonthId);
+    return ids.slice(start, end + 1);
   }
   return ids;
 }
@@ -2918,7 +2917,6 @@ function managedMonthSelect(draft, key, label) {
 function livingPay(draft) {
   const payment = draft.payment === "card" ? "card" : "pix";
   const editing = draft.mode === "edit";
-  const cardLaunch = draft.cardLaunch === "following" ? "following" : "month";
   return el("div", {}, [
     el("div", { class: "field" }, [
       el("label", {}, editing ? "Como fica o pagamento" : "Como pretende pagar"),
@@ -2931,10 +2929,10 @@ function livingPay(draft) {
         segmented("costKind", [["fixo", "Fixo"], ["variavel", "Variável"]], draft.costKind === "variavel" ? "variavel" : "fixo"),
       ])
       : "",
-    !editing && payment === "card" && draft.costKind !== "variavel"
+    !editing && payment === "card" && draft.costKind === "variavel"
       ? el("div", { class: "field" }, [
-        el("label", {}, "Lançar no cartão"),
-        segmented("cardLaunch", [["month", "Só este mês"], ["following", "Este mês e os seguintes"]], cardLaunch),
+        el("label", {}, "Os gastos entram na fatura"),
+        segmented("invoiceTiming", [["mes", "Deste mês"], ["seguinte", "Do mês seguinte"]], draft.invoiceTiming === "seguinte" ? "seguinte" : "mes"),
       ])
       : "",
     el("p", { class: "muted" }, editing
@@ -2942,23 +2940,33 @@ function livingPay(draft) {
         ? "Pix tira este mês da fatura. Crédito lança o valor cadastrado neste mês."
         : "Trocar para crédito lança o valor cadastrado na fatura deste mês.")
       : payment === "card" && draft.costKind === "variavel"
-        ? "O valor fica previsto e não entra na fatura agora. O lançamento, total ou parcial, fica para quando você quiser, e o parcial pode se repetir. A despesa só encerra quando você pedir, mesmo que passe do previsto."
+        ? "O valor fica previsto e não entra na fatura agora. Cada gasto lançado depois pode ir para a fatura deste mês ou para a do mês seguinte, como acontece depois do fechamento do cartão."
         : payment === "card"
-        ? (cardLaunch === "following"
-          ? "O valor entra na fatura deste mês e de cada mês seguinte do período."
-          : "O valor entra na fatura só deste mês.")
+        ? "O valor entra na fatura dos meses escolhidos abaixo."
         : "O valor fica previsto. Ele só entra na fatura ou sai da receita quando você lançar Pago no Pix, Enviar pro cartão ou Pagamento parcial. Na hora, o valor pode ser outro."),
   ]);
 }
 
 function recurringSpan(draft) {
+  const span = draft.span || "all";
+  const fixedCard = draft.payment === "card" && draft.costKind !== "variavel";
+  const copy = span === "period"
+    ? (fixedCard ? "O valor entra na fatura de cada mês do intervalo." : "A conta entra em cada mês do intervalo, em aberto.")
+    : span === "month"
+      ? (fixedCard ? "O valor entra na fatura só deste mês." : "A conta entra só neste mês, em aberto.")
+      : span === "following"
+        ? (fixedCard ? "O valor entra na fatura deste mês e de cada mês seguinte." : "A conta entra neste mês e nos seguintes, em aberto.")
+        : (fixedCard ? "O valor entra na fatura de todos os meses do período." : "A conta entra em todos os meses do período, em aberto.");
   return el("div", { class: "field" }, [
-    el("label", {}, "Lançar em"),
-    segmented("repeat", [["all", "Todos os meses"], ["period", "Um período"]], draft.repeat || "all"),
-    el("p", { class: "muted" }, draft.repeat === "period"
-        ? "A conta entra em cada mês do intervalo, em aberto."
-        : "Por padrão, a conta entra em todos os meses do período, em aberto."),
-    draft.repeat === "period"
+    el("label", {}, "Em quais meses"),
+    segmented("span", [
+      ["month", "Só este mês"],
+      ["following", "Este mês e os seguintes"],
+      ["all", "Todos os meses"],
+      ["period", "Um período"],
+    ], span),
+    el("p", { class: "muted" }, copy),
+    span === "period"
       ? el("div", { class: "pair" }, [
         managedMonthSelect(draft, "repeatStart", "Do mês"),
         managedMonthSelect(draft, "repeatEnd", "Até o mês"),
@@ -2985,10 +2993,13 @@ function openCreate(section, payment, kind = "imprevisto") {
     amountMode: "installment",
     invoiceMonthId: section === "extra" ? state.monthId : "",
     repeat: "all",
+    span: "all",
+    spanChosen: false,
     repeatStart: state.monthId,
     repeatEnd: (state.data?.months || []).at(-1)?.id || state.monthId,
     cardLaunch: "month",
     costKind: "fixo",
+    invoiceTiming: "mes",
     expenseKind: kind === "planejado" ? "planejado" : "imprevisto",
     paid: false,
     source: "user",
@@ -3070,8 +3081,8 @@ function editScopeField(draft) {
     el("label", {}, "Aplicar a alteração em"),
     segmented("editScope", [
       ["month", "Só este mês"],
-      ["forward", "Daqui pra frente"],
-      ["all", "Todos os registros"],
+      ["forward", "Este mês e os seguintes"],
+      ["all", "Todos os meses"],
     ], scope),
     el("p", { class: "muted" }, scope === "all"
       ? (card
@@ -3392,19 +3403,42 @@ function isVariableNote(note) {
 }
 
 function visibleNote(note) {
-  return String(note || "").split("\n").filter((item) => item && !item.startsWith("origem:") && !item.startsWith("parcial:") && !item.startsWith("serie:") && !item.startsWith("tipo:")).join("\n");
+  return String(note || "").split("\n").filter((item) => item && !item.startsWith("origem:") && !item.startsWith("parcial:") && !item.startsWith("serie:") && !item.startsWith("tipo:") && !item.startsWith("fatura:")).join("\n");
 }
 
-function composeNote(originId, note, partialId, seriesId, variable, planned) {
+function composeNote(originId, note, partialId, seriesId, variable, planned, nextInvoice) {
   const text = String(note || "").trim();
   const lines = [];
   if (seriesId) lines.push(`serie:${seriesId}`);
   if (variable) lines.push("tipo:variavel");
   if (planned) lines.push("tipo:planejado");
+  if (nextInvoice) lines.push("fatura:seguinte");
   if (originId) lines.push(`origem:${originId}`);
   if (partialId) lines.push(`parcial:${partialId}`);
   if (text) lines.push(text);
   return lines.join("\n");
+}
+
+function nextMonthId(monthId) {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(monthId || ""));
+  if (!match) return "";
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]), 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function invoiceShift(note) {
+  return String(note || "").split("\n").some((item) => item.trim() === "fatura:seguinte") ? "seguinte" : "mes";
+}
+
+function invoiceBuckets(expense) {
+  const next = nextMonthId(expense.monthId);
+  let current = 0;
+  let following = 0;
+  for (const charge of expense.charges || []) {
+    if (charge.monthId === expense.monthId) current += charge.amountCents;
+    else if (charge.monthId === next) following += charge.amountCents;
+  }
+  return { current, following, nextMonthId: next };
 }
 
 function linkedLivingCost(expense) {
@@ -3453,6 +3487,8 @@ function openCardPay(expense) {
     installmentAmount: "",
     amountEdits: [],
     invoiceMonthId: expense.monthId || state.monthId,
+    costMonthId: expense.monthId || state.monthId,
+    invoiceTiming: invoiceShift(expense.note),
     cardScope: "month",
     variable: isVariableNote(expense.note),
     linked: linkedInvoice(expense) || expense.onCard,
@@ -3712,7 +3748,7 @@ function sheet() {
       el("div", { class: "field" }, [
         el("label", {}, "Excluir de"),
         segmented("scope", futureCard
-          ? [["month", "Só esta fatura"], ["forward", "Esta e as seguintes"]]
+          ? [["month", "Só este mês"], ["forward", "Este mês e os seguintes"]]
           : [["month", "Só este mês"], ["series", "Todos os meses"]], draft.scope || "month"),
       ]),
       el("p", { class: "muted" }, futureCard
@@ -3760,7 +3796,7 @@ function sheet() {
       el("p", { class: "muted" }, `“${draft.name}” sai da fatura e volta a ficar em aberto.`),
       el("div", { class: "field" }, [
         el("label", {}, "Tirar de"),
-        segmented("scope", [["month", "Só este mês"], ["series", "Todos os meses no cartão"]], draft.scope || "month"),
+        segmented("scope", [["month", "Só este mês"], ["series", "Todos os meses"]], draft.scope || "month"),
       ]),
       el("p", { class: "muted" }, draft.scope === "series"
         ? "Cada mês em que este custo está lançado no cartão volta a ficar em aberto."
@@ -3806,11 +3842,19 @@ function sheet() {
           field("Valor da parcela", "installmentAmount", draft.installmentAmount || "", "decimal"),
         ])
         : "",
-      draft.amountChoice === "none" ? "" : invoiceMonthField(draft),
+      draft.amountChoice === "none" ? "" : draft.variable
+        ? el("div", { class: "field" }, [
+          el("label", {}, "Em qual fatura"),
+          segmented("invoiceTiming", [["mes", "Deste mês"], ["seguinte", "Do mês seguinte"]], draft.invoiceTiming === "seguinte" ? "seguinte" : "mes"),
+          el("p", { class: "muted" }, draft.invoiceTiming === "seguinte"
+            ? `Este gasto entra na fatura de ${monthName(nextMonthId(draft.costMonthId))}.`
+            : `Este gasto entra na fatura de ${monthName(draft.costMonthId)}.`),
+        ])
+        : invoiceMonthField(draft),
       draft.amountChoice === "none" ? "" : el("p", { class: "muted", id: "installment-preview" }, cardPayPreview(draft)),
       !draft.variable && draft.amountChoice !== "none" && draft.billing !== "installments" && !(draft.already > 0)
         ? el("div", { class: "field" }, [
-          el("label", {}, "Quais meses entram no cartão"),
+          el("label", {}, "Em quais meses"),
           segmented("cardScope", [["month", "Só este mês"], ["following", "Este mês e os seguintes"]], draft.cardScope || "month"),
         ])
         : "",
@@ -3993,7 +4037,7 @@ function sheet() {
         : "",
       recurring ? livingPay(draft) : "",
       cardSpend ? "" : field(amountLabel(draft), "amount", draft.amount, "decimal"),
-      recurring && draft.mode === "create" && !(draft.payment === "card" && draft.costKind !== "variavel") ? recurringSpan(draft) : "",
+      recurring && draft.mode === "create" ? recurringSpan(draft) : "",
       cardSpend || recurring || surprise
         ? ""
         : el("div", { class: "field" }, [
@@ -4103,8 +4147,14 @@ function segmented(key, options, current) {
         if (value === "extra") state.sheet.onCard = false;
         if (value === "fixed") state.sheet.payment = state.sheet.onCard ? "card" : "pix";
       }
+      if (key === "span") state.sheet.spanChosen = true;
+      if ((key === "payment" || key === "costKind") && state.sheet.section === "fixed" && state.sheet.mode === "create" && !state.sheet.spanChosen) {
+        const payment = key === "payment" ? value : state.sheet.payment;
+        const kind = key === "costKind" ? value : state.sheet.costKind;
+        state.sheet.span = payment === "card" && kind !== "variavel" ? "month" : "all";
+      }
       if (key === "payment" && value === "card") {
-        state.sheet.onCard = state.sheet.section === "fixed";
+        state.sheet.onCard = state.sheet.section === "fixed" && state.sheet.mode !== "create";
         if (!state.sheet.cardLabel) state.sheet.cardLabel = firstCardName();
         if (!state.sheet.invoiceMonthId) state.sheet.invoiceMonthId = state.monthId;
       }
@@ -4230,6 +4280,13 @@ async function saveSheet(event) {
       const alias = String(draft.alias || "").trim();
       if (!alias) throw new Error("Escolha o apelido que vai aparecer na fatura.");
       if (!draft.cardLabel) throw new Error("Escolha o cartão.");
+      if (draft.variable) {
+        const base = draft.costMonthId || state.monthId;
+        draft.invoiceMonthId = draft.invoiceTiming === "seguinte" ? nextMonthId(base) : base;
+        if (!draft.invoiceMonthId || !(state.data?.months || []).some((month) => month.id === draft.invoiceMonthId)) {
+          throw new Error("O mês seguinte está fora do período. Aumente o período para lançar nessa fatura.");
+        }
+      }
       if (!draft.invoiceMonthId) throw new Error("Escolha o mês da fatura.");
       let amountCents = draft.described;
       let installmentCount = 1;
@@ -4454,7 +4511,7 @@ async function saveSheet(event) {
         || (draft.section === "fixed" && draft.onCard)
         || (draft.cardExpense && draft.mode === "create");
       if (needsCard && !String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão deste gasto.");
-      const onCardPurchase = draft.mode === "create" && !livingOnCard && (draft.section === "card" || draft.payment === "card");
+      const onCardPurchase = draft.mode === "create" && !livingOnCard && !variableCard && draft.section !== "fixed" && (draft.section === "card" || draft.payment === "card");
       const totalCount = Number(draft.installmentCount);
       const paidCount = Number(draft.installmentsPaid);
       if (onCardPurchase && (!Number.isInteger(totalCount) || !Number.isInteger(paidCount))) {
@@ -4485,7 +4542,9 @@ async function saveSheet(event) {
       const startMonthId = surpriseCard ? (draft.invoiceMonthId || "") : state.monthId;
       if (surpriseCard && !startMonthId) throw new Error("Escolha a fatura em que o valor entra.");
       const invoiceLabel = (state.data?.months || []).find((month) => month.id === startMonthId)?.label || "";
-      const dueMonth = livingOnCard || relaunch ? (relaunch ? draft.monthId : state.monthId) : surpriseCard ? startMonthId : onCardPurchase ? state.monthId : "";
+      const dueMonth = livingOnCard
+        ? (recurringMonths?.[0] || state.monthId)
+        : relaunch ? draft.monthId : surpriseCard ? startMonthId : onCardPurchase ? state.monthId : "";
       const dueCard = dueMonth ? draft.cardLabel : "";
       if (dueCard && !acceptPastDue(pastDueWarning(dueCard, dueMonth))) return;
       setWorking(true, "Salvando...");
@@ -4496,11 +4555,11 @@ async function saveSheet(event) {
         payment: (draft.section === "fixed" && draft.onCard) || livingOnCard || wantsCard ? "card" : draft.payment,
         onCard: draft.section === "fixed" && draft.onCard && !relaunch,
         cardLabel: draft.cardLabel,
-        note: composeNote(draft.originId, draft.note, draft.partialId, draft.seriesId, draft.variable || draft.costKind === "variavel", draft.section === "extra" && draft.expenseKind === "planejado"),
+        note: composeNote(draft.originId, draft.note, draft.partialId, draft.seriesId, draft.variable || draft.costKind === "variavel", draft.section === "extra" && draft.expenseKind === "planejado", variableCard && draft.invoiceTiming === "seguinte"),
         installment: onCardPurchase ? null : draft.installment,
         paid: draft.paid,
         installmentPlan: onCardPurchase ? { totalCount, paidCount, amountMode: draft.amountMode || "installment" } : undefined,
-        cardLaunch: livingOnCard ? (draft.cardLaunch === "following" ? "following" : "month") : undefined,
+        cardLaunch: livingOnCard ? (draft.span === "month" ? "month" : "following") : undefined,
         costKind: variableCard ? "variavel" : undefined,
         kind: draft.section === "extra" ? (draft.expenseKind === "planejado" ? "planejado" : "imprevisto") : undefined,
       };
@@ -4522,9 +4581,13 @@ async function saveSheet(event) {
         if (variableCard) {
           state.notice = "Valor previsto. Nada entrou na fatura. Lance o total ou um parcial quando quiser. A despesa só encerra quando você pedir.";
         } else if (livingOnCard) {
-          state.notice = draft.cardLaunch === "following"
+          state.notice = draft.span === "month"
+            ? "Lancei este custo no cartão só deste mês."
+            : draft.span === "following"
             ? "Lancei este custo no cartão deste mês e dos seguintes."
-            : "Lancei este custo no cartão só deste mês.";
+            : draft.span === "period"
+            ? "Lancei este custo no cartão do período escolhido."
+            : "Lancei este custo no cartão de todos os meses.";
         } else if (recurringMonths) {
           const span = recurringMonths.length > 1 ? ` em ${recurringMonths.length} meses` : "";
           state.notice = `Valor previsto${span}. Lance Pago no Pix, Enviar pro cartão ou Pagamento parcial para ele entrar na conta.`;

@@ -792,7 +792,7 @@ body.sheet-open {
 .choice { gap: 8px; flex-wrap: wrap; }
 
 .choice button, .switch {
-  flex: 1;
+  flex: 1 1 148px;
   min-height: 48px;
   border-radius: 8px;
   border: 1px solid var(--line);

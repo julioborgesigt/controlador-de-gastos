@@ -598,7 +598,8 @@ app.post("/api/expenses", async (c) => {
   const classifiedNote = parsed.value.section === "extra"
     ? noteWithPlanned(parsed.value.note, body.kind === "planejado" || (body.kind !== "imprevisto" && isPlannedCost(parsed.value.note)))
     : parsed.value.note;
-  const plan = readInstallmentPlan(body.installmentPlan);
+  const variableCard = body.costKind === "variavel" && parsed.value.section === "fixed";
+  const plan = variableCard ? null : readInstallmentPlan(body.installmentPlan);
   if (plan) {
     if (!plan.ok) return c.json({ error: plan.error }, 400);
     if (parsed.value.section === "card") {
@@ -622,7 +623,6 @@ app.post("/api/expenses", async (c) => {
   }
   const monthIds = recurringMonthIds(body, parsed.value.section);
   if (!monthIds.ok) return c.json({ error: monthIds.error }, 400);
-  const variableCard = body.costKind === "variavel" && parsed.value.section === "fixed";
   const launchOnCard = parsed.value.section === "fixed" && parsed.value.payment === "card" && !variableCard;
   if ((launchOnCard || variableCard) && !parsed.value.cardLabel) return c.json({ error: "Escolha o cartão." }, 400);
   if (launchOnCard && parsed.value.amountCents <= 0) {
@@ -645,8 +645,10 @@ app.post("/api/expenses", async (c) => {
   if (!inserted.ok) return c.json({ error: inserted.error }, 404);
   if (launchOnCard) {
     const scope = body.cardLaunch === "following" ? "following" : "month";
-    const anchor = inserted.rows.find((row) => row.monthId === body.monthId)
-      ?? inserted.rows.slice().sort((left, right) => left.monthId.localeCompare(right.monthId))[0];
+    const ordered = inserted.rows.slice().sort((left, right) => left.monthId.localeCompare(right.monthId));
+    const anchor = scope === "following"
+      ? ordered[0]
+      : inserted.rows.find((row) => row.monthId === body.monthId) ?? ordered[0];
     if (!anchor) return c.json({ error: "Mês não encontrado." }, 404);
     const paid = await payLivingSeriesOnCard(c.env.DB, {
       ownerId: writer.scope.ownerId,
