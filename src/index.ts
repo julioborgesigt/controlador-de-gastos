@@ -58,6 +58,7 @@ import {
   getExpense,
   reclassifyExpense,
   getMonth,
+  listCardPurchasesInMonth,
   getSetting,
   getTheme,
   setTheme,
@@ -348,6 +349,29 @@ app.post("/api/reset", async (c) => {
   const payload = await monthPayload(c.env.DB, writer.scope.ownerId, focus);
   if (!payload) return c.json({ error: "Mês não encontrado." }, 404);
   return c.json(withAccess(payload, writer.scope));
+});
+
+app.get("/api/months/:id/purchases", async (c) => {
+  const scope = await requireScope(c);
+  if (!scope) return c.json({ error: AUTH_ERROR }, 401);
+  const monthId = c.req.param("id");
+  if (!(await getMonth(c.env.DB, scope.ownerId, monthId))) return c.json({ error: "Mês não encontrado." }, 404);
+  const items = await listCardPurchasesInMonth(c.env.DB, scope.ownerId, monthId);
+  const totalCents = items.reduce((sum, item) => sum + item.amountCents, 0);
+  return c.json({
+    monthId,
+    totalCents,
+    items: items.map((item) => ({
+      id: item.id,
+      name: item.name,
+      amountCents: item.amountCents,
+      invoiceMonthId: item.monthId,
+      cardLabel: item.cardLabel,
+      note: item.note,
+      section: item.section,
+      payment: item.payment,
+    })),
+  });
 });
 
 app.get("/api/months/:id", async (c) => {

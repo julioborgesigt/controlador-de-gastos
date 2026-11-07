@@ -383,6 +383,11 @@ export function noteWithChargeContext(
   return lines.join("\n");
 }
 
+export function purchaseMonthFromNote(note: string | null | undefined): string {
+  const purchase = noteMarker(note, "compra:");
+  return /^\d{4}-\d{2}-\d{2}$/.test(purchase) ? purchase.slice(0, 7) : "";
+}
+
 export function cardChargeTitle(name: string, note: string | null | undefined, monthId = ""): string {
   const clean = name.trim();
   const purchase = noteMarker(note, "compra:");
