@@ -1,4 +1,5 @@
 import { dueDatePassed, invoiceDueDate, suggestedInvoiceMonth } from "./card-due.js";
+import { compareInvoiceItems } from "./installment-order.js";
 import { quoteInstallments, solveInstallmentTriple } from "./installment-link.js";
 
 function applyTheme(theme) {
@@ -1958,7 +1959,7 @@ function purchaseGroups(items) {
     .map(([invoiceMonthId, rows]) => ({
       invoiceMonthId,
       totalCents: rows.reduce((sum, row) => sum + row.amountCents, 0),
-      rows: rows.slice().sort((left, right) => String(left.note || "").localeCompare(String(right.note || "")) || left.name.localeCompare(right.name)),
+      rows: rows.slice().sort(compareInvoiceItems),
     }));
 }
 
@@ -2060,7 +2061,7 @@ function openMonthCard(monthId, cardId) {
 }
 
 function invoiceFold(key, label, amount, helpLines, body) {
-  const open = !state.folds || state.folds[key] !== false;
+  const open = Boolean(state.folds && state.folds[key]);
   return el("section", { class: `fold${open ? " open" : ""}` }, [
     el("div", { class: "fold-bar" }, [
       el("button", {
@@ -2228,7 +2229,7 @@ function cardDetail(data) {
   for (const [title, rows] of groups) {
     if (!rows.length) continue;
     children.push(el("p", { class: "eyebrow group" }, title));
-    children.push(el("div", { class: "list" }, rows.map((expense) => expenseRow(expense, "card", { manage: editable(), cardExpense: editable() }))));
+    children.push(el("div", { class: "list" }, rows.slice().sort(compareInvoiceItems).map((expense) => expenseRow(expense, "card", { manage: editable(), cardExpense: editable() }))));
   }
   if (!visible.length) {
     children.push(el("p", { class: "muted" }, card ? "Nenhum gasto neste cartão neste mês." : "Nada sem cartão neste mês."));
