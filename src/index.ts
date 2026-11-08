@@ -368,6 +368,7 @@ app.get("/api/months/:id/purchases", async (c) => {
       invoiceMonthId: item.monthId,
       cardLabel: item.cardLabel,
       note: item.note,
+      installment: item.installment,
       section: item.section,
       payment: item.payment,
     })),
