@@ -74,8 +74,21 @@ export function isFixedOnCard(expense: Pick<Expense, "section" | "onCard">): boo
   return expense.section === "fixed" && expense.onCard;
 }
 
-export function countsTowardPayment(expense: Pick<Expense, "section" | "onCard" | "payment" | "amountCents">): boolean {
-  return expense.amountCents !== 0 && !isFixedOnCard(expense);
+export function chargedInvoiceMonth(note: string | null | undefined): string {
+  const line = String(note || "").split("\n").map((item) => item.trim()).find((item) => /^fatura:\d{4}-\d{2}$/.test(item));
+  return line ? line.slice("fatura:".length) : "";
+}
+
+export function extraChargesOwnMonth(expense: { section: Section; payment: Payment; monthId?: string; note?: string | null }): boolean {
+  if (expense.section !== "extra" || expense.payment !== "card") return false;
+  const invoice = chargedInvoiceMonth(expense.note);
+  return !invoice || !expense.monthId || invoice === expense.monthId;
+}
+
+export function countsTowardPayment(expense: Pick<Expense, "section" | "onCard" | "payment" | "amountCents"> & { monthId?: string; note?: string | null }): boolean {
+  if (expense.amountCents === 0 || isFixedOnCard(expense)) return false;
+  if (expense.section === "extra" && expense.payment === "card" && !extraChargesOwnMonth(expense)) return false;
+  return true;
 }
 
 export function computeTotals(expenses: readonly Expense[], incomeCents: number): Totals {
@@ -101,7 +114,7 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
       fixedCardDueCents += cardStillDue(expense);
     }
     if (expense.section === "card") invoiceCents += expense.amountCents;
-    if (expense.section === "extra" && expense.payment === "card") extrasCardCents += expense.amountCents;
+    if (extraChargesOwnMonth(expense)) extrasCardCents += expense.amountCents;
     if (expense.section === "extra" && expense.payment !== "card") extrasPixCents += expense.amountCents;
     const partials = expense.partials ?? [];
     if (expense.section === "fixed" && !isFixedOnCard(expense) && !expense.paid && !partials.length) {
@@ -703,8 +716,8 @@ export function cardKey(value: string | null | undefined): string | null {
   return cleaned ? cleaned.toLocaleLowerCase("pt-BR") : null;
 }
 
-export function expenseBelongsToCard(expense: Pick<Expense, "section" | "payment" | "onCard">): boolean {
-  return expense.section === "card" || (expense.section === "extra" && expense.payment === "card") || isFixedOnCard(expense);
+export function expenseBelongsToCard(expense: Pick<Expense, "section" | "payment" | "onCard"> & { monthId?: string; note?: string | null }): boolean {
+  return expense.section === "card" || extraChargesOwnMonth(expense) || isFixedOnCard(expense);
 }
 
 export function cardLinkRequired(expense: Pick<Expense, "section" | "payment" | "onCard">): boolean {
