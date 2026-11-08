@@ -37,6 +37,7 @@ const state = {
   accountMenu: false,
   confirm: null,
   expenseInfo: null,
+  help: null,
   needsPeriod: false,
   devicePrompt: false,
   periodDraft: null,
@@ -234,8 +235,9 @@ function render() {
   root.append(shell());
   if (state.sheet) root.append(sheet());
   if (state.expenseInfo) root.append(expenseInfoDialog());
+  if (state.help) root.append(helpDialog());
   if (state.confirm) root.append(confirmDialog());
-  if (state.sheet || state.confirm || state.expenseInfo) lockPage(keepPlace ? lockedScroll : 0);
+  if (state.sheet || state.confirm || state.expenseInfo || state.help) lockPage(keepPlace ? lockedScroll : 0);
   else unlockPage(keepPlace ? lockedScroll : 0);
   state.viewKey = viewKey;
   if (keepPlace && onDesktop()) {
@@ -247,7 +249,7 @@ function render() {
 }
 
 function overlayIsOpen() {
-  return Boolean(state.sheet || state.confirm || state.accountMenu || state.expenseInfo);
+  return Boolean(state.sheet || state.confirm || state.accountMenu || state.expenseInfo || state.help);
 }
 
 function syncOverlayHistory() {
@@ -277,6 +279,7 @@ function leavePage() {
   allowLeave = true;
   state.confirm = null;
   state.expenseInfo = null;
+  state.help = null;
   state.sheet = null;
   state.accountMenu = false;
   overlayPushed = false;
@@ -290,6 +293,7 @@ window.addEventListener("popstate", () => {
     overlayPushed = false;
     state.confirm = null;
     state.expenseInfo = null;
+    state.help = null;
     state.sheet = null;
     state.accountMenu = false;
     render();
@@ -302,6 +306,7 @@ window.addEventListener("popstate", () => {
   if (overlayPushed) {
     overlayPushed = false;
     if (state.confirm) state.confirm = null;
+    else if (state.help) state.help = null;
     else if (state.expenseInfo) state.expenseInfo = null;
     else if (state.accountMenu) state.accountMenu = false;
     else {
@@ -933,17 +938,61 @@ function viewBody(data) {
   return sectionList(data, "extra");
 }
 
+function helpButton(title, lines) {
+  return el("button", {
+    class: "help",
+    type: "button",
+    "aria-label": `Ajuda sobre ${title}`,
+    onclick: () => {
+      state.help = { title, lines };
+      render();
+    },
+  }, "i");
+}
+
+function titleWithHelp(label, title, lines) {
+  return el("div", { class: "title-row" }, [
+    el("p", { class: "eyebrow" }, label),
+    helpButton(title, lines),
+  ]);
+}
+
+function helpDialog() {
+  const help = state.help;
+  const close = () => {
+    state.help = null;
+    render();
+  };
+  const overlay = el("div", {
+    class: "overlay center",
+    role: "presentation",
+    onclick: (event) => {
+      if (event.target === overlay) close();
+    },
+  }, [
+    el("div", { class: "dialog", role: "dialog", "aria-modal": "true" }, [
+      el("h2", {}, help.title),
+      ...help.lines.map((line) => el("p", {}, line)),
+      el("div", { class: "actions" }, [
+        el("button", { class: "primary", type: "button", onclick: close }, "Entendi"),
+      ]),
+    ]),
+  ]);
+  return overlay;
+}
+
 function summary(data) {
   const { month, totals } = data;
   return el("section", {}, [
     el("article", { class: "hero" }, [
-      el("p", { class: "eyebrow" }, month.label),
+      titleWithHelp(month.label, "Resumo mensal", [
+        "Falta pagar é o que ainda não foi lançado neste mês.",
+        "O total do mês inclui o custo de vida que ainda está só previsto.",
+        "Já pago soma o que entrou por À vista ou por Cartões de crédito.",
+      ]),
       el("p", { class: "muted" }, "Falta pagar"),
       el("p", { class: "money" }, money(totals.remainingCents)),
       el("p", { class: "muted" }, `Total do mês ${money(totals.forecastExpenseCents)} · já pago ${money(totals.paidCents)}`),
-      totals.forecastExpenseCents > totals.partialExpenseCents
-        ? el("p", { class: "muted" }, "Inclui o custo de vida que ainda está previsto.")
-        : "",
       month.settled ? el("p", { class: "badge paid" }, "Mês quitado") : "",
     ]),
     el("div", { class: "grid" }, [
@@ -1783,11 +1832,14 @@ function cashHome(data) {
   const total = entries.reduce((sum, entry) => sum + entry.amountCents, 0);
   return el("section", {}, [
     el("div", { class: "section-head" }, [
-      el("p", { class: "eyebrow" }, data.month.label),
+      titleWithHelp(data.month.label, "À vista", [
+        "O custo de vida precisa já estar previsto. O Pix lançado aqui abate esse custo.",
+        "Imprevisto e planejado nascem nesta aba e já ficam pagos no Pix.",
+        "O histórico abaixo reúne os lançamentos à vista deste mês.",
+      ]),
       el("h2", {}, money(total)),
       el("p", { class: "muted" }, "Pagamentos à vista deste mês, no Pix."),
     ]),
-    el("p", { class: "note" }, "O custo de vida precisa já estar previsto. Imprevisto e planejado nascem aqui, pagos no Pix."),
     editable() ? el("button", { class: "primary add-top", type: "button", onclick: openCashSpend }, "Lançar à vista") : "",
     el("h2", { class: "subhead" }, "Histórico"),
     entries.length
@@ -1922,9 +1974,11 @@ function purchaseDetail(data) {
       },
     }, [backArrow(), "Faturas"]),
     el("div", { class: "section-head" }, [
-      el("p", { class: "eyebrow" }, "Lançamentos feitos"),
+      titleWithHelp("Lançamentos feitos", "Lançamentos do mês", [
+        "A lista usa a data da compra, não o vencimento.",
+        "Cada grupo é a fatura em que o gasto entrou, conforme o fechamento do cartão e o mês escolhido no cadastro.",
+      ]),
       el("h2", {}, payload ? money(payload.totalCents || 0) : "…"),
-      el("p", { class: "muted" }, `Compras de ${monthPhrase(data.month.id)}, separadas pela fatura em que entraram.`),
     ]),
   ];
   if (!payload) {
@@ -1966,17 +2020,21 @@ function cardsHome(data) {
         el("span", {}, `Ver lançamentos feitos em ${phrase}`),
         el("strong", {}, purchases ? money(purchases.totalCents || 0) : "…"),
       ]),
-      el("small", {}, purchases?.error || "O total já gasto neste mês, inclusive o que caiu na fatura do mês seguinte."),
+      el("small", {}, purchases?.error || "Total já gasto neste mês."),
     ]),
     el("div", { class: "section-head" }, [
-      el("p", { class: "eyebrow" }, `Faturas a serem pagas em ${phrase}`),
+      titleWithHelp(`Faturas a serem pagas em ${phrase}`, "Cartões de crédito", [
+        onDesktop()
+          ? "Clique num cartão para ver a fatura. Os botões editam ou quitam o cartão. Excluir só quando ele não tiver gastos."
+          : "Toque num cartão para ver a fatura. Dá para editar o cartão. Excluir só quando ele não tiver gastos.",
+        "Cada gasto no crédito pede a classificação. A data de fechamento sugere a fatura, e dá para escolher outro mês.",
+        "Ver lançamentos feitos no mês soma as compras pela data da compra, inclusive as que caíram na fatura seguinte.",
+        data.totals.fixedOnCardCents
+          ? `${money(data.totals.fixedOnCardCents)} de custo de vida já foram lançados no cartão e não somam de novo.`
+          : "A fatura reúne as cobranças com vencimento neste mês.",
+      ]),
       el("h2", {}, money(data.totals.faturaCents)),
-      el("p", { class: "muted" }, blurb("card", data.totals)),
     ]),
-    el("p", { class: "note" }, onDesktop()
-      ? "Clique num cartão para ver o detalhamento. Os botões embaixo editam ou quitam o cartão. Excluir só quando ele não tiver gastos."
-      : "Toque num cartão para ver o detalhamento. Dá para editar o cartão. Excluir só quando ele não tiver gastos."),
-    el("p", { class: "note" }, "Cada gasto no crédito pede a classificação. A data de fechamento sugere a fatura, e dá para escolher outro mês."),
     editable() ? el("div", { class: "stack-actions" }, [
       el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto no crédito"),
       el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
@@ -2020,18 +2078,19 @@ function cardDetail(data) {
       },
     }, [backArrow(), "Todos os cartões"]),
     el("div", { class: "section-head" }, [
-      el("p", { class: "eyebrow" }, data.month.label),
+      titleWithHelp(data.month.label, card ? card.name : "Sem cartão", [
+        card
+          ? "Os gastos vinculados a este cartão aparecem aqui. O custo de vida que já virou lançamento entra na fatura."
+          : "Estes gastos ainda não têm um cartão cadastrado.",
+        "O gasto entra na aba da classificação escolhida. O fechamento sugere a fatura e você pode trocar o mês.",
+      ]),
       el("h2", {}, card ? card.name : "Sem cartão"),
       el("p", { class: "money inline" }, money(total)),
-      el("p", { class: "muted" }, card
-        ? "Gastos vinculados a este cartão. O custo de vida que já virou lançamento aparece na fatura."
-        : "Estes gastos ainda não têm um cartão cadastrado."),
     ]),
     editable() && card ? cardTools(card) : "",
     editable() ? el("div", { class: "stack-actions" }, [
       el("button", { class: "primary", type: "button", onclick: () => openCardExpense(card ? card.name : "") }, "+ Gasto no crédito"),
     ]) : "",
-    el("p", { class: "note" }, "O gasto entra na aba da classificação escolhida. O fechamento sugere a fatura e você pode trocar o mês."),
   ];
   const groups = [
     ["Fatura prevista", visible.filter((expense) => expense.section === "card")],
@@ -2541,21 +2600,24 @@ function sectionList(data, section) {
       : totals.extrasCardCents + totals.extrasPixCents;
   const children = [
     el("div", { class: "section-head" }, [
-      el("p", { class: "eyebrow" }, section === "fixed" ? "Custo de vida" : section === "extra" ? "Outros gastos" : data.month.label),
+      section === "fixed"
+        ? titleWithHelp("Custo de vida", "Custo de vida", [
+          "Aqui fica só o previsto e o que já foi pago.",
+          "O Pix é lançado em À vista. O crédito é lançado em Cartões de crédito.",
+          "Falta no cartão é o previsto que ainda será pago no crédito. Falta no Pix é o que ainda será pago à vista.",
+        ])
+        : section === "extra"
+          ? titleWithHelp("Outros gastos", "Outros gastos", [
+            "Esta aba só consulta imprevistos e planejados.",
+            "Um gasto novo entra por Cartões de crédito ou À vista.",
+          ])
+          : el("p", { class: "eyebrow" }, data.month.label),
       section === "fixed" || section === "extra" ? el("p", { class: "muted" }, data.month.label) : "",
       section === "fixed" ? "" : el("h2", {}, money(total)),
-      section === "fixed" ? costSplit(totals) : el("p", { class: "muted" }, blurb(section, totals)),
+      section === "fixed" ? costSplit(totals) : "",
     ]),
   ];
-  if (section === "fixed") {
-    children.push(el("p", { class: "note" }, "Aqui fica o previsto. O pagamento no Pix é feito em À vista e o do crédito em Cartões de crédito."));
-  }
-  if (section === "extra") {
-    children.push(el("p", { class: "note" }, "Consulta dos imprevistos e planejados. Um gasto novo entra por Cartões de crédito ou À vista."));
-  }
-  if (editable() && section === "extra") {
-    children.push(el("p", { class: "muted" }, "Nada é pago nesta aba."));
-  } else if (editable()) {
+  if (editable() && section === "fixed") {
     children.push(el("button", {
       class: "primary add-top",
       type: "button",
@@ -2584,7 +2646,11 @@ function incomeView(data) {
   const extras = data.incomeExtras || [];
   return el("section", {}, [
     el("div", { class: "section-head" }, [
-      el("p", { class: "eyebrow" }, "Receita mensal"),
+      titleWithHelp("Receita mensal", "Receita mensal", [
+        "A base entra nos meses que ainda não foram editados à parte.",
+        "Replicar em todos substitui também os meses que já foram ajustados.",
+        "Um extra marcado em vários meses entra com o mesmo valor em cada um e soma na receita daquele mês.",
+      ]),
       el("h2", {}, money(data.month.incomeCents)),
       el("p", { class: "muted" }, `${data.month.label}: ${money(data.month.baseIncomeCents)} de base${data.month.extraIncomeCents ? ` + ${money(data.month.extraIncomeCents)} extras` : ""}.`),
     ]),
@@ -2597,7 +2663,6 @@ function incomeView(data) {
         placeholder: "8000,00",
         oninput: (event) => { state.baseIncome = event.target.value; },
       }),
-      el("p", { class: "muted" }, "A base entra nos meses que ainda não foram editados à parte. Você pode aplicar em todos se quiser substituir o valor da planilha."),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: () => saveBase("unlocked") }, "Replicar nos meses livres"),
         el("button", { class: "primary", type: "button", onclick: () => saveBase("all") }, "Replicar em todos os meses"),
@@ -2617,7 +2682,6 @@ function incomeView(data) {
       el("span", { class: "amount" }, money(monthIncomeTotal(data, month))),
     ]))),
     el("h2", { class: "subhead" }, "Extras do ano"),
-    el("p", { class: "note" }, "Marque um ou mais meses. O mesmo valor entra em cada um e soma na receita daquele mês."),
     editable() ? el("button", { class: "primary add-top", type: "button", onclick: () => openIncomeExtra() }, "Adicionar receita extra") : "",
     el("div", { class: "list" }, extras.map((extra) => el("article", { class: "item" }, [
       el("div", { class: "item-copy" }, [
