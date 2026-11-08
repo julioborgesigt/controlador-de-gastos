@@ -658,11 +658,16 @@ app.post("/api/card-spend", async (c) => {
   const scheduledCents = plan?.ok
     ? plan.plan.schedule.reduce((sum, part) => sum + part.amountCents, 0)
     : body.amountCents;
+  const costMonthId = kind === "casa" && isMonthId(body.costMonthId) ? body.costMonthId : "";
+  if (costMonthId && !(await getMonth(c.env.DB, writer.scope.ownerId, costMonthId))) {
+    return c.json({ error: "Escolha o mês do custo de vida." }, 400);
+  }
   const linkId = typeof body.linkExpenseId === "string" ? body.linkExpenseId.trim() : "";
   if (linkId && kind !== "casa") return c.json({ error: "Só um custo de vida pode receber o vínculo." }, 400);
   if (kind === "casa" && linkId) {
     const origin = await getExpense(c.env.DB, writer.scope.ownerId, linkId);
     if (!origin || origin.section !== "fixed") return c.json({ error: "Escolha um custo de vida para vincular." }, 400);
+    if (costMonthId && origin.monthId !== costMonthId) return c.json({ error: "Esse custo de vida é de outro mês." }, 400);
     const added = await addLivingCardPartial(c.env.DB, {
       ownerId: writer.scope.ownerId,
       expenseId: origin.id,
@@ -679,9 +684,10 @@ app.post("/api/card-spend", async (c) => {
     return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, origin.monthId), writer.scope), 201);
   }
   if (kind === "casa") {
+    const livingMonthId = costMonthId || body.invoiceMonthId;
     const inserted = await insertRepeatedExpenses(c.env.DB, {
       ownerId: writer.scope.ownerId,
-      monthIds: [body.invoiceMonthId],
+      monthIds: [livingMonthId],
       name,
       section: "fixed",
       amountCents: scheduledCents,
@@ -710,7 +716,7 @@ app.post("/api/card-spend", async (c) => {
       purchaseDate,
     });
     if (!paid.ok) return c.json({ error: paid.error }, 400);
-    return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.invoiceMonthId), writer.scope), 201);
+    return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, livingMonthId), writer.scope), 201);
   }
   const chargeNote = noteWithChargeContext(kind === "planejado" ? noteWithPlanned("", true) : "", {
     purchaseDate,
