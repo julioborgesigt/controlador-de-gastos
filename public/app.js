@@ -2059,6 +2059,31 @@ function openMonthCard(monthId, cardId) {
   });
 }
 
+function invoiceFold(key, label, amount, helpLines, body) {
+  const open = !state.folds || state.folds[key] !== false;
+  return el("section", { class: `fold${open ? " open" : ""}` }, [
+    el("div", { class: "fold-bar" }, [
+      el("button", {
+        class: "fold-toggle",
+        type: "button",
+        "aria-expanded": open ? "true" : "false",
+        onclick: () => {
+          state.folds = { ...(state.folds || {}), [key]: !open };
+          render();
+        },
+      }, [
+        el("span", { class: "fold-chevron", "aria-hidden": "true" }, ""),
+        el("span", { class: "fold-copy" }, [
+          el("span", { class: "eyebrow" }, label),
+          el("strong", {}, amount),
+        ]),
+      ]),
+      helpLines ? helpButton(label, helpLines) : "",
+    ]),
+    open ? el("div", { class: "fold-body" }, body) : "",
+  ]);
+}
+
 function cardsHome(data) {
   const cards = data.cards || [];
   const purchases = purchasesOf(data.month.id);
@@ -2068,6 +2093,18 @@ function cardsHome(data) {
   const nextKnown = (data.months || []).some((month) => month.id === nextId);
   if (nextKnown) ensureNextInvoices(data.month.id);
   const nextData = state.nextInvoicesFor === data.month.id ? state.nextInvoices : null;
+  const invoiceRows = [];
+  if (!cards.length) invoiceRows.push(el("p", { class: "muted" }, "Nenhum cartão ainda."));
+  for (const card of cards) {
+    invoiceRows.push(cardManageRow(card, cardInvoiceCents(data.expenses, card.name), expensesForCardName(data.expenses, card.name)));
+  }
+  const loose = unassignedCardExpenses(data.expenses, cards);
+  if (loose.some(shownExpense)) {
+    const amount = loose
+      .filter((expense) => !fixedOnCard(expense))
+      .reduce((sum, expense) => sum + expense.amountCents, 0);
+    invoiceRows.push(cardJump("Sem cartão", amount, loose, () => openCard("unassigned")));
+  }
   const children = [
     el("button", {
       class: "jump",
@@ -2083,8 +2120,15 @@ function cardsHome(data) {
       ]),
       el("small", {}, purchases?.error || "Total já gasto neste mês."),
     ]),
-    el("div", { class: "section-head" }, [
-      titleWithHelp(paidInvoices ? `Faturas pagas em ${phrase}` : `Faturas a serem pagas em ${phrase}`, "Cartões de crédito", [
+    editable() ? el("div", { class: "stack-actions" }, [
+      el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto no crédito"),
+      el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
+    ]) : "",
+    invoiceFold(
+      `invoices:${data.month.id}`,
+      paidInvoices ? `Faturas pagas em ${phrase}` : `Faturas a serem pagas em ${phrase}`,
+      money(data.totals.faturaCents),
+      [
         onDesktop()
           ? "Clique num cartão para ver a fatura. Os botões editam ou quitam o cartão. Excluir só quando ele não tiver gastos."
           : "Toque num cartão para ver a fatura. Dá para editar o cartão. Excluir só quando ele não tiver gastos.",
@@ -2093,25 +2137,10 @@ function cardsHome(data) {
         data.totals.fixedOnCardCents
           ? `${money(data.totals.fixedOnCardCents)} de custo de vida já foram lançados no cartão e não somam de novo.`
           : "A fatura reúne as cobranças com vencimento neste mês.",
-      ]),
-      el("h2", {}, money(data.totals.faturaCents)),
-    ]),
-    editable() ? el("div", { class: "stack-actions" }, [
-      el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto no crédito"),
-      el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
-    ]) : "",
+      ],
+      invoiceRows,
+    ),
   ];
-  if (!cards.length) children.push(el("p", { class: "muted" }, "Nenhum cartão ainda."));
-  for (const card of cards) {
-    children.push(cardManageRow(card, cardInvoiceCents(data.expenses, card.name), expensesForCardName(data.expenses, card.name)));
-  }
-  const loose = unassignedCardExpenses(data.expenses, cards);
-  if (loose.some(shownExpense)) {
-    const amount = loose
-      .filter((expense) => !fixedOnCard(expense))
-      .reduce((sum, expense) => sum + expense.amountCents, 0);
-    children.push(cardJump("Sem cartão", amount, loose, () => openCard("unassigned")));
-  }
   if (nextKnown) {
     const nextPhrase = monthPhrase(nextId);
     const nextExpenses = nextData?.expenses || [];
@@ -2122,16 +2151,13 @@ function cardsHome(data) {
       return [{ card, balance, amount: cardInvoiceCents(nextExpenses, card.name), list }];
     });
     const openTotal = openCards.reduce((sum, item) => sum + item.balance, 0);
-    children.push(el("div", { class: "section-head" }, [
-      el("p", { class: "eyebrow" }, `Faturas em aberto para ${nextPhrase}`),
-      el("h2", {}, nextData ? money(openTotal) : "…"),
-    ]));
-    if (!nextData) children.push(el("p", { class: "muted" }, "Carregando a projeção..."));
-    else if (nextData.error) children.push(el("p", { class: "error" }, nextData.error));
-    else if (!openCards.length) children.push(el("p", { class: "muted" }, `Nenhuma fatura em aberto para ${nextPhrase}.`));
+    const nextRows = [];
+    if (!nextData) nextRows.push(el("p", { class: "muted" }, "Carregando a projeção..."));
+    else if (nextData.error) nextRows.push(el("p", { class: "error" }, nextData.error));
+    else if (!openCards.length) nextRows.push(el("p", { class: "muted" }, `Nenhuma fatura em aberto para ${nextPhrase}.`));
     else {
       for (const item of openCards) {
-        children.push(el("button", {
+        nextRows.push(el("button", {
           class: "jump",
           type: "button",
           onclick: () => openMonthCard(nextId, item.card.id),
@@ -2144,6 +2170,13 @@ function cardsHome(data) {
         ]));
       }
     }
+    children.push(invoiceFold(
+      `open:${nextId}`,
+      `Faturas em aberto para ${nextPhrase}`,
+      nextData ? money(openTotal) : "…",
+      null,
+      nextRows,
+    ));
   }
   return el("section", {}, children);
 }

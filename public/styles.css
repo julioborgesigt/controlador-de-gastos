@@ -318,6 +318,52 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .jump small, .item small, .metric small { display: block; color: var(--muted); font-size: 13px; line-height: 1.35; }
 
+.fold { margin: 4px 0 16px; }
+
+.fold-bar {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.fold-toggle {
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  padding: 0;
+}
+
+.fold-chevron {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  margin-top: 4px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(-45deg);
+}
+
+.fold.open .fold-chevron { transform: rotate(45deg); margin-top: 2px; }
+
+.fold-copy { min-width: 0; }
+
+.fold-copy .eyebrow { margin: 0; }
+
+.fold-copy strong {
+  display: block;
+  font-size: 28px;
+  line-height: 1.1;
+  margin-top: 4px;
+}
+
+.fold-body { margin-top: 12px; }
+
 .section-head { margin: 8px 2px 12px; }
 
 .group { margin: 16px 2px 8px; }
@@ -1485,6 +1531,8 @@ html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
   .section-head { margin: 0 0 16px; }
 
   .section-head h2 { font-size: 32px; }
+
+  .fold-copy strong { font-size: 32px; }
 
   .content > section:has(> .card-swipe) {
     display: grid;
