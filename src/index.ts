@@ -25,6 +25,7 @@ import {
   livingCardChargeKind,
   noteWithChargeContext,
   noteWithPlanned,
+  planCardPurchase,
   noteWithSeries,
   noteWithVariable,
   normalizeExpense,
@@ -636,6 +637,27 @@ app.post("/api/card-spend", async (c) => {
   const card = resolveCardLabel(cards, typeof body.cardLabel === "string" ? body.cardLabel : null, true);
   if (!card.ok) return c.json({ error: card.error }, 400);
   const purchaseDate = typeof body.purchaseDate === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.purchaseDate) ? body.purchaseDate : "";
+  const installment = readCardSpendInstallment(body);
+  if (!installment.ok) return c.json({ error: installment.error }, 400);
+  const plan = installment.totalCount > 1
+    ? planCardPurchase({
+      startMonthId: body.invoiceMonthId,
+      totalCount: installment.totalCount,
+      paidCount: installment.paidCount,
+      amountCents: body.amountCents,
+      mode: installment.mode,
+    })
+    : null;
+  if (plan && !plan.ok) return c.json({ error: plan.error }, 400);
+  if (plan?.ok) {
+    const known = await listMonths(c.env.DB, writer.scope.ownerId);
+    if (plan.plan.schedule.some((part) => !known.some((month) => month.id === part.monthId))) {
+      return c.json({ error: "O parcelamento passa do período gerenciado. Aumente o período ou reduza as parcelas." }, 400);
+    }
+  }
+  const scheduledCents = plan?.ok
+    ? plan.plan.schedule.reduce((sum, part) => sum + part.amountCents, 0)
+    : body.amountCents;
   const linkId = typeof body.linkExpenseId === "string" ? body.linkExpenseId.trim() : "";
   if (linkId && kind !== "casa") return c.json({ error: "Só um custo de vida pode receber o vínculo." }, 400);
   if (kind === "casa" && linkId) {
@@ -646,10 +668,12 @@ app.post("/api/card-spend", async (c) => {
       expenseId: origin.id,
       amountCents: body.amountCents,
       cardLabel: card.cardLabel || "",
-      installmentCount: 1,
+      installmentCount: installment.totalCount,
       invoiceMonthId: body.invoiceMonthId,
       name,
       purchaseDate,
+      mode: installment.mode,
+      paidCount: installment.paidCount,
     });
     if (!added.ok) return c.json({ error: added.error }, 400);
     return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, origin.monthId), writer.scope), 201);
@@ -660,7 +684,7 @@ app.post("/api/card-spend", async (c) => {
       monthIds: [body.invoiceMonthId],
       name,
       section: "fixed",
-      amountCents: body.amountCents,
+      amountCents: scheduledCents,
       payment: "pix",
       onCard: false,
       cardLabel: null,
@@ -679,11 +703,34 @@ app.post("/api/card-spend", async (c) => {
       cardLabel: card.cardLabel || "",
       alias: name,
       amountCents: body.amountCents,
-      totalCount: 1,
+      totalCount: installment.totalCount,
+      paidCount: installment.paidCount,
       startMonthId: body.invoiceMonthId,
+      mode: installment.mode,
       purchaseDate,
     });
     if (!paid.ok) return c.json({ error: paid.error }, 400);
+    return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.invoiceMonthId), writer.scope), 201);
+  }
+  const chargeNote = noteWithChargeContext(kind === "planejado" ? noteWithPlanned("", true) : "", {
+    purchaseDate,
+    referenceMonthId: purchaseDate.slice(0, 7),
+  });
+  if (installment.totalCount > 1) {
+    const created = await insertCardPurchase(c.env.DB, {
+      ownerId: writer.scope.ownerId,
+      startMonthId: body.invoiceMonthId,
+      name,
+      section: "extra",
+      payment: "card",
+      cardLabel: card.cardLabel,
+      note: chargeNote,
+      totalCount: installment.totalCount,
+      paidCount: installment.paidCount,
+      amountCents: body.amountCents,
+      mode: installment.mode,
+    });
+    if (!created.ok) return c.json({ error: created.error }, 400);
     return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, body.invoiceMonthId), writer.scope), 201);
   }
   const inserted = await insertRepeatedExpenses(c.env.DB, {
@@ -696,10 +743,7 @@ app.post("/api/card-spend", async (c) => {
     onCard: false,
     cardLabel: card.cardLabel,
     paid: false,
-    note: noteWithChargeContext(kind === "planejado" ? noteWithPlanned("", true) : "", {
-      purchaseDate,
-      referenceMonthId: purchaseDate.slice(0, 7),
-    }),
+    note: chargeNote,
     installment: null,
     livingCard: false,
   });
@@ -1218,6 +1262,19 @@ function incomeExtraName(kind: "ir" | "thirteenth" | "vacation" | "other", name:
   if (kind === "thirteenth") return "Décimo terceiro";
   if (kind === "vacation") return "Férias";
   return typeof name === "string" ? name.trim().slice(0, 80) : "";
+}
+
+function readCardSpendInstallment(body: Record<string, unknown>): { ok: true; totalCount: number; paidCount: number; mode: "installment" | "total" } | { ok: false; error: string } {
+  const totalCount = body.installmentCount === undefined ? 1 : body.installmentCount;
+  const paidCount = body.installmentsPaid === undefined ? 0 : body.installmentsPaid;
+  if (typeof totalCount !== "number" || !Number.isInteger(totalCount) || typeof paidCount !== "number" || !Number.isInteger(paidCount)) {
+    return { ok: false, error: "Informe as parcelas em números inteiros." };
+  }
+  if (body.amountMode !== undefined && body.amountMode !== "installment" && body.amountMode !== "total") {
+    return { ok: false, error: "Diga se o valor é da parcela ou do total." };
+  }
+  const mode = totalCount <= 1 || body.amountMode === "total" || body.amountMode === undefined ? "total" : "installment";
+  return { ok: true, totalCount, paidCount, mode };
 }
 
 function readInstallmentPlan(value: unknown): { ok: true; totalCount: number; paidCount: number; mode: "installment" | "total" } | { ok: false; error: string } | null {
