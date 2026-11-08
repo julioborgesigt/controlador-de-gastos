@@ -154,6 +154,8 @@ async function loadMonth(monthId) {
 }
 
 function rememberMonth(data) {
+  state.nextInvoicesFor = "";
+  state.nextInvoices = null;
   try {
     sessionStorage.setItem("monthCache:v1", JSON.stringify({ data }));
   } catch {
@@ -2003,10 +2005,69 @@ function purchaseDetail(data) {
   return el("section", {}, children);
 }
 
+function monthInvoicesSettled(data) {
+  const cards = data.cards || [];
+  let any = false;
+  let open = openCardBalance(unassignedCardExpenses(data.expenses, cards));
+  for (const card of cards) {
+    const list = expensesForCardName(data.expenses, card.name);
+    if (cardInvoiceCents(data.expenses, card.name) <= 0) continue;
+    any = true;
+    open += openCardBalance(list);
+  }
+  return any && open === 0;
+}
+
+function ensureNextInvoices(monthId) {
+  const next = nextMonthId(monthId);
+  const known = (state.data?.months || []).some((month) => month.id === next);
+  if (!next || !known) {
+    state.nextInvoicesFor = monthId;
+    state.nextInvoices = null;
+    return;
+  }
+  if (state.nextInvoicesLoading === monthId || state.nextInvoicesFor === monthId) return;
+  state.nextInvoicesLoading = monthId;
+  request(`/api/months/${next}`).then((payload) => {
+    if (state.monthId !== monthId) return;
+    state.nextInvoices = payload;
+    state.nextInvoicesFor = monthId;
+    state.nextInvoicesLoading = "";
+    render();
+  }).catch((error) => {
+    if (state.monthId !== monthId) return;
+    state.nextInvoices = { error: messageOf(error), expenses: [], month: { id: next } };
+    state.nextInvoicesFor = monthId;
+    state.nextInvoicesLoading = "";
+    render();
+  });
+}
+
+function openMonthCard(monthId, cardId) {
+  state.cardFocus = cardId;
+  if (monthId === state.monthId) {
+    render();
+    return;
+  }
+  state.error = "";
+  setWorking(true, "Abrindo...");
+  loadMonth(monthId).catch((error) => {
+    state.error = messageOf(error);
+  }).finally(() => {
+    setWorking(false);
+    renderSafely();
+  });
+}
+
 function cardsHome(data) {
   const cards = data.cards || [];
   const purchases = purchasesOf(data.month.id);
   const phrase = monthPhrase(data.month.id);
+  const paidInvoices = monthInvoicesSettled(data);
+  const nextId = nextMonthId(data.month.id);
+  const nextKnown = (data.months || []).some((month) => month.id === nextId);
+  if (nextKnown) ensureNextInvoices(data.month.id);
+  const nextData = state.nextInvoicesFor === data.month.id ? state.nextInvoices : null;
   const children = [
     el("button", {
       class: "jump",
@@ -2023,7 +2084,7 @@ function cardsHome(data) {
       el("small", {}, purchases?.error || "Total já gasto neste mês."),
     ]),
     el("div", { class: "section-head" }, [
-      titleWithHelp(`Faturas a serem pagas em ${phrase}`, "Cartões de crédito", [
+      titleWithHelp(paidInvoices ? `Faturas pagas em ${phrase}` : `Faturas a serem pagas em ${phrase}`, "Cartões de crédito", [
         onDesktop()
           ? "Clique num cartão para ver a fatura. Os botões editam ou quitam o cartão. Excluir só quando ele não tiver gastos."
           : "Toque num cartão para ver a fatura. Dá para editar o cartão. Excluir só quando ele não tiver gastos.",
@@ -2050,6 +2111,39 @@ function cardsHome(data) {
       .filter((expense) => !fixedOnCard(expense))
       .reduce((sum, expense) => sum + expense.amountCents, 0);
     children.push(cardJump("Sem cartão", amount, loose, () => openCard("unassigned")));
+  }
+  if (nextKnown) {
+    const nextPhrase = monthPhrase(nextId);
+    const nextExpenses = nextData?.expenses || [];
+    const openCards = cards.flatMap((card) => {
+      const list = expensesForCardName(nextExpenses, card.name);
+      const balance = openCardBalance(list);
+      if (balance <= 0) return [];
+      return [{ card, balance, amount: cardInvoiceCents(nextExpenses, card.name), list }];
+    });
+    const openTotal = openCards.reduce((sum, item) => sum + item.balance, 0);
+    children.push(el("div", { class: "section-head" }, [
+      el("p", { class: "eyebrow" }, `Faturas em aberto para ${nextPhrase}`),
+      el("h2", {}, nextData ? money(openTotal) : "…"),
+    ]));
+    if (!nextData) children.push(el("p", { class: "muted" }, "Carregando a projeção..."));
+    else if (nextData.error) children.push(el("p", { class: "error" }, nextData.error));
+    else if (!openCards.length) children.push(el("p", { class: "muted" }, `Nenhuma fatura em aberto para ${nextPhrase}.`));
+    else {
+      for (const item of openCards) {
+        children.push(el("button", {
+          class: "jump",
+          type: "button",
+          onclick: () => openMonthCard(nextId, item.card.id),
+        }, [
+          el("div", { class: "row-between" }, [
+            el("span", {}, item.card.name),
+            el("strong", {}, money(item.balance)),
+          ]),
+          el("small", {}, `Projeção em aberto · fatura ${money(item.amount)}`),
+        ]));
+      }
+    }
   }
   return el("section", {}, children);
 }
