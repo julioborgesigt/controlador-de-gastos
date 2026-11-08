@@ -76,15 +76,13 @@ async function boot() {
   if (cached) {
     state.data = cached;
     state.monthId = cached.month.id;
-    state.authed = true;
-    state.booting = false;
-    render();
+    storeMonth(cached);
   } else {
-    state.booting = true;
     state.data = null;
-    setBootProgress(0.3);
-    render();
   }
+  state.booting = true;
+  setBootProgress(cached ? 0.45 : 0.3);
+  render();
   try {
     const session = await request("/api/session", { attempts: 2 });
     if (generation !== bootGeneration) return;
@@ -152,6 +150,7 @@ async function loadMonth(monthId) {
   state.monthId = data.month.id;
   try { sessionStorage.setItem("monthId", data.month.id); } catch { /* o mês segue só nesta aba */ }
   rememberMonth(data);
+  await preloadAround(data);
 }
 
 const monthStore = new Map();
@@ -160,16 +159,6 @@ const monthLoads = new Map();
 function storeMonth(data) {
   if (!data?.month?.id) return;
   monthStore.set(data.month.id, data);
-}
-
-function neighborMonthIds(data) {
-  const months = data?.months || [];
-  const index = months.findIndex((month) => month.id === data.month.id);
-  if (index < 0) return [];
-  const ids = [];
-  if (index > 0) ids.push(months[index - 1].id);
-  if (index < months.length - 1) ids.push(months[index + 1].id);
-  return ids;
 }
 
 function fetchMonth(monthId) {
@@ -185,20 +174,21 @@ function fetchMonth(monthId) {
   return pending;
 }
 
-function preloadAround(data) {
+async function preloadAround(data) {
   const focus = data?.month?.id;
   if (!focus) return;
-  const ids = neighborMonthIds(data);
-  for (const id of ids) {
-    fetchMonth(id).then(() => {
-      if (state.monthId !== focus) return;
-      const next = ids.find((item) => item > focus);
-      if (!next || !monthStore.has(next)) return;
-      state.nextInvoices = monthStore.get(next);
-      state.nextInvoicesFor = focus;
-      state.nextInvoicesLoading = "";
-      renderSafely();
-    }).catch(() => {});
+  const months = data.months || [];
+  const index = months.findIndex((month) => month.id === focus);
+  const ids = [];
+  if (index > 0) ids.push(months[index - 1].id);
+  if (index >= 0 && index < months.length - 1) ids.push(months[index + 1].id);
+  await Promise.all(ids.map((id) => fetchMonth(id).catch(() => null)));
+  if (state.monthId !== focus) return;
+  const next = index >= 0 && index < months.length - 1 ? months[index + 1].id : "";
+  if (next && monthStore.has(next)) {
+    state.nextInvoices = monthStore.get(next);
+    state.nextInvoicesFor = focus;
+    state.nextInvoicesLoading = "";
   }
 }
 
@@ -211,7 +201,7 @@ function rememberMonth(data) {
   } catch {
     sessionStorage.removeItem("monthCache:v1");
   }
-  preloadAround(data);
+  void preloadAround(data);
 }
 
 function readMonthCache(monthId) {
@@ -246,7 +236,7 @@ function render() {
   const keepPlace = state.viewKey === viewKey;
   root.replaceChildren();
   root.removeAttribute("aria-busy");
-  if (state.booting && !state.data) {
+  if (state.booting) {
     root.append(bootMark());
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     syncOverlayHistory();
@@ -741,8 +731,8 @@ async function openBudget() {
   if (cached) {
     state.data = cached;
     state.monthId = cached.month.id;
-    state.booting = false;
-    render();
+    storeMonth(cached);
+    void preloadAround(cached);
   }
   await loadMonth(state.monthId);
 }
