@@ -633,10 +633,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   margin-top: 12px;
 }
 
-.cost-split div {
+.cost-split button {
   background: white;
+  border: 0;
   border-radius: 12px;
   padding: 12px 14px;
+  text-align: left;
+  width: 100%;
 }
 
 .cost-split .wide { grid-column: 1 / -1; }
@@ -724,7 +727,7 @@ html[data-theme="dark"] .toggle,
 html[data-theme="dark"] .check.off,
 html[data-theme="dark"] .linkish.back,
 html[data-theme="dark"] .menu,
-html[data-theme="dark"] .cost-split div {
+html[data-theme="dark"] .cost-split button {
   background: var(--card);
 }
 
@@ -1072,6 +1075,22 @@ html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
 .dialog h2 { margin: 0 0 8px; font-size: 20px; }
 
 .dialog p { margin: 0 0 16px; line-height: 1.45; }
+
+.dialog .money { font-size: 28px; margin: 0 0 14px; }
+
+.breakdown {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border: 1px solid var(--line);
+  background: var(--card);
+  border-radius: 12px;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.breakdown .item-copy { flex: 1; min-width: 0; }
 
 .dialog .actions .primary,
 .dialog .actions .secondary {

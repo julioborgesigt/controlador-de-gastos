@@ -283,8 +283,9 @@ function render() {
   if (nextSheet) nextSheet.scrollTop = sheetScroll;
   if (state.expenseInfo) root.append(expenseInfoDialog());
   if (state.help) root.append(helpDialog());
+  if (state.costDetail) root.append(costDetailDialog());
   if (state.confirm) root.append(confirmDialog());
-  if (state.sheet || state.confirm || state.expenseInfo || state.help) lockPage(keepPlace ? lockedScroll : 0);
+  if (state.sheet || state.confirm || state.expenseInfo || state.help || state.costDetail) lockPage(keepPlace ? lockedScroll : 0);
   else unlockPage(keepPlace ? lockedScroll : 0);
   state.viewKey = viewKey;
   if (keepPlace && onDesktop()) {
@@ -296,7 +297,7 @@ function render() {
 }
 
 function overlayIsOpen() {
-  return Boolean(state.sheet || state.confirm || state.accountMenu || state.expenseInfo || state.help);
+  return Boolean(state.sheet || state.confirm || state.accountMenu || state.expenseInfo || state.help || state.costDetail);
 }
 
 function syncOverlayHistory() {
@@ -327,6 +328,7 @@ function leavePage() {
   state.confirm = null;
   state.expenseInfo = null;
   state.help = null;
+  state.costDetail = null;
   state.sheet = null;
   state.accountMenu = false;
   overlayPushed = false;
@@ -341,6 +343,7 @@ window.addEventListener("popstate", () => {
     state.confirm = null;
     state.expenseInfo = null;
     state.help = null;
+    state.costDetail = null;
     state.sheet = null;
     state.accountMenu = false;
     render();
@@ -353,6 +356,7 @@ window.addEventListener("popstate", () => {
   if (overlayPushed) {
     overlayPushed = false;
     if (state.confirm) state.confirm = null;
+    else if (state.costDetail) state.costDetail = null;
     else if (state.help) state.help = null;
     else if (state.expenseInfo) state.expenseInfo = null;
     else if (state.accountMenu) state.accountMenu = false;
@@ -439,6 +443,7 @@ function blockBackgroundKeys(event) {
   if (event.key === "Escape") {
     event.preventDefault();
     if (state.confirm) closeConfirm();
+    else if (state.costDetail) closeCostDetail();
     else if (state.expenseInfo) closeExpenseInfo();
     else if (state.sheet) closeSheet();
     return;
@@ -3293,8 +3298,16 @@ function blurb(section, totals) {
   return "Imprevistos deste mês, fora da projeção.";
 }
 
-function costCard(label, cents, wide = false) {
-  return el("div", { class: wide ? "wide" : "" }, [
+function costCard(key, label, cents, wide = false) {
+  return el("button", {
+    type: "button",
+    class: wide ? "wide" : "",
+    "aria-label": `Ver o detalhamento de ${label}`,
+    onclick: () => {
+      state.costDetail = key;
+      render();
+    },
+  }, [
     el("small", {}, label),
     el("strong", {}, money(cents)),
   ]);
@@ -3303,13 +3316,120 @@ function costCard(label, cents, wide = false) {
 function costSplit(totals) {
   const paidMonth = (totals.fixedOnCardCents || 0) + (totals.fixedPixPaidCents || 0);
   return el("div", { class: "cost-split" }, [
-    costCard("Previsto", totals.fixedForecastCents, true),
-    costCard("Já pago no mês", paidMonth, true),
-    costCard("Pago no cartão", totals.fixedOnCardCents),
-    costCard("Pago no Pix", totals.fixedPixPaidCents),
-    costCard("Falta no cartão", totals.fixedCardDueCents || 0),
-    costCard("Falta no Pix", totals.fixedPixForecastCents),
+    costCard("previsto", "Previsto", totals.fixedForecastCents, true),
+    costCard("pago", "Já pago no mês", paidMonth, true),
+    costCard("cartao", "Pago no cartão", totals.fixedOnCardCents),
+    costCard("pix", "Pago no Pix", totals.fixedPixPaidCents),
+    costCard("falta-cartao", "Falta no cartão", totals.fixedCardDueCents || 0),
+    costCard("falta-pix", "Falta no Pix", totals.fixedPixForecastCents),
   ]);
+}
+
+function costPortions(expense) {
+  const partials = expense.partials || [];
+  const cardPaid = partials.filter((item) => item.payment === "card").reduce((sum, item) => sum + item.amountCents, 0);
+  const pixPaid = partials.filter((item) => item.payment !== "card").reduce((sum, item) => sum + item.amountCents, 0);
+  const onCard = expense.onCard;
+  let pagoCartao = 0;
+  let pagoPix = 0;
+  if (onCard) pagoCartao = expense.amountCents;
+  else if (partials.length) {
+    pagoCartao = cardPaid;
+    pagoPix = pixPaid;
+  } else if (expense.paid && expense.payment === "pix") pagoPix = expense.amountCents;
+  const spent = partials.reduce((sum, item) => sum + item.amountCents, 0);
+  const left = !expense.paid && !onCard ? Math.max(0, expense.amountCents - spent) : 0;
+  return {
+    previsto: expense.amountCents,
+    pagoCartao,
+    pagoPix,
+    faltaCartao: expense.payment === "card" ? left : 0,
+    faltaPix: expense.payment === "card" ? 0 : left,
+  };
+}
+
+function costPortionAmount(parts, key) {
+  if (key === "previsto") return parts.previsto;
+  if (key === "pago") return parts.pagoCartao + parts.pagoPix;
+  if (key === "cartao") return parts.pagoCartao;
+  if (key === "pix") return parts.pagoPix;
+  if (key === "falta-cartao") return parts.faltaCartao;
+  return parts.faltaPix;
+}
+
+function costDetailCopy(key) {
+  if (key === "previsto") return ["Previsto", "Soma do que está cadastrado em Custo de vida neste mês."];
+  if (key === "pago") return ["Já pago no mês", "O que já foi pago no Pix ou lançado no cartão."];
+  if (key === "cartao") return ["Pago no cartão", "Valores deste mês que já entraram numa fatura."];
+  if (key === "pix") return ["Pago no Pix", "Valores deste mês já pagos no Pix."];
+  if (key === "falta-cartao") return ["Falta no cartão", "O que ainda será pago no crédito."];
+  return ["Falta no Pix", "O que ainda será pago no Pix."];
+}
+
+function costDetailRows(key) {
+  const rows = (state.data?.expenses || [])
+    .filter((expense) => expense.section === "fixed")
+    .map((expense) => ({ expense, parts: costPortions(expense) }))
+    .map((row) => ({ ...row, amount: costPortionAmount(row.parts, key) }))
+    .filter((row) => row.amount > 0);
+  rows.sort((left, right) => left.expense.name.localeCompare(right.expense.name, "pt-BR", { sensitivity: "base" }));
+  return rows;
+}
+
+function costDetailNote(row, key) {
+  if (key === "pago" && row.parts.pagoCartao && row.parts.pagoPix) {
+    return `No cartão ${money(row.parts.pagoCartao)} · no Pix ${money(row.parts.pagoPix)}`;
+  }
+  if (key === "cartao" || (key === "pago" && row.parts.pagoCartao)) return row.expense.cardLabel ? `Crédito ${row.expense.cardLabel}` : "Crédito";
+  if (key === "pix" || (key === "pago" && row.parts.pagoPix)) return "Pix";
+  if (key === "falta-cartao") return "Ainda no crédito";
+  if (key === "falta-pix") return "Ainda no Pix";
+  return row.expense.payment === "card" ? "Previsto no crédito" : "Previsto no Pix";
+}
+
+function closeCostDetail() {
+  state.costDetail = null;
+  render();
+}
+
+function costDetailDialog() {
+  const key = state.costDetail;
+  const [title, lede] = costDetailCopy(key);
+  const rows = costDetailRows(key);
+  const total = rows.reduce((sum, row) => sum + row.amount, 0);
+  const overlay = el("div", {
+    class: "overlay center",
+    role: "presentation",
+    onclick: (event) => {
+      if (event.target === overlay) closeCostDetail();
+    },
+  }, [
+    el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-label": title }, [
+      el("h2", {}, title),
+      el("p", { class: "muted" }, lede),
+      el("p", { class: "money" }, money(total)),
+      rows.length
+        ? el("div", { class: "list" }, rows.map((row) => el("button", {
+          type: "button",
+          class: "breakdown",
+          onclick: () => {
+            state.costDetail = null;
+            openExpenseInfo(row.expense, "fixed");
+          },
+        }, [
+          el("div", { class: "item-copy" }, [
+            el("strong", {}, row.expense.name),
+            el("small", {}, costDetailNote(row, key)),
+          ]),
+          el("span", { class: "amount" }, money(row.amount)),
+        ])))
+        : el("p", {}, "Nenhum custo neste grupo."),
+      el("div", { class: "actions" }, [
+        el("button", { class: "primary", type: "button", onclick: closeCostDetail }, "Fechar"),
+      ]),
+    ]),
+  ]);
+  return overlay;
 }
 
 function isPlannedNote(note) {
