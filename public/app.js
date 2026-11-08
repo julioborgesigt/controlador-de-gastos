@@ -133,18 +133,18 @@ async function loadMonth(monthId) {
   if (!id) throw new Error("Defina o período para abrir o mês.");
   let data;
   try {
-    data = await request(`/api/months/${id}`);
+    data = await fetchMonth(id);
   } catch (error) {
     if (error.status !== 404) throw error;
     const period = await request("/api/period").catch(() => null);
     const fallback = period?.startMonthId && period.startMonthId !== id ? period.startMonthId : "";
     if (!fallback) throw error;
-    data = await request(`/api/months/${fallback}`);
+    data = await fetchMonth(fallback);
   }
   if (!monthId && !sessionStorage.getItem("monthId")) {
     const today = currentMonthId();
     if (today !== data.month.id && data.months.some((month) => month.id === today)) {
-      data = await request(`/api/months/${today}`);
+      data = await fetchMonth(today);
     }
   }
   state.data = data;
@@ -154,14 +154,64 @@ async function loadMonth(monthId) {
   rememberMonth(data);
 }
 
+const monthStore = new Map();
+const monthLoads = new Map();
+
+function storeMonth(data) {
+  if (!data?.month?.id) return;
+  monthStore.set(data.month.id, data);
+}
+
+function neighborMonthIds(data) {
+  const months = data?.months || [];
+  const index = months.findIndex((month) => month.id === data.month.id);
+  if (index < 0) return [];
+  const ids = [];
+  if (index > 0) ids.push(months[index - 1].id);
+  if (index < months.length - 1) ids.push(months[index + 1].id);
+  return ids;
+}
+
+function fetchMonth(monthId) {
+  const current = monthLoads.get(monthId);
+  if (current) return current;
+  const pending = request(`/api/months/${monthId}`).then((data) => {
+    storeMonth(data);
+    return data;
+  }).finally(() => {
+    if (monthLoads.get(monthId) === pending) monthLoads.delete(monthId);
+  });
+  monthLoads.set(monthId, pending);
+  return pending;
+}
+
+function preloadAround(data) {
+  const focus = data?.month?.id;
+  if (!focus) return;
+  const ids = neighborMonthIds(data);
+  for (const id of ids) {
+    fetchMonth(id).then(() => {
+      if (state.monthId !== focus) return;
+      const next = ids.find((item) => item > focus);
+      if (!next || !monthStore.has(next)) return;
+      state.nextInvoices = monthStore.get(next);
+      state.nextInvoicesFor = focus;
+      state.nextInvoicesLoading = "";
+      renderSafely();
+    }).catch(() => {});
+  }
+}
+
 function rememberMonth(data) {
   state.nextInvoicesFor = "";
   state.nextInvoices = null;
+  storeMonth(data);
   try {
     sessionStorage.setItem("monthCache:v1", JSON.stringify({ data }));
   } catch {
     sessionStorage.removeItem("monthCache:v1");
   }
+  preloadAround(data);
 }
 
 function readMonthCache(monthId) {
@@ -177,6 +227,7 @@ function readMonthCache(monthId) {
 }
 
 function clearMonthCache() {
+  monthStore.clear();
   sessionStorage.removeItem("monthCache:v1");
 }
 
@@ -915,7 +966,28 @@ function monthChip(month) {
 }
 
 async function changeMonth(monthId) {
-  if (monthId === state.monthId || state.busy) return;
+  if (monthId === state.monthId) return;
+  const cached = monthStore.get(monthId);
+  if (cached) {
+    state.error = "";
+    state.showEmpty = false;
+    state.data = cached;
+    state.monthId = cached.month.id;
+    if (cached.theme) applyTheme(cached.theme);
+    try { sessionStorage.setItem("monthId", cached.month.id); } catch { /* o mês segue só nesta aba */ }
+    rememberMonth(cached);
+    render();
+    fetchMonth(monthId).then((data) => {
+      if (state.monthId !== monthId) return;
+      state.data = data;
+      state.monthId = data.month.id;
+      if (data.theme) applyTheme(data.theme);
+      rememberMonth(data);
+      renderSafely();
+    }).catch(() => {});
+    return;
+  }
+  if (state.busy) return;
   state.error = "";
   setWorking(true, "Abrindo...");
   try {
@@ -2027,9 +2099,15 @@ function ensureNextInvoices(monthId) {
     state.nextInvoices = null;
     return;
   }
+  if (monthStore.has(next)) {
+    state.nextInvoices = monthStore.get(next);
+    state.nextInvoicesFor = monthId;
+    state.nextInvoicesLoading = "";
+    return;
+  }
   if (state.nextInvoicesLoading === monthId || state.nextInvoicesFor === monthId) return;
   state.nextInvoicesLoading = monthId;
-  request(`/api/months/${next}`).then((payload) => {
+  fetchMonth(next).then((payload) => {
     if (state.monthId !== monthId) return;
     state.nextInvoices = payload;
     state.nextInvoicesFor = monthId;
