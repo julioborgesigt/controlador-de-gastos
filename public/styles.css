@@ -837,6 +837,10 @@ body.sheet-open {
 
 .field { margin-bottom: 14px; }
 
+.link-status { min-height: 3em; }
+
+select:disabled { opacity: 0.72; }
+
 .pair {
   display: grid;
   grid-template-columns: 1fr 1fr;
