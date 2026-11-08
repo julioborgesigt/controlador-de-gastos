@@ -3545,6 +3545,10 @@ function openCardExpense(cardName = "") {
     invoiceMonthId: state.monthId,
     invoiceTouched: false,
     linkExpenseId: "",
+    billing: "once",
+    installmentCount: "2",
+    installmentsPaid: "0",
+    amountMode: "installment",
   };
   applyInvoiceSuggestion(state.sheet, card);
   state.error = "";
@@ -3679,10 +3683,29 @@ function cardSpendFields(draft) {
   ]);
   link.value = draft.linkExpenseId || "";
   link.addEventListener("change", () => { draft.linkExpenseId = link.value; });
+  const parcelado = draft.billing === "installments";
+  const amountName = parcelado && draft.amountMode === "total" ? "Valor da compra" : parcelado ? "Valor da parcela" : "Valor";
   return [
     el("h2", {}, "Gasto no crédito"),
     field("Nome", "name", draft.name, "text"),
-    field("Valor", "amount", draft.amount, "decimal"),
+    field(amountName, "amount", draft.amount, "decimal"),
+    el("div", { class: "field" }, [
+      el("label", {}, "Parcelamento"),
+      segmented("billing", [["once", "À vista"], ["installments", "Parcelado"]], parcelado ? "installments" : "once"),
+    ]),
+    parcelado
+      ? el("div", { class: "pair" }, [
+        field("Quantidade de parcelas", "installmentCount", draft.installmentCount || "2", "numeric"),
+        field("Parcelas já pagas", "installmentsPaid", draft.installmentsPaid || "0", "numeric"),
+      ])
+      : "",
+    parcelado
+      ? el("div", { class: "field" }, [
+        el("label", {}, "O valor informado é"),
+        segmented("amountMode", [["installment", "Da parcela"], ["total", "Da compra toda"]], draft.amountMode === "total" ? "total" : "installment"),
+      ])
+      : "",
+    parcelado ? el("p", { class: "muted", id: "installment-preview" }, installmentPreview(draft)) : "",
     cardSelect(draft),
     el("div", { class: "field" }, [
       el("label", {}, "Classificação"),
@@ -4865,6 +4888,11 @@ function segmented(key, options, current) {
         const kind = key === "costKind" ? value : state.sheet.costKind;
         state.sheet.span = payment === "card" && kind !== "variavel" ? "month" : "all";
       }
+      if (key === "billing" && value === "installments" && state.sheet.mode === "card-spend") {
+        if (Number(state.sheet.installmentCount) < 2) state.sheet.installmentCount = "2";
+        if (state.sheet.installmentsPaid == null || state.sheet.installmentsPaid === "") state.sheet.installmentsPaid = "0";
+        if (!state.sheet.amountMode) state.sheet.amountMode = "installment";
+      }
       if (key === "payment" && value === "card") {
         state.sheet.onCard = state.sheet.section === "fixed" && state.sheet.mode !== "create";
         if (!state.sheet.cardLabel) state.sheet.cardLabel = firstCardName();
@@ -5183,6 +5211,16 @@ async function saveSheet(event) {
       if (!(state.data?.months || []).some((month) => month.id === draft.invoiceMonthId)) {
         throw new Error("Essa fatura está fora do período. Aumente o período ou escolha outro mês.");
       }
+      const parcelado = draft.billing === "installments";
+      const installmentCount = parcelado ? Number(draft.installmentCount) : 1;
+      const installmentsPaid = parcelado ? Number(draft.installmentsPaid) : 0;
+      const amountMode = parcelado && draft.amountMode === "total" ? "total" : "installment";
+      if (parcelado && (!Number.isInteger(installmentCount) || installmentCount < 2 || installmentCount > 48 || !Number.isInteger(installmentsPaid) || installmentsPaid < 0 || installmentsPaid >= installmentCount)) {
+        throw new Error("Informe de 2 a 48 parcelas. As já pagas precisam ser menores que o total.");
+      }
+      if (parcelado && amountMode === "total" && Math.floor(amountCents / installmentCount) <= 0) {
+        throw new Error("O valor total não cobre todas as parcelas.");
+      }
       setWorking(true, "Lançando...");
       state.data = await request("/api/card-spend", {
         method: "POST",
@@ -5194,6 +5232,9 @@ async function saveSheet(event) {
           invoiceMonthId: draft.invoiceMonthId,
           purchaseDate: draft.purchaseDate,
           linkExpenseId: draft.expenseKind === "casa" ? draft.linkExpenseId : "",
+          installmentCount,
+          installmentsPaid,
+          amountMode: parcelado ? amountMode : "total",
         },
       });
       if (state.data?.month?.id) {
@@ -5203,9 +5244,12 @@ async function saveSheet(event) {
       rememberMonth(state.data);
       const invoice = monthName(draft.invoiceMonthId);
       const place = draft.expenseKind === "casa" ? "Custo de vida" : draft.expenseKind === "planejado" ? "Planejado" : "Imprevisto";
-      state.notice = draft.expenseKind === "casa" && draft.linkExpenseId
-        ? "Vinculei ao custo de vida. O previsto continua e o valor já gasto foi atualizado."
-        : `Lancei em ${place}, na fatura de ${invoice}.`;
+      const remaining = installmentCount - installmentsPaid;
+      state.notice = remaining > 1
+        ? `Lancei ${remaining} parcelas a partir da fatura de ${invoice}.`
+        : draft.expenseKind === "casa" && draft.linkExpenseId
+          ? "Vinculei ao custo de vida. O previsto continua e o valor já gasto foi atualizado."
+          : `Lancei em ${place}, na fatura de ${invoice}.`;
     } else if (draft.mode === "card") {
       if (!draft.name.trim()) throw new Error("Dê um apelido ao cartão.");
       const dueDay = cardDueDay(draft.dueDay);

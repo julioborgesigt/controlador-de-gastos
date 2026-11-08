@@ -963,6 +963,8 @@ export async function addLivingCardPartial(
     invoiceMonthId: string;
     name: string;
     purchaseDate?: string | null;
+    mode?: "installment" | "total";
+    paidCount?: number;
   },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const expense = await getExpense(db, input.ownerId, input.expenseId);
@@ -970,18 +972,21 @@ export async function addLivingCardPartial(
   if (expense.onCard) return { ok: false, error: "Esta conta já foi inteira para o cartão." };
   if (expense.paid) return { ok: false, error: "Esta despesa já foi encerrada." };
   const count = input.installmentCount;
+  const paidCount = input.paidCount ?? 0;
+  const mode = input.mode === "installment" ? "installment" : "total";
   const known = await listMonths(db, input.ownerId);
   const plan = planCardPurchase({
     startMonthId: input.invoiceMonthId,
     totalCount: count,
-    paidCount: 0,
+    paidCount,
     amountCents: input.amountCents,
-    mode: "total",
+    mode,
   });
   if (!plan.ok) return plan;
   if (plan.plan.schedule.some((part) => !known.some((month) => month.id === part.monthId))) {
     return { ok: false, error: "O parcelamento passa do período gerenciado. Aumente o período ou reduza as parcelas." };
   }
+  const charged = plan.plan.schedule.reduce((sum, part) => sum + part.amountCents, 0);
   if (expense.payment === "card" && !isVariableCost(expense.note)) {
     await db
       .prepare("UPDATE expenses SET payment = 'pix', on_card = 0, card_label = NULL, paid = 0 WHERE owner_id = ? AND id = ?")
@@ -991,7 +996,7 @@ export async function addLivingCardPartial(
   const partialId = await insertPartialPayment(db, {
     ownerId: input.ownerId,
     expenseId: expense.id,
-    amountCents: input.amountCents,
+    amountCents: charged,
     payment: "card",
     cardLabel: input.cardLabel,
     installment: count > 1 ? `${count} parcelas` : null,
@@ -1008,9 +1013,9 @@ export async function addLivingCardPartial(
       referenceMonthId: expense.monthId,
     }), seriesIdFromNote(expense.note)),
     totalCount: count,
-    paidCount: 0,
+    paidCount,
     amountCents: input.amountCents,
-    mode: "total",
+    mode,
   });
   if (!created.ok) {
     await deletePartialPayment(db, input.ownerId, expense.id, partialId);
@@ -1904,6 +1909,7 @@ export async function payRecurringOnCard(
     alias: string;
     amountCents: number;
     totalCount: number;
+    paidCount?: number;
     startMonthId?: string;
     mode?: "installment" | "total";
     purchaseDate?: string | null;
@@ -1916,10 +1922,11 @@ export async function payRecurringOnCard(
   if (!alias) return { ok: false, error: "Escolha o apelido que vai aparecer na fatura." };
   const startMonthId = input.startMonthId || expense.monthId;
   const mode = input.mode === "total" ? "total" : "installment";
+  const paidCount = input.paidCount ?? 0;
   const plan = planCardPurchase({
     startMonthId,
     totalCount: input.totalCount,
-    paidCount: 0,
+    paidCount,
     amountCents: input.amountCents,
     mode,
   });
@@ -1941,7 +1948,7 @@ export async function payRecurringOnCard(
       referenceMonthId: expense.monthId,
     }), seriesIdFromNote(expense.note)),
     totalCount: input.totalCount,
-    paidCount: 0,
+    paidCount,
     amountCents: input.amountCents,
     mode,
   });
@@ -2042,6 +2049,7 @@ export async function payLivingSeriesOnCard(
     alias: string;
     amountCents: number;
     totalCount: number;
+    paidCount?: number;
     startMonthId?: string;
     mode?: "installment" | "total";
     purchaseDate?: string | null;
@@ -2081,6 +2089,7 @@ export async function payLivingSeriesOnCard(
       alias: own ? row.name : input.alias,
       amountCents: amount,
       totalCount: own ? 1 : input.totalCount,
+      paidCount: own ? 0 : input.paidCount,
       startMonthId: own ? row.monthId : input.startMonthId || row.monthId,
       mode: own ? "installment" : input.mode,
       purchaseDate: own ? "" : input.purchaseDate,
