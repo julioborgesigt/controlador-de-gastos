@@ -1794,7 +1794,7 @@ function cashHome(data) {
       ? el("div", { class: "list" }, entries.map((entry) => el("article", { class: "item" }, [
         el("div", { class: "item-copy" }, [
           el("strong", {}, entry.name),
-          el("small", {}, [historyWhen(entry.at), entry.kind, "Pix"].filter(Boolean).join(" · ")),
+          ...[historyWhen(entry.at), entry.kind, "Pix"].filter(Boolean).map((line) => el("small", {}, line)),
         ]),
         el("span", { class: "amount" }, money(entry.amountCents)),
       ])))
@@ -1941,7 +1941,7 @@ function purchaseDetail(data) {
     children.push(el("div", { class: "list" }, group.rows.map((item) => el("article", { class: "item" }, [
       el("div", { class: "item-copy" }, [
         el("strong", {}, cardChargeTitle(item)),
-        el("small", {}, [item.cardLabel || "Sem cartão", cardSourceLabel(item) || "Crédito"].filter(Boolean).join(" · ")),
+        ...[item.cardLabel || "Sem cartão", cardSourceLabel(item) || "Crédito"].filter(Boolean).map((line) => el("small", {}, line)),
       ]),
       el("span", { class: "amount" }, money(item.amountCents)),
     ]))));
@@ -3063,10 +3063,10 @@ function expenseRow(expense, section, options = {}) {
   if (expense.payment !== "card" || onInvoice) meta.push(paymentLabel(expense.payment));
   if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Crédito ${expense.cardLabel}` : "Crédito");
   if (section === "fixed" && isVariableNote(expense.note)) meta.push("Variável");
-  if (expense.section === "fixed") meta.push(livingBalanceLine(expense));
+  if (expense.section === "fixed") meta.push(...livingBalanceLines(expense));
   if (expense.installment) meta.push(expense.installment);
   const partials = expense.partials || [];
-  if (section === "fixed" && !onInvoice && partials.length) meta.push(partialSummary(expense));
+  if (section === "fixed" && !onInvoice && partials.length) meta.push(...partialSummaryLines(expense));
   const edit = () => {
     if (editable()) openEdit(expense, { cardExpense: lockedCard, fromCard: section === "card" && !systemCardLine(expense) });
   };
@@ -3093,7 +3093,7 @@ function expenseRow(expense, section, options = {}) {
     el("div", { class: "item-copy" }, [
       el("button", { type: "button", class: "item-main", onclick: () => openExpenseInfo(expense, section) }, [
         el("strong", {}, section === "card" ? cardChargeTitle(expense) : expense.name),
-        el("small", {}, meta.filter(Boolean).join(" · ")),
+        ...meta.filter(Boolean).map((line) => el("small", {}, line)),
       ]),
       onInvoice && section === "card" ? el("span", { class: "badge" }, "Já contabilizado, não soma de novo") : "",
       expense.section === "extra" && expense.payment !== "card" ? el("span", { class: "badge pix" }, paymentLabel(expense.payment)) : "",
@@ -3455,18 +3455,16 @@ function cardSpendFields(draft) {
   ];
 }
 
-function livingBalanceLine(expense) {
+function livingBalanceLines(expense) {
   const balance = livingBalance(expense);
-  const spent = [];
-  if (balance.pix) spent.push(`Pix ${money(balance.pix)}`);
-  if (balance.credit) spent.push(`Crédito ${money(balance.credit)}`);
-  const spentLabel = spent.length ? spent.join(" · ") : money(0);
-  const rest = balance.over > 0
-    ? `Passou ${money(balance.over)}`
-    : expense.payment === "card"
-      ? `Falta no cartão ${money(balance.remaining)}`
-      : `Falta no Pix ${money(balance.remaining)}`;
-  return `Previsto ${money(balance.forecast)} · Já gasto ${spentLabel} · ${rest}`;
+  const lines = [`Previsto ${money(balance.forecast)}`];
+  if (balance.pix) lines.push(`Já gasto no Pix ${money(balance.pix)}`);
+  if (balance.credit) lines.push(`Já gasto no crédito ${money(balance.credit)}`);
+  if (!balance.pix && !balance.credit) lines.push(`Já gasto ${money(0)}`);
+  if (balance.over > 0) lines.push(`Passou ${money(balance.over)}`);
+  else if (expense.payment === "card") lines.push(`Falta no cartão ${money(balance.remaining)}`);
+  else lines.push(`Falta no Pix ${money(balance.remaining)}`);
+  return lines;
 }
 
 function cardPartialCents(expense) {
@@ -3475,7 +3473,7 @@ function cardPartialCents(expense) {
     .reduce((sum, item) => sum + item.amountCents, 0);
 }
 
-function partialSummary(expense) {
+function partialSummaryLines(expense) {
   const partials = expense.partials || [];
   const paid = partials.reduce((sum, item) => sum + item.amountCents, 0);
   const card = cardPartialCents(expense);
@@ -3484,15 +3482,14 @@ function partialSummary(expense) {
     const bits = [`No cartão ${money(card)}`];
     const other = paid - card;
     if (other > 0) bits.push(`Pago ${money(other)}`);
-    if (!expense.paid && left > 0) bits.push(`falta ${money(left)}`);
-    else if (!expense.paid && left < 0) bits.push(`passou ${money(-left)}`);
-    bits.push(`previsto ${money(expense.amountCents)}`);
-    return bits.join(" · ");
+    if (!expense.paid && left > 0) bits.push(`Falta ${money(left)}`);
+    else if (!expense.paid && left < 0) bits.push(`Passou ${money(-left)}`);
+    return bits;
   }
-  if (!expense.paid && left > 0) return `Pago ${money(paid)} · falta ${money(left)}`;
-  if (!expense.paid && left < 0) return `Pago ${money(paid)} · passou ${money(-left)}`;
+  if (!expense.paid && left > 0) return [`Pago ${money(paid)}`, `Falta ${money(left)}`];
+  if (!expense.paid && left < 0) return [`Pago ${money(paid)}`, `Passou ${money(-left)}`];
   const count = `${partials.length} ${partials.length === 1 ? "pagamento" : "pagamentos"}`;
-  return `Pago ${money(paid)} em ${count}`;
+  return [`Pago ${money(paid)} em ${count}`];
 }
 
 function livingChargeIsFull(planned, already, charged) {
@@ -3715,7 +3712,7 @@ function expenseInfoDialog() {
     const card = info.cardName ? ` no cartão ${info.cardName}` : " no cartão";
     lines.push(`Este valor foi lançado${card}. Ele aparece nesta aba como um demonstrativo, para o seu controle. Não soma duas vezes: a cobrança entra só na fatura do cartão.`);
   } else {
-    lines.push([info.payment, info.status, info.installment].filter(Boolean).join(" · "));
+    lines.push(...[info.payment, info.status, info.installment].filter(Boolean));
   }
   if (info.note) lines.push(info.note);
   const tail = [];
