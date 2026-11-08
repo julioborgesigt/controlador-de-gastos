@@ -335,6 +335,47 @@ test("gasto extra no cartão aumenta a fatura e o extra no Pix fica fora dela", 
   assert.equal(totals.commitmentsCents, 213266 + 8000 + 4500);
 });
 
+test("imprevisto de novembro lançado na fatura de dezembro não entra na fatura de novembro", () => {
+  const totals = computeTotals([
+    {
+      id: "nov-extra",
+      monthId: "2026-11",
+      name: "Conserto",
+      section: "extra",
+      amountCents: 5000,
+      payment: "card",
+      onCard: false,
+      cardLabel: "Nubank",
+      paid: false,
+      note: "tipo:imprevisto\nfatura:2026-12\nref:2026-11",
+      installment: null,
+      sortOrder: 1,
+      source: "user",
+    },
+  ], 0);
+  assert.equal(totals.faturaCents, 0);
+  assert.equal(totals.remainingCents, 0);
+  const december = computeTotals([
+    {
+      id: "dez-card",
+      monthId: "2026-12",
+      name: "Conserto",
+      section: "card",
+      amountCents: 5000,
+      payment: "card",
+      onCard: false,
+      cardLabel: "Nubank",
+      paid: false,
+      note: "tipo:imprevisto\norigem:nov-extra",
+      installment: null,
+      sortOrder: 1,
+      source: "user",
+    },
+  ], 0);
+  assert.equal(december.faturaCents, 5000);
+  assert.equal(december.remainingCents, 5000);
+});
+
 test("normaliza pagamento para não somar gasto fixo duas vezes", () => {
   const fixed = normalizeExpense({ section: "fixed", payment: "pix", onCard: true, cardLabel: " Neon " });
   assert.deepEqual(fixed, { section: "fixed", payment: "card", onCard: true, cardLabel: "Neon" });

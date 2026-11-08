@@ -658,7 +658,7 @@ app.post("/api/card-spend", async (c) => {
   const scheduledCents = plan?.ok
     ? plan.plan.schedule.reduce((sum, part) => sum + part.amountCents, 0)
     : body.amountCents;
-  const costMonthId = kind === "casa" && isMonthId(body.costMonthId) ? body.costMonthId : "";
+  const costMonthId = isMonthId(body.costMonthId) ? body.costMonthId : "";
   if (costMonthId && !(await getMonth(c.env.DB, writer.scope.ownerId, costMonthId))) {
     return c.json({ error: "Escolha o mês do custo de vida." }, 400);
   }
@@ -718,10 +718,49 @@ app.post("/api/card-spend", async (c) => {
     if (!paid.ok) return c.json({ error: paid.error }, 400);
     return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, livingMonthId), writer.scope), 201);
   }
-  const chargeNote = noteWithChargeContext(kind === "planejado" ? noteWithPlanned("", true) : "", {
+  const occurrenceMonthId = costMonthId || body.invoiceMonthId;
+  const trackNote = kind === "planejado" ? "tipo:planejado" : "tipo:imprevisto";
+  const chargeNote = noteWithChargeContext(kind === "planejado" ? noteWithPlanned("", true) : trackNote, {
     purchaseDate,
-    referenceMonthId: purchaseDate.slice(0, 7),
+    referenceMonthId: occurrenceMonthId,
   });
+  if (occurrenceMonthId !== body.invoiceMonthId) {
+    const listed = await insertRepeatedExpenses(c.env.DB, {
+      ownerId: writer.scope.ownerId,
+      monthIds: [occurrenceMonthId],
+      name,
+      section: "extra",
+      amountCents: scheduledCents,
+      payment: "card",
+      onCard: false,
+      cardLabel: card.cardLabel,
+      paid: false,
+      note: [trackNote, `fatura:${body.invoiceMonthId}`, `ref:${occurrenceMonthId}`].join("\n"),
+      installment: null,
+      livingCard: false,
+    });
+    if (!listed.ok) return c.json({ error: listed.error }, 400);
+    const anchor = listed.rows[0];
+    if (!anchor) return c.json({ error: "Mês não encontrado." }, 404);
+    const created = await insertCardPurchase(c.env.DB, {
+      ownerId: writer.scope.ownerId,
+      startMonthId: body.invoiceMonthId,
+      name,
+      section: "card",
+      payment: "card",
+      cardLabel: card.cardLabel,
+      note: noteWithChargeContext(`${trackNote}\norigem:${anchor.id}`, {
+        purchaseDate,
+        referenceMonthId: occurrenceMonthId,
+      }),
+      totalCount: installment.totalCount,
+      paidCount: installment.paidCount,
+      amountCents: body.amountCents,
+      mode: installment.mode,
+    });
+    if (!created.ok) return c.json({ error: created.error }, 400);
+    return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, occurrenceMonthId), writer.scope), 201);
+  }
   if (installment.totalCount > 1) {
     const created = await insertCardPurchase(c.env.DB, {
       ownerId: writer.scope.ownerId,

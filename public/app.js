@@ -1049,6 +1049,17 @@ function helpDialog() {
   return overlay;
 }
 
+function extraSplit(expenses) {
+  let card = 0;
+  let pix = 0;
+  for (const expense of expenses || []) {
+    if (expense.section !== "extra") continue;
+    if (expense.payment === "card") card += expense.amountCents;
+    else pix += expense.amountCents;
+  }
+  return { card, pix, total: card + pix };
+}
+
 function summary(data) {
   const { month, totals } = data;
   return el("section", {}, [
@@ -1086,7 +1097,7 @@ function summary(data) {
       ? `${money(totals.invoiceCents)} previstos + ${money(totals.extrasCardCents)} em imprevistos`
       : "Nubank, Neon e linhas da fatura"),
     livingJump(totals),
-    jump("extras", "Outros gastos", money(totals.extrasCardCents + totals.extrasPixCents), `${money(totals.extrasPixCents)} fora do cartão · ${money(totals.extrasCardCents)} no cartão`),
+    jump("extras", "Outros gastos", money(extraSplit(data.expenses).total), `${money(extraSplit(data.expenses).pix)} fora do cartão · ${money(extraSplit(data.expenses).card)} no cartão`),
     editable() && totals.launchedRemainingCents > 0
       ? el("button", { class: "primary", type: "button", onclick: () => askConfirm("settle") }, "Quitar o que falta")
       : editable() && month.settled
@@ -2672,8 +2683,19 @@ function cardMirror(expense, section) {
   return section === "extra" && expense.section === "extra" && expense.payment === "card";
 }
 
+function chargedInvoiceMonth(note) {
+  const line = String(note || "").split("\n").map((item) => item.trim()).find((item) => /^fatura:\d{4}-\d{2}$/.test(item));
+  return line ? line.slice("fatura:".length) : "";
+}
+
+function extraOnOwnInvoice(expense) {
+  if (expense.section !== "extra" || expense.payment !== "card") return false;
+  const invoice = chargedInvoiceMonth(expense.note);
+  return !invoice || invoice === expense.monthId;
+}
+
 function expenseBelongsToCard(expense) {
-  return expense.section === "card" || (expense.section === "extra" && expense.payment === "card") || fixedOnCard(expense);
+  return expense.section === "card" || extraOnOwnInvoice(expense) || fixedOnCard(expense);
 }
 
 function cardKey(value) {
@@ -2792,7 +2814,7 @@ function sectionList(data, section) {
     ? totals.faturaCents
     : section === "fixed"
       ? (totals.fixedAllSettled ? totals.fixedLaunchedCents : totals.fixedForecastCents)
-      : totals.extrasCardCents + totals.extrasPixCents;
+      : extraSplit(all).total;
   const children = [
     el("div", { class: "section-head" }, [
       section === "fixed"
@@ -3225,7 +3247,7 @@ async function removeIncomeExtra(extra) {
 }
 
 function belongs(expense, section) {
-  if (section === "card") return expense.section === "card" || (expense.section === "extra" && expense.payment === "card") || (expense.section === "fixed" && expense.onCard);
+  if (section === "card") return expense.section === "card" || extraOnOwnInvoice(expense) || (expense.section === "fixed" && expense.onCard);
   if (section === "extra") return expense.section === "extra";
   return expense.section === "fixed";
 }
@@ -3299,15 +3321,21 @@ function systemCardLine(expense) {
   return note.includes("parcelamento:") || note.includes("quitado-cartao:");
 }
 
+function isImprevistoNote(note) {
+  return String(note || "").split("\n").some((item) => item.trim() === "tipo:imprevisto");
+}
+
 function cardTrack(expense) {
   if (systemCardLine(expense)) return "";
-  if (expense.section === "extra") return isPlannedNote(expense.note) ? "planejado" : "imprevisto";
+  if (isPlannedNote(expense.note)) return "planejado";
+  if (isImprevistoNote(expense.note) || expense.section === "extra") return "imprevisto";
   if (expense.section === "fixed" || originIdFrom(expense.note)) return "casa";
   return "";
 }
 
 function cardSourceLabel(expense) {
-  if (expense.section === "extra") return isPlannedNote(expense.note) ? "Planejado" : "Imprevisto";
+  if (isPlannedNote(expense.note)) return "Planejado";
+  if (isImprevistoNote(expense.note) || expense.section === "extra") return "Imprevisto";
   if (expense.section === "fixed" && expense.onCard) return "Custo de vida";
   if (expense.section === "card" && originIdFrom(expense.note)) return "Custo de vida";
   return "";
@@ -3317,7 +3345,9 @@ function expenseRow(expense, section, options = {}) {
   const onInvoice = expense.section === "fixed" && expense.onCard;
   const lockedCard = Boolean(options.cardExpense) && expense.section !== "fixed";
   const meta = [];
-  if (expense.section === "extra" && section === "card" && !options.manage) meta.push("Imprevisto");
+  if (expense.section === "extra" && section === "card" && !options.manage && !isPlannedNote(expense.note)) meta.push("Imprevisto");
+  const elsewhere = expense.section === "extra" && chargedInvoiceMonth(expense.note);
+  if (elsewhere && elsewhere !== expense.monthId) meta.push(`Na fatura de ${monthName(elsewhere)}`);
   if (onInvoice && section === "card") meta.push("Custo de vida, já incluído");
   if (expense.payment !== "card" || onInvoice) meta.push(paymentLabel(expense.payment));
   if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Crédito ${expense.cardLabel}` : "Crédito");
@@ -3543,7 +3573,8 @@ function openCardExpense(cardName = "") {
     purchaseDate,
     invoiceMonthId: state.monthId,
     invoiceTouched: false,
-    costMonthId: state.monthId,
+    costMonthId: (state.data?.months || []).some((month) => month.id === purchaseDate.slice(0, 7)) ? purchaseDate.slice(0, 7) : state.monthId,
+    costTouched: false,
     linkExpenseId: "",
     billing: "once",
     installmentCount: "2",
@@ -3727,7 +3758,8 @@ function livingLinkSelect(draft) {
   return link;
 }
 
-function useCostMonth(draft, monthId) {
+function useCostMonth(draft, monthId, manual = false) {
+  if (manual) draft.costTouched = true;
   if (draft.costMonthId === monthId) return;
   draft.costMonthId = monthId;
   draft.linkExpenseId = "";
@@ -3768,6 +3800,14 @@ function cardSpendFields(draft) {
   date.addEventListener("input", () => {
     draft.purchaseDate = date.value;
     applyInvoiceSuggestion(draft);
+    if (!draft.costTouched) {
+      const monthId = String(draft.purchaseDate || "").slice(0, 7);
+      if ((state.data?.months || []).some((month) => month.id === monthId)) {
+        useCostMonth(draft, monthId);
+        const select = document.getElementById("costMonthId");
+        if (select) select.value = monthId;
+      }
+    }
     if (!refreshInvoiceChoice(draft)) render();
   });
   const invoice = el("select", { id: "invoiceMonthId" }, months.map((month) => el("option", { value: month.id }, month.label)));
@@ -3779,7 +3819,7 @@ function cardSpendFields(draft) {
   });
   const costMonth = el("select", { id: "costMonthId" }, months.map((month) => el("option", { value: month.id }, month.label)));
   costMonth.value = draft.costMonthId || state.monthId;
-  costMonth.addEventListener("change", () => useCostMonth(draft, costMonth.value));
+  costMonth.addEventListener("change", () => useCostMonth(draft, costMonth.value, true));
   const parcelado = draft.billing === "installments";
   const amountName = parcelado && draft.amountMode === "total" ? "Valor da compra" : parcelado ? "Valor da parcela" : "Valor";
   const costLabel = monthName(draft.costMonthId || state.monthId) || "este mês";
@@ -3813,15 +3853,11 @@ function cardSpendFields(draft) {
         ["planejado", "Planejado"],
       ], draft.expenseKind || "imprevisto"),
     ]),
-    el("p", { class: "muted" }, draft.expenseKind === "casa"
-      ? "O custo fica no mês escolhido. O valor entra na fatura do cartão, que pode ser outra."
-      : "O gasto vai para a aba da classificação e continua nesta fatura."),
-    draft.expenseKind === "casa"
-      ? el("div", { class: "field" }, [
-        el("label", { for: "costMonthId" }, "Custo de vida de"),
-        costMonth,
-      ])
-      : "",
+    el("p", { class: "muted" }, "O lançamento fica no mês escolhido. A fatura do cartão pode ser outra."),
+    el("div", { class: "field" }, [
+      el("label", { for: "costMonthId" }, draft.expenseKind === "casa" ? "Custo de vida de" : draft.expenseKind === "planejado" ? "Planejado de" : "Imprevisto de"),
+      costMonth,
+    ]),
     el("div", { class: "field" }, [el("label", { for: "purchaseDate" }, "Data da compra"), date]),
     el("div", { class: "field" }, [el("label", { for: "invoiceMonthId" }, "Entra na fatura de"), invoice]),
     el("p", { class: "muted", id: "invoice-hint" }, invoiceHint(draft)),
@@ -5315,11 +5351,9 @@ async function saveSheet(event) {
       if (!(state.data?.months || []).some((month) => month.id === draft.invoiceMonthId)) {
         throw new Error("Essa fatura está fora do período. Aumente o período ou escolha outro mês.");
       }
-      if (draft.expenseKind === "casa") {
-        draft.costMonthId = draft.costMonthId || state.monthId;
-        if (!(state.data?.months || []).some((month) => month.id === draft.costMonthId)) {
-          throw new Error("Escolha o mês do custo de vida.");
-        }
+      draft.costMonthId = draft.costMonthId || state.monthId;
+      if (!(state.data?.months || []).some((month) => month.id === draft.costMonthId)) {
+        throw new Error(draft.expenseKind === "casa" ? "Escolha o mês do custo de vida." : "Escolha o mês deste gasto.");
       }
       const parcelado = draft.billing === "installments";
       const installmentCount = parcelado ? Number(draft.installmentCount) : 1;
@@ -5340,7 +5374,7 @@ async function saveSheet(event) {
           cardLabel: draft.cardLabel,
           classification: draft.expenseKind,
           invoiceMonthId: draft.invoiceMonthId,
-          costMonthId: draft.expenseKind === "casa" ? draft.costMonthId : "",
+          costMonthId: draft.costMonthId,
           purchaseDate: draft.purchaseDate,
           linkExpenseId: draft.expenseKind === "casa" ? draft.linkExpenseId : "",
           installmentCount,
@@ -5358,12 +5392,10 @@ async function saveSheet(event) {
       const place = draft.expenseKind === "casa" ? "Custo de vida" : draft.expenseKind === "planejado" ? "Planejado" : "Imprevisto";
       const remaining = installmentCount - installmentsPaid;
       state.notice = remaining > 1
-        ? `Lancei ${remaining} parcelas a partir da fatura de ${invoice}.`
+        ? `Lancei ${remaining} parcelas a partir da fatura de ${invoice}. O gasto fica em ${cost}.`
         : draft.expenseKind === "casa" && draft.linkExpenseId
           ? `Vinculei ao custo de vida de ${cost}. O previsto continua e o valor entrou na fatura de ${invoice}.`
-          : draft.expenseKind === "casa"
-            ? `Lancei em Custo de vida de ${cost}, na fatura de ${invoice}.`
-            : `Lancei em ${place}, na fatura de ${invoice}.`;
+          : `Lancei em ${place} de ${cost}, na fatura de ${invoice}.`;
     } else if (draft.mode === "card") {
       if (!draft.name.trim()) throw new Error("Dê um apelido ao cartão.");
       const dueDay = cardDueDay(draft.dueDay);
@@ -5807,11 +5839,11 @@ function renderSafely() {
 
 function glyph(name) {
   const paths = {
-    resumo: "M4 12h16M4 6h16M4 18h10",
-    cartoes: "M3 7h18v10H3zM3 11h18",
-    avista: "M4 7h16v10H4zM8 12h8",
+    resumo: "M4 19V11M10 19V5M16 19V8M3 19h18",
+    cartoes: "M3 7h18v10H3zM3 11h18M7 14h4",
+    avista: "M3 7h18v10H3zM7 12h.01M17 12h.01M12 9.5a2.5 2.5 0 0 1 0 5 2.5 2.5 0 0 1 0-5",
     casa: "M4 11l8-7 8 7v8H4z",
-    extras: "M12 5v14M5 12h14",
+    extras: "M8 8h12v12H8zM4 4h12v12H4z",
     receita: "M12 3v18M8 7h6a3 3 0 0 1 0 6H9a3 3 0 0 0 0 6h7",
   };
   const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");

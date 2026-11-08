@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, PartialPayment, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, coercePayment, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteForTrack, noteWithChargeContext, noteWithOrigin, noteWithSeries, noteWithVisibleText, isVariableCost, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope, type ExpenseTrack } from "./domain.ts";
+import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, chargedInvoiceMonth, coercePayment, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, isPlannedCost, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteForTrack, noteWithChargeContext, noteWithOrigin, noteWithSeries, noteWithVisibleText, isVariableCost, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, purchaseMonthFromNote, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope, type ExpenseTrack } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -604,6 +604,13 @@ export async function deleteMatchingExpenses(
   }
   if (!ids.length) return { ok: false, error: "Gasto não encontrado." };
   const selected = pool.filter((item) => ids.includes(item.id));
+  const extraIds = selected.filter((item) => item.section === "extra").map((item) => item.id);
+  if (extraIds.length) {
+    await runStatements(
+      db,
+      extraIds.map((id) => db.prepare("DELETE FROM expenses WHERE owner_id = ? AND section = 'card' AND note LIKE ?").bind(ownerId, `%origem:${id}%`)),
+    );
+  }
   const fixedIds = selected.filter((item) => item.section === "fixed").map((item) => item.id);
   if (fixedIds.length) {
     await deletePartialsForExpenses(db, ownerId, fixedIds);
@@ -1120,9 +1127,50 @@ async function livingInvoiceCharges(
   return grouped;
 }
 
+function purchaseDateFromNote(note: string | null | undefined): string {
+  const line = String(note || "").split("\n").map((item) => item.trim()).find((item) => item.startsWith("compra:"));
+  const value = line ? line.slice("compra:".length) : "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "";
+}
+
+export async function placeExtrasOnPurchaseMonth(db: D1Database, ownerId: string): Promise<void> {
+  const rows = await db
+    .prepare("SELECT * FROM expenses WHERE owner_id = ? AND section = 'extra' AND payment = 'card'")
+    .bind(ownerId)
+    .all<ExpenseRow>();
+  for (const row of rows.results ?? []) {
+    const expense = mapExpense(row);
+    if (expense.installment || chargedInvoiceMonth(expense.note)) continue;
+    const purchaseMonth = purchaseMonthFromNote(expense.note);
+    if (!purchaseMonth || purchaseMonth === expense.monthId) continue;
+    if (!(await getMonth(db, ownerId, purchaseMonth))) continue;
+    const marker = isPlannedCost(expense.note) ? "tipo:planejado" : "tipo:imprevisto";
+    const created = await insertCardPurchase(db, {
+      ownerId,
+      startMonthId: expense.monthId,
+      name: expense.name,
+      section: "card",
+      payment: "card",
+      cardLabel: expense.cardLabel,
+      note: noteWithChargeContext(`${marker}\norigem:${expense.id}`, {
+        purchaseDate: purchaseDateFromNote(expense.note),
+        referenceMonthId: purchaseMonth,
+      }),
+      totalCount: 1,
+      paidCount: 0,
+      amountCents: expense.amountCents,
+      mode: "installment",
+    });
+    if (!created.ok) continue;
+    const note = [marker, `fatura:${expense.monthId}`, `ref:${purchaseMonth}`].join("\n");
+    await db.prepare("UPDATE expenses SET month_id = ?, note = ? WHERE owner_id = ? AND id = ?").bind(purchaseMonth, note, ownerId, expense.id).run();
+  }
+}
+
 export async function monthPayload(db: D1Database, ownerId: string, monthId: string) {
   const month = await getMonth(db, ownerId, monthId);
   if (!month) return null;
+  await placeExtrasOnPurchaseMonth(db, ownerId);
   await clearOrphanCardPartials(db, ownerId);
   const expenses = await attachPartials(db, ownerId, await listExpenses(db, ownerId, monthId));
   const charges = await livingInvoiceCharges(db, ownerId, expenses.filter((expense) => expense.section === "fixed").map((expense) => expense.id));
