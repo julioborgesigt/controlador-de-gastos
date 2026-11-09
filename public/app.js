@@ -3479,7 +3479,6 @@ function expenseRow(expense, section, options = {}) {
   if (expense.section === "fixed") meta.push(...livingBalanceLines(expense));
   if (expense.installment) meta.push(expense.installment);
   const partials = expense.partials || [];
-  if (section === "fixed" && !onInvoice && partials.length) meta.push(...partialSummaryLines(expense));
   const edit = () => {
     if (editable()) openEdit(expense, { cardExpense: lockedCard, fromCard: section === "card" && !systemCardLine(expense) });
   };
@@ -4002,12 +4001,11 @@ function cardSpendFields(draft) {
 function livingBalanceLines(expense) {
   const balance = livingBalance(expense);
   const lines = [`Previsto ${money(balance.forecast)}`];
-  if (balance.pix) lines.push(`Já gasto no Pix ${money(balance.pix)}`);
-  if (balance.credit) lines.push(`Já gasto no crédito ${money(balance.credit)}`);
-  if (!balance.pix && !balance.credit) lines.push(`Já gasto ${money(0)}`);
+  if (balance.pix) lines.push(`Já lançado no Pix ${money(balance.pix)}`);
+  if (balance.credit) lines.push(`Já lançado no crédito ${money(balance.credit)}`);
   if (balance.over > 0) lines.push(`Passou ${money(balance.over)}`);
-  else if (expense.payment === "card") lines.push(`Falta no cartão ${money(balance.remaining)}`);
-  else lines.push(`Falta no Pix ${money(balance.remaining)}`);
+  else if (balance.remaining > 0 && expense.payment === "card") lines.push(`Previsto no cartão ${money(balance.remaining)}`);
+  else if (balance.remaining > 0) lines.push(`Previsto no Pix ${money(balance.remaining)}`);
   return lines;
 }
 
@@ -4015,25 +4013,6 @@ function cardPartialCents(expense) {
   return (expense.partials || [])
     .filter((item) => item.payment === "card")
     .reduce((sum, item) => sum + item.amountCents, 0);
-}
-
-function partialSummaryLines(expense) {
-  const partials = expense.partials || [];
-  const paid = partials.reduce((sum, item) => sum + item.amountCents, 0);
-  const card = cardPartialCents(expense);
-  const left = expense.amountCents - paid;
-  if (card > 0) {
-    const bits = [`No cartão ${money(card)}`];
-    const other = paid - card;
-    if (other > 0) bits.push(`Pago ${money(other)}`);
-    if (!expense.paid && left > 0) bits.push(`Falta ${money(left)}`);
-    else if (!expense.paid && left < 0) bits.push(`Passou ${money(-left)}`);
-    return bits;
-  }
-  if (!expense.paid && left > 0) return [`Pago ${money(paid)}`, `Falta ${money(left)}`];
-  if (!expense.paid && left < 0) return [`Pago ${money(paid)}`, `Passou ${money(-left)}`];
-  const count = `${partials.length} ${partials.length === 1 ? "pagamento" : "pagamentos"}`;
-  return [`Pago ${money(paid)} em ${count}`];
 }
 
 function livingChargeIsFull(planned, already, charged) {
