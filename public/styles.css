@@ -1064,6 +1064,9 @@ html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
   width: min(420px, 100%);
   max-height: min(80dvh, 520px);
   overflow: auto;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
+  -webkit-overflow-scrolling: touch;
   background: var(--card);
   color: var(--ink);
   border: 1px solid var(--line);

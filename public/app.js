@@ -423,19 +423,23 @@ function rememberSheetTouch(event) {
   sheetTouchY = event.touches[0]?.clientY ?? 0;
 }
 
+function overlayScroller(target) {
+  return target?.closest?.(".sheet, .dialog") || null;
+}
+
 function blockBackgroundScroll(event) {
   if (!document.body.classList.contains("sheet-open")) return;
-  const sheet = event.target.closest?.(".sheet");
+  const scroller = overlayScroller(event.target);
   const y = event.touches[0]?.clientY ?? sheetTouchY;
   const dy = y - sheetTouchY;
   sheetTouchY = y;
-  if (!sheet || !sheetCanScroll(sheet, dy)) event.preventDefault();
+  if (!scroller || !sheetCanScroll(scroller, dy)) event.preventDefault();
 }
 
 function blockBackgroundWheel(event) {
   if (!document.body.classList.contains("sheet-open")) return;
-  const sheet = event.target.closest?.(".sheet");
-  if (!sheet || !sheetCanScroll(sheet, -event.deltaY)) event.preventDefault();
+  const scroller = overlayScroller(event.target);
+  if (!scroller || !sheetCanScroll(scroller, -event.deltaY)) event.preventDefault();
 }
 
 function blockBackgroundKeys(event) {
@@ -450,9 +454,9 @@ function blockBackgroundKeys(event) {
   }
   if (!["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) return;
   if (event.target.closest?.("input, textarea, select")) return;
-  const sheet = event.target.closest?.(".sheet");
+  const scroller = overlayScroller(event.target);
   const dy = event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" ? 1 : -1;
-  if (!sheet || !sheetCanScroll(sheet, dy)) event.preventDefault();
+  if (!scroller || !sheetCanScroll(scroller, dy)) event.preventDefault();
 }
 
 function sheetCanScroll(sheet, dy) {
