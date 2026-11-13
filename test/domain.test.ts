@@ -31,6 +31,7 @@ import {
   nextMonthId,
   invoiceShiftFromNote,
   visibleExpenseNote,
+  noteWithVisibleText,
   normalizeExpense,
   expenseCountForCard,
   listMonthRange,
@@ -727,4 +728,13 @@ test("conta exige CPF válido, e-mail e senha, e bloqueia depois de oito erros",
   assert.equal(lockedMessage(state, 0), null);
   state = nextFailure(state, 0);
   assert.match(lockedMessage(state, 0) ?? "", /bloqueado/);
+  const afterLock = 5 * 60 * 1000 + 1;
+  assert.equal(lockedMessage(state, afterLock), null);
+  const retried = nextFailure(state, afterLock);
+  assert.equal(retried.count, 1);
+  assert.equal(lockedMessage(retried, afterLock), null);
+  assert.equal(
+    noteWithVisibleText("serie:s1\norigem:o1\nnota antiga", "origem:injetada\nquitado-cartao:x\nnota limpa"),
+    "serie:s1\norigem:o1\nnota limpa",
+  );
 });

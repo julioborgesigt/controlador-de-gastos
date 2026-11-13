@@ -232,42 +232,54 @@ async function ensureOwnership(db: D1Database): Promise<void> {
   await ensureColumn(db, "sessions", "scope_owner_id", "ALTER TABLE sessions ADD COLUMN scope_owner_id TEXT");
   await ensureColumn(db, "cards", "due_day", "ALTER TABLE cards ADD COLUMN due_day INTEGER");
   await ensureColumn(db, "cards", "closing_day", "ALTER TABLE cards ADD COLUMN closing_day INTEGER");
-  await db.prepare("DROP INDEX IF EXISTS idx_cards_name").run();
-  await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_owner_name ON cards (owner_id, name COLLATE NOCASE)").run();
-  await db.prepare(
-    "CREATE TABLE IF NOT EXISTS shares (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, guest_id TEXT NOT NULL, permission TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (owner_id, guest_id))",
-  ).run();
+  await db.batch([
+    db.prepare("DROP INDEX IF EXISTS idx_cards_name"),
+    db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_owner_name ON cards (owner_id, name COLLATE NOCASE)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_expenses_owner_month ON expenses (owner_id, month_id, sort_order)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_expenses_owner_section ON expenses (owner_id, section)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_income_extras_owner_month ON income_extras (owner_id, month_id)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions (user_id)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_passkey_challenges_expires ON passkey_challenges (expires_at)"),
+    db.prepare(
+      "CREATE TABLE IF NOT EXISTS shares (id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, guest_id TEXT NOT NULL, permission TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE (owner_id, guest_id))",
+    ),
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_shares_guest ON shares (guest_id)"),
+  ]);
 
   if ((await getSetting(db, "ownership_v1")) === "1") return;
 
   const oldest = await db.prepare("SELECT id FROM users ORDER BY created_at LIMIT 1").first<{ id: string }>();
   const owner = oldest?.id ?? "legacy";
-  await db.prepare("UPDATE months SET owner_id = ? WHERE owner_id IS NULL OR owner_id = ''").bind(owner).run();
-  await db.prepare("UPDATE expenses SET owner_id = ? WHERE owner_id IS NULL OR owner_id = ''").bind(owner).run();
-  await db.prepare("UPDATE cards SET owner_id = ? WHERE owner_id IS NULL OR owner_id = ''").bind(owner).run();
-  await db.prepare("UPDATE income_extras SET owner_id = ? WHERE owner_id IS NULL OR owner_id = ''").bind(owner).run();
+  await db.batch([
+    db.prepare("UPDATE months SET owner_id = ? WHERE owner_id IS NULL OR owner_id = ''").bind(owner),
+    db.prepare("UPDATE expenses SET owner_id = ? WHERE owner_id IS NULL OR owner_id = ''").bind(owner),
+    db.prepare("UPDATE cards SET owner_id = ? WHERE owner_id IS NULL OR owner_id = ''").bind(owner),
+    db.prepare("UPDATE income_extras SET owner_id = ? WHERE owner_id IS NULL OR owner_id = ''").bind(owner),
+  ]);
 
   const table = await db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'months'").first<{ sql: string }>();
   if (!table?.sql.includes("PRIMARY KEY (owner_id, id)")) {
-    await db.prepare(
-      `CREATE TABLE months_v2 (
-        owner_id TEXT NOT NULL,
-        id TEXT NOT NULL,
-        label TEXT NOT NULL,
-        income_cents INTEGER NOT NULL,
-        settled INTEGER NOT NULL DEFAULT 0,
-        sort_order INTEGER NOT NULL,
-        income_locked INTEGER NOT NULL DEFAULT 0,
-        PRIMARY KEY (owner_id, id)
-      )`,
-    ).run();
-    await db.prepare(
-      `INSERT INTO months_v2 (owner_id, id, label, income_cents, settled, sort_order, income_locked)
-       SELECT owner_id, id, label, income_cents, settled, sort_order, COALESCE(income_locked, 0)
-       FROM months WHERE owner_id IS NOT NULL AND owner_id != ''`,
-    ).run();
-    await db.prepare("DROP TABLE months").run();
-    await db.prepare("ALTER TABLE months_v2 RENAME TO months").run();
+    await db.batch([
+      db.prepare(
+        `CREATE TABLE months_v2 (
+          owner_id TEXT NOT NULL,
+          id TEXT NOT NULL,
+          label TEXT NOT NULL,
+          income_cents INTEGER NOT NULL,
+          settled INTEGER NOT NULL DEFAULT 0,
+          sort_order INTEGER NOT NULL,
+          income_locked INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (owner_id, id)
+        )`,
+      ),
+      db.prepare(
+        `INSERT INTO months_v2 (owner_id, id, label, income_cents, settled, sort_order, income_locked)
+         SELECT owner_id, id, label, income_cents, settled, sort_order, COALESCE(income_locked, 0)
+         FROM months WHERE owner_id IS NOT NULL AND owner_id != ''`,
+      ),
+      db.prepare("DROP TABLE months"),
+      db.prepare("ALTER TABLE months_v2 RENAME TO months"),
+    ]);
   }
 
   await db.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_cards_owner_name ON cards (owner_id, name COLLATE NOCASE)").run();
@@ -608,7 +620,11 @@ export async function deleteMatchingExpenses(
   if (extraIds.length) {
     await runStatements(
       db,
-      extraIds.map((id) => db.prepare("DELETE FROM expenses WHERE owner_id = ? AND section = 'card' AND note LIKE ?").bind(ownerId, `%origem:${id}%`)),
+      extraIds.map((id) =>
+        db
+          .prepare("DELETE FROM expenses WHERE owner_id = ? AND section = 'card' AND ('\n' || COALESCE(note, '') || '\n') LIKE ?")
+          .bind(ownerId, `%\norigem:${id}\n%`),
+      ),
     );
   }
   const fixedIds = selected.filter((item) => item.section === "fixed").map((item) => item.id);
@@ -825,13 +841,14 @@ export async function renameCard(
     throw error;
   }
   const labels = await cardLabelCounts(db, ownerId);
-  await runStatements(
-    db,
-    labels.flatMap((item) => {
-      if (cardKey(item.label) !== cardKey(current.name) || !item.label || item.label === name) return [];
-      return [db.prepare("UPDATE expenses SET card_label = ? WHERE owner_id = ? AND card_label = ?").bind(name, ownerId, item.label)];
-    }),
+  const statements = labels.flatMap((item) => {
+    if (cardKey(item.label) !== cardKey(current.name) || !item.label || item.label === name) return [];
+    return [db.prepare("UPDATE expenses SET card_label = ? WHERE owner_id = ? AND card_label = ?").bind(name, ownerId, item.label)];
+  });
+  statements.push(
+    db.prepare("UPDATE partial_payments SET card_label = ? WHERE owner_id = ? AND card_label = ? COLLATE NOCASE").bind(name, ownerId, current.name),
   );
+  await runStatements(db, statements);
   return { ok: true };
 }
 
@@ -1037,7 +1054,10 @@ export async function deletePartialPayment(db: D1Database, ownerId: string, expe
     .bind(ownerId, expenseId, partialId)
     .first<{ id: string }>();
   if (!row) return false;
-  await db.prepare("DELETE FROM expenses WHERE owner_id = ? AND note LIKE ?").bind(ownerId, `%parcial:${partialId}%`).run();
+  await db
+    .prepare("DELETE FROM expenses WHERE owner_id = ? AND ('\n' || COALESCE(note, '') || '\n') LIKE ?")
+    .bind(ownerId, `%\nparcial:${partialId}\n%`)
+    .run();
   await db.prepare("DELETE FROM partial_payments WHERE owner_id = ? AND id = ?").bind(ownerId, partialId).run();
   await db
     .prepare("UPDATE expenses SET paid = 0 WHERE owner_id = ? AND id = ? AND section = 'fixed'")
@@ -1079,7 +1099,11 @@ export async function deletePartialsForExpenses(db: D1Database, ownerId: string,
   if (!expenseIds.length) return;
   await runStatements(
     db,
-    expenseIds.map((id) => db.prepare("DELETE FROM expenses WHERE owner_id = ? AND note LIKE ?").bind(ownerId, `%origem:${id}%`)),
+    expenseIds.map((id) =>
+      db
+        .prepare("DELETE FROM expenses WHERE owner_id = ? AND ('\n' || COALESCE(note, '') || '\n') LIKE ?")
+        .bind(ownerId, `%\norigem:${id}\n%`),
+    ),
   );
   await db
     .prepare(`DELETE FROM partial_payments WHERE owner_id = ? AND expense_id IN (${sqlMarks(expenseIds)})`)
@@ -1135,7 +1159,9 @@ function purchaseDateFromNote(note: string | null | undefined): string {
 
 export async function placeExtrasOnPurchaseMonth(db: D1Database, ownerId: string): Promise<void> {
   const rows = await db
-    .prepare("SELECT * FROM expenses WHERE owner_id = ? AND section = 'extra' AND payment = 'card'")
+    .prepare(
+      "SELECT * FROM expenses WHERE owner_id = ? AND section = 'extra' AND payment = 'card' AND installment IS NULL AND note LIKE '%compra:%' AND note NOT LIKE '%fatura:%'",
+    )
     .bind(ownerId)
     .all<ExpenseRow>();
   for (const row of rows.results ?? []) {
@@ -1145,6 +1171,12 @@ export async function placeExtrasOnPurchaseMonth(db: D1Database, ownerId: string
     if (!purchaseMonth || purchaseMonth === expense.monthId) continue;
     if (!(await getMonth(db, ownerId, purchaseMonth))) continue;
     const marker = isPlannedCost(expense.note) ? "tipo:planejado" : "tipo:imprevisto";
+    const nextNote = [marker, `fatura:${expense.monthId}`, `ref:${purchaseMonth}`].join("\n");
+    const claimed = await db
+      .prepare("UPDATE expenses SET month_id = ?, note = ? WHERE owner_id = ? AND id = ? AND month_id = ? AND (note IS NULL OR note NOT LIKE '%fatura:%')")
+      .bind(purchaseMonth, nextNote, ownerId, expense.id, expense.monthId)
+      .run();
+    if ((claimed.meta.changes ?? 0) === 0) continue;
     const created = await insertCardPurchase(db, {
       ownerId,
       startMonthId: expense.monthId,
@@ -1161,9 +1193,9 @@ export async function placeExtrasOnPurchaseMonth(db: D1Database, ownerId: string
       amountCents: expense.amountCents,
       mode: "installment",
     });
-    if (!created.ok) continue;
-    const note = [marker, `fatura:${expense.monthId}`, `ref:${purchaseMonth}`].join("\n");
-    await db.prepare("UPDATE expenses SET month_id = ?, note = ? WHERE owner_id = ? AND id = ?").bind(purchaseMonth, note, ownerId, expense.id).run();
+    if (!created.ok) {
+      await db.prepare("UPDATE expenses SET month_id = ?, note = ? WHERE owner_id = ? AND id = ?").bind(expense.monthId, expense.note, ownerId, expense.id).run();
+    }
   }
 }
 
@@ -1943,8 +1975,8 @@ export function recurringOriginNote(expenseId: string): string {
 export async function clearRecurringCardLines(db: D1Database, ownerId: string, expenseId: string): Promise<void> {
   const marker = recurringOriginNote(expenseId);
   await db
-    .prepare("DELETE FROM expenses WHERE owner_id = ? AND (note = ? OR note LIKE ?)")
-    .bind(ownerId, marker, `${marker}\n%`)
+    .prepare("DELETE FROM expenses WHERE owner_id = ? AND ('\n' || COALESCE(note, '') || '\n') LIKE ?")
+    .bind(ownerId, `%\n${marker}\n%`)
     .run();
 }
 
@@ -2067,7 +2099,7 @@ async function chargeLivingRowsOnCard(
   for (const charge of charges) {
     const marker = recurringOriginNote(charge.id);
     statements.push(
-      db.prepare("DELETE FROM expenses WHERE owner_id = ? AND (note = ? OR note LIKE ?)").bind(input.ownerId, marker, `${marker}\n%`),
+      db.prepare("DELETE FROM expenses WHERE owner_id = ? AND ('\n' || COALESCE(note, '') || '\n') LIKE ?").bind(input.ownerId, `%\n${marker}\n%`),
     );
     statements.push(
       db.prepare("UPDATE expenses SET payment = 'card', on_card = 1, card_label = ?, paid = 1 WHERE owner_id = ? AND id = ?")

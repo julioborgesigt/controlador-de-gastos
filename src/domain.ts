@@ -472,7 +472,7 @@ export function noteWithVisibleText(existing: string | null | undefined, visible
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => NOTE_MARKERS.some((marker) => line.startsWith(marker)));
-  const text = visible.trim();
+  const text = visibleExpenseNote(visible);
   return [...markers, text].filter(Boolean).join("\n");
 }
 

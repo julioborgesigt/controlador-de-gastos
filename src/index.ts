@@ -101,6 +101,10 @@ app.use("/api/*", async (c, next) => {
     if (origin && origin !== new URL(c.req.url).origin) {
       return c.json({ error: "Origem recusada." }, 403);
     }
+    const fetchSite = c.req.header("sec-fetch-site");
+    if (!origin && fetchSite && fetchSite !== "same-origin" && fetchSite !== "none") {
+      return c.json({ error: "Origem recusada." }, 403);
+    }
     const length = Number(c.req.header("content-length") || 0);
     if (length > 20_000) return c.json({ error: "Pedido grande demais." }, 413);
   }
@@ -412,8 +416,11 @@ app.post("/api/income/base", async (c) => {
   if (!isCents(body.amountCents) || body.amountCents < 0) return c.json({ error: "Informe a receita base." }, 400);
   const incomeScope = body.scope === "all" ? "all" : "unlocked";
   await applyBaseIncome(c.env.DB, writer.scope.ownerId, body.amountCents, incomeScope);
-  const monthId = typeof body.monthId === "string" ? body.monthId : "2026-11";
-  return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, monthId), writer.scope));
+  const requestedMonthId = typeof body.monthId === "string" && isMonthId(body.monthId) ? body.monthId : "";
+  const fallbackMonthId = requestedMonthId || (await listMonths(c.env.DB, writer.scope.ownerId))[0]?.id || "2026-11";
+  const payload = await monthPayload(c.env.DB, writer.scope.ownerId, fallbackMonthId);
+  if (!payload) return c.json({ error: "Mês não encontrado." }, 404);
+  return c.json(withAccess(payload, writer.scope));
 });
 
 app.post("/api/income/extras", async (c) => {
@@ -941,7 +948,7 @@ app.patch("/api/expenses/:id", async (c) => {
   await c.env.DB.prepare(
     `UPDATE expenses
      SET name = ?, section = ?, amount_cents = ?, payment = ?, on_card = ?, card_label = ?, paid = ?, note = ?, installment = ?
-     WHERE id = ?`,
+     WHERE owner_id = ? AND id = ?`,
   )
     .bind(
       parsed.value.name,
@@ -953,6 +960,7 @@ app.patch("/api/expenses/:id", async (c) => {
       parsed.value.paid ? 1 : 0,
       parsed.value.note,
       parsed.value.installment,
+      writer.scope.ownerId,
       current.id,
     )
     .run();
@@ -1506,12 +1514,16 @@ async function requireAuth(c: AppContext): Promise<boolean> {
 
 async function startSession(c: AppContext, userId: string): Promise<void> {
   const token = randomToken();
-  await c.env.DB.prepare("INSERT INTO sessions (id, expires_at, user_id, scope_owner_id) VALUES (?, ?, ?, ?)").bind(
-    await sha256(token),
-    sessionExpiry(),
-    userId,
-    userId,
-  ).run();
+  const now = new Date().toISOString();
+  await c.env.DB.batch([
+    c.env.DB.prepare("DELETE FROM sessions WHERE expires_at < ?").bind(now),
+    c.env.DB.prepare("INSERT INTO sessions (id, expires_at, user_id, scope_owner_id) VALUES (?, ?, ?, ?)").bind(
+      await sha256(token),
+      sessionExpiry(),
+      userId,
+      userId,
+    ),
+  ]);
   setCookie(c, COOKIE, token, sessionCookieOptions(c.req.url));
 }
 

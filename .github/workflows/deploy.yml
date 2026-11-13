@@ -29,6 +29,9 @@ jobs:
       - name: Testar
         run: npm test
 
+      - name: Verificar tipos e empacotamento
+        run: npm run check
+
       - name: Publicar o Worker
         uses: cloudflare/wrangler-action@v4
         with:

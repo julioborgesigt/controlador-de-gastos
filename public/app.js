@@ -654,7 +654,7 @@ function passkeyMessage(error) {
 function passkeyWhen(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleString("pt-BR", { timeZone: "America/Fortaleza", dateStyle: "short", timeStyle: "short" });
+  return date.toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" });
 }
 
 function publicKeyCreationOptions(options) {
@@ -4361,11 +4361,26 @@ function cardChargeTitle(expense) {
 }
 
 function visibleNote(note) {
-  return String(note || "").split("\n").filter((item) => item && !item.startsWith("origem:") && !item.startsWith("parcial:") && !item.startsWith("serie:") && !item.startsWith("tipo:") && !item.startsWith("fatura:") && !item.startsWith("compra:") && !item.startsWith("ref:")).join("\n");
+  return String(note || "")
+    .split("\n")
+    .map((item) => item.trim())
+    .filter((item) =>
+      item
+      && !item.startsWith("origem:")
+      && !item.startsWith("parcial:")
+      && !item.startsWith("serie:")
+      && !item.startsWith("tipo:")
+      && !item.startsWith("fatura:")
+      && !item.startsWith("compra:")
+      && !item.startsWith("ref:")
+      && !item.startsWith("quitado-cartao:")
+      && !item.startsWith("parcelamento:"),
+    )
+    .join("\n");
 }
 
 function composeNote(originId, note, partialId, seriesId, variable, planned, nextInvoice) {
-  const text = String(note || "").trim();
+  const text = visibleNote(note).trim();
   const lines = [];
   if (seriesId) lines.push(`serie:${seriesId}`);
   if (variable) lines.push("tipo:variavel");
@@ -5515,6 +5530,9 @@ async function saveSheet(event) {
       if (draft.previousName) {
         for (const expense of state.data.expenses || []) {
           if (sameCardName(expense.cardLabel, draft.previousName)) expense.cardLabel = nextName;
+          for (const partial of expense.partials || []) {
+            if (sameCardName(partial.cardLabel, draft.previousName)) partial.cardLabel = nextName;
+          }
         }
       }
       state.data.cards = data.cards;
