@@ -113,8 +113,11 @@ export function lockedMessage(state: FailureState, now = Date.now()): string | n
 }
 
 export function nextFailure(state: FailureState, now = Date.now()): FailureState {
-  const activeLock = state.lockedUntil !== null && Date.parse(state.lockedUntil) > now;
-  const count = activeLock ? state.count : state.count + 1;
+  const until = state.lockedUntil !== null ? Date.parse(state.lockedUntil) : Number.NaN;
+  const activeLock = !Number.isNaN(until) && until > now;
+  const expiredLock = !Number.isNaN(until) && until <= now;
+  const baseCount = expiredLock ? 0 : state.count;
+  const count = activeLock ? state.count : baseCount + 1;
   if (count >= MAX_FAILURES) {
     return { count, lockedUntil: new Date(now + LOCK_MS).toISOString() };
   }
