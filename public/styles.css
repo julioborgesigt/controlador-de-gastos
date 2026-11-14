@@ -626,6 +626,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .badge.source-planned { background: #e6f4ef; color: #0f6e56; }
 
+.badge.cross-month {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b55;
+  white-space: nowrap;
+}
+
 .cost-split {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -656,6 +663,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   display: block;
   color: var(--muted);
   font-size: 12px;
+  font-weight: 600;
+}
+
+.cost-split .xray-sub {
+  margin-top: 4px;
+  color: #92400e;
+  font-size: 11px;
   font-weight: 600;
 }
 
@@ -760,6 +774,16 @@ html[data-theme="dark"] .badge.source-fixed { background: #243044; color: #b7d4f
 html[data-theme="dark"] .badge.source-extra { background: #2e2140; color: #e9d5ff; }
 
 html[data-theme="dark"] .badge.source-planned { background: #17362e; color: #5dceb0; }
+
+html[data-theme="dark"] .badge.cross-month {
+  background: #3f2e12;
+  color: #fde68a;
+  border-color: #f59e0b66;
+}
+
+html[data-theme="dark"] .cost-split .xray-sub {
+  color: #fcd34d;
+}
 
 html[data-theme="dark"] .nav button.active { background: #2a313b; }
 

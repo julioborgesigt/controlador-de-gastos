@@ -23,6 +23,8 @@ export function paymentLabel(payment: string): "Crédito" | "Pix";
 export function money(cents: number): string;
 export function centsToInput(cents: number): string;
 export function parseMoney(value: string): number | null;
+export function shortMonthLabel(monthId: string | null | undefined): string;
+export function referenceMonthFrom(note: string | null | undefined): string;
 export function isPlannedNote(note: string | null | undefined): boolean;
 export function isImprevistoNote(note: string | null | undefined): boolean;
 export function chargedInvoiceMonth(note: string | null | undefined): string;
@@ -32,16 +34,51 @@ export function extraOnOwnInvoice(expense: {
   monthId?: string | null;
   note?: string | null;
 }): boolean;
+export function livingCrossMonthSummary(expenses: ReadonlyArray<{
+  section?: string;
+  payment?: string;
+  monthId?: string | null;
+  amountCents: number;
+  paid?: boolean;
+  note?: string | null;
+  charges?: ReadonlyArray<{ monthId: string; amountCents: number }>;
+  partials?: ReadonlyArray<{ amountCents: number }>;
+}>): {
+  paidCardOwnCents: number;
+  paidCardOtherCents: number;
+  paidOtherMonths: string[];
+  dueCardOwnCents: number;
+  dueCardOtherCents: number;
+  dueOtherMonths: string[];
+};
 export function extrasBreakdown(expenses: ReadonlyArray<{
   section?: string;
   payment?: string;
+  monthId?: string | null;
   amountCents: number;
   note?: string | null;
 }>): {
-  planned: { pix: number; card: number; total: number };
-  unexpected: { pix: number; card: number; total: number };
+  planned: {
+    pix: number;
+    card: number;
+    cardOwnInvoice: number;
+    cardOtherInvoice: number;
+    otherInvoiceMonths: string[];
+    total: number;
+  };
+  unexpected: {
+    pix: number;
+    card: number;
+    cardOwnInvoice: number;
+    cardOtherInvoice: number;
+    otherInvoiceMonths: string[];
+    total: number;
+  };
   pix: number;
   card: number;
+  cardOwnInvoice: number;
+  cardOtherInvoice: number;
+  otherInvoiceMonths: string[];
   total: number;
 };
 export function invoiceBreakdown(expenses: ReadonlyArray<{
@@ -56,4 +93,9 @@ export function invoiceBreakdown(expenses: ReadonlyArray<{
   unexpectedCents: number;
   otherCents: number;
   totalCents: number;
+  fromOtherMonthsCents: number;
+  livingFromOtherCents: number;
+  plannedFromOtherCents: number;
+  unexpectedFromOtherCents: number;
+  originMonths: string[];
 };

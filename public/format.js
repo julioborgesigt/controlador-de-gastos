@@ -130,6 +130,25 @@ export function parseMoney(value) {
   return negative ? -cents : cents;
 }
 
+export function shortMonthLabel(monthId) {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(monthId || "").trim());
+  if (!match) return String(monthId || "");
+  const names = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
+  const monthIndex = Number(match[2]) - 1;
+  const label = names[monthIndex];
+  if (!label) return String(monthId || "");
+  return `${label}/${match[1].slice(2)}`;
+}
+
+export function referenceMonthFrom(note) {
+  const lines = String(note || "").split("\n").map((item) => item.trim());
+  const refLine = lines.find((item) => /^ref:\d{4}-\d{2}$/.test(item));
+  if (refLine) return refLine.slice("ref:".length);
+  const purchaseLine = lines.find((item) => /^compra:\d{4}-\d{2}-\d{2}$/.test(item));
+  if (purchaseLine) return purchaseLine.slice("compra:".length, "compra:".length + 7);
+  return "";
+}
+
 export function isPlannedNote(note) {
   return String(note || "").split("\n").some((item) => item.trim() === "tipo:planejado");
 }
@@ -149,21 +168,88 @@ export function extraOnOwnInvoice(expense) {
   return !invoice || !expense.monthId || invoice === expense.monthId;
 }
 
+export function livingCrossMonthSummary(expenses) {
+  let paidCardOwnCents = 0;
+  let paidCardOtherCents = 0;
+  let dueCardOwnCents = 0;
+  let dueCardOtherCents = 0;
+  const paidOtherMonths = new Set();
+  const dueOtherMonths = new Set();
+
+  for (const expense of expenses || []) {
+    if (!expense || expense.section !== "fixed") continue;
+    const charges = Array.isArray(expense.charges) ? expense.charges : [];
+    const partials = Array.isArray(expense.partials) ? expense.partials : [];
+    let creditCents = 0;
+    for (const charge of charges) {
+      const amount = Number(charge?.amountCents || 0);
+      creditCents += amount;
+      if (charge?.monthId && expense.monthId && charge.monthId !== expense.monthId) {
+        paidCardOtherCents += amount;
+        paidOtherMonths.add(charge.monthId);
+      } else {
+        paidCardOwnCents += amount;
+      }
+    }
+    const partialCents = partials.reduce((sum, item) => sum + Number(item?.amountCents || 0), 0);
+    const settled = creditCents + partialCents;
+    const remaining = expense.paid ? 0 : Math.max(0, Number(expense.amountCents || 0) - settled);
+    if (remaining > 0 && expense.payment === "card") {
+      if (invoiceShift(expense.note) === "seguinte") {
+        dueCardOtherCents += remaining;
+        const nextId = nextMonthId(expense.monthId);
+        if (nextId) dueOtherMonths.add(nextId);
+      } else {
+        dueCardOwnCents += remaining;
+      }
+    }
+  }
+
+  return {
+    paidCardOwnCents,
+    paidCardOtherCents,
+    paidOtherMonths: [...paidOtherMonths].sort(),
+    dueCardOwnCents,
+    dueCardOtherCents,
+    dueOtherMonths: [...dueOtherMonths].sort(),
+  };
+}
+
 export function extrasBreakdown(expenses) {
-  const planned = { pix: 0, card: 0, total: 0 };
-  const unexpected = { pix: 0, card: 0, total: 0 };
+  const planned = { pix: 0, card: 0, cardOwnInvoice: 0, cardOtherInvoice: 0, otherInvoiceMonths: [], total: 0 };
+  const unexpected = { pix: 0, card: 0, cardOwnInvoice: 0, cardOtherInvoice: 0, otherInvoiceMonths: [], total: 0 };
+  const plannedMonths = new Set();
+  const unexpectedMonths = new Set();
   for (const expense of expenses || []) {
     if (expense.section !== "extra") continue;
-    const bucket = isPlannedNote(expense.note) ? planned : unexpected;
-    if (expense.payment === "card") bucket.card += expense.amountCents;
-    else bucket.pix += expense.amountCents;
+    const isPlanned = isPlannedNote(expense.note);
+    const bucket = isPlanned ? planned : unexpected;
+    const monthSet = isPlanned ? plannedMonths : unexpectedMonths;
+    if (expense.payment === "card") {
+      bucket.card += expense.amountCents;
+      const invoiceMonth = chargedInvoiceMonth(expense.note);
+      if (invoiceMonth && expense.monthId && invoiceMonth !== expense.monthId) {
+        bucket.cardOtherInvoice += expense.amountCents;
+        monthSet.add(invoiceMonth);
+      } else {
+        bucket.cardOwnInvoice += expense.amountCents;
+      }
+    } else {
+      bucket.pix += expense.amountCents;
+    }
     bucket.total += expense.amountCents;
   }
+  planned.otherInvoiceMonths = [...plannedMonths].sort();
+  unexpected.otherInvoiceMonths = [...unexpectedMonths].sort();
+  const allOtherMonths = new Set([...planned.otherInvoiceMonths, ...unexpected.otherInvoiceMonths]);
   return {
     planned,
     unexpected,
     pix: planned.pix + unexpected.pix,
     card: planned.card + unexpected.card,
+    cardOwnInvoice: planned.cardOwnInvoice + unexpected.cardOwnInvoice,
+    cardOtherInvoice: planned.cardOtherInvoice + unexpected.cardOtherInvoice,
+    otherInvoiceMonths: [...allOtherMonths].sort(),
     total: planned.total + unexpected.total,
   };
 }
@@ -173,17 +259,32 @@ export function invoiceBreakdown(expenses) {
   let plannedCents = 0;
   let unexpectedCents = 0;
   let otherCents = 0;
+  let livingFromOtherCents = 0;
+  let plannedFromOtherCents = 0;
+  let unexpectedFromOtherCents = 0;
+  let fromOtherMonthsCents = 0;
+  const originMonths = new Set();
+
   for (const expense of expenses || []) {
     if (expense.section !== "card" && !extraOnOwnInvoice(expense)) continue;
     const note = String(expense.note || "");
+    const refMonth = referenceMonthFrom(note);
+    const isFromOtherMonth = Boolean(refMonth && expense.monthId && refMonth !== expense.monthId);
+    if (isFromOtherMonth) {
+      fromOtherMonthsCents += expense.amountCents;
+      originMonths.add(refMonth);
+    }
     if (note.includes("parcelamento:") || note.includes("quitado-cartao:")) {
       otherCents += expense.amountCents;
     } else if (isPlannedNote(note)) {
       plannedCents += expense.amountCents;
+      if (isFromOtherMonth) plannedFromOtherCents += expense.amountCents;
     } else if (isImprevistoNote(note) || expense.section === "extra") {
       unexpectedCents += expense.amountCents;
+      if (isFromOtherMonth) unexpectedFromOtherCents += expense.amountCents;
     } else if (originIdFrom(note)) {
       livingCents += expense.amountCents;
+      if (isFromOtherMonth) livingFromOtherCents += expense.amountCents;
     } else {
       otherCents += expense.amountCents;
     }
@@ -194,5 +295,10 @@ export function invoiceBreakdown(expenses) {
     unexpectedCents,
     otherCents,
     totalCents: livingCents + plannedCents + unexpectedCents + otherCents,
+    fromOtherMonthsCents,
+    livingFromOtherCents,
+    plannedFromOtherCents,
+    unexpectedFromOtherCents,
+    originMonths: [...originMonths].sort(),
   };
 }
