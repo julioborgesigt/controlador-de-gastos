@@ -4,9 +4,15 @@ import {
   bufferToBase64Url,
   cardChargeTitle,
   centsToInput,
+  chargedInvoiceMonth,
   composeNote,
+  extraOnOwnInvoice,
+  extrasBreakdown,
   formatCpf,
+  invoiceBreakdown,
   invoiceShift,
+  isImprevistoNote,
+  isPlannedNote,
   isVariableNote,
   money,
   nextMonthId,
@@ -46,6 +52,7 @@ const state = {
   shares: [],
   monthId: sessionStorage.getItem("monthId") || "",
   view: "resumo",
+  extraFilter: "all",
   data: null,
   error: "",
   notice: "",
@@ -1050,24 +1057,59 @@ function helpDialog() {
 }
 
 function extraSplit(expenses) {
-  let card = 0;
-  let pix = 0;
-  for (const expense of expenses || []) {
-    if (expense.section !== "extra") continue;
-    if (expense.payment === "card") card += expense.amountCents;
-    else pix += expense.amountCents;
+  return extrasBreakdown(expenses);
+}
+
+function invoiceSummaryDetail(expenses, totals) {
+  const inv = invoiceBreakdown(expenses);
+  const living = inv.livingCents || totals.fixedOnCardCents || 0;
+  const parts = [];
+  if (living > 0) parts.push(`${money(living)} custo de vida`);
+  if (inv.plannedCents > 0) parts.push(`${money(inv.plannedCents)} planejados`);
+  if (inv.unexpectedCents > 0) parts.push(`${money(inv.unexpectedCents)} imprevistos`);
+  if (inv.otherCents > 0 && inv.livingCents > 0) parts.push(`${money(inv.otherCents)} parcelamentos/outros`);
+  if (!parts.length) {
+    return totals.faturaCents > 0 ? "Linhas da fatura deste mês" : "Nenhuma cobrança na fatura neste mês";
   }
-  return { card, pix, total: card + pix };
+  return `${parts.join(" · ")} (já incluídos nas categorias acima)`;
+}
+
+function pixSummaryDetail(totals, extras) {
+  const parts = [];
+  if (totals.fixedCashCents > 0) parts.push(`${money(totals.fixedCashCents)} custo de vida`);
+  if (extras.planned.pix > 0) parts.push(`${money(extras.planned.pix)} planejados`);
+  if (extras.unexpected.pix > 0) parts.push(`${money(extras.unexpected.pix)} imprevistos`);
+  if (!parts.length) return "Nenhum pagamento no Pix registrado neste mês";
+  return parts.join(" · ");
+}
+
+function extraCategoryJump(filter, title, bucket, emptyCopy) {
+  return el("button", {
+    class: "jump",
+    type: "button",
+    onclick: () => {
+      state.view = "extras";
+      state.extraFilter = filter;
+      render();
+    },
+  }, [
+    el("div", { class: "row-between" }, [el("span", {}, title), el("strong", {}, money(bucket.total))]),
+    el("small", {}, bucket.total > 0
+      ? `${money(bucket.pix)} no Pix · ${money(bucket.card)} no cartão`
+      : emptyCopy),
+  ]);
 }
 
 function summary(data) {
   const { month, totals } = data;
+  const extras = extraSplit(data.expenses);
+  const pixPaidTotal = (totals.fixedCashCents || 0) + extras.pix;
   return el("section", {}, [
     el("article", { class: "hero" }, [
       titleWithHelp(month.label, "Resumo mensal", [
-        "Falta pagar é o que ainda não foi lançado neste mês.",
-        "O total do mês inclui o custo de vida que ainda está só previsto.",
-        "Já pago soma o que entrou por À vista ou por Cartões de crédito.",
+        "Para onde vai o seu dinheiro divide o mês em Custo de vida, Planejados e Imprevistos (independentemente de ser pago no Pix ou no cartão).",
+        "Como você está pagando mostra quanto desse mesmo total está na Fatura do cartão e quanto saiu no Pix.",
+        "Gastos pagos no cartão aparecem tanto na categoria quanto na fatura, mas são somados uma única vez no total do mês.",
       ]),
       el("p", { class: "muted" }, "Falta pagar"),
       el("p", { class: "money" }, money(totals.remainingCents)),
@@ -1083,7 +1125,7 @@ function summary(data) {
       el("div", { class: "metric" }, [
         el("small", {}, "Despesa prevista"),
         el("strong", {}, money(totals.forecastExpenseCents)),
-        el("small", {}, "Despesa parcial"),
+        el("small", {}, "Despesa lançada"),
         el("strong", {}, money(totals.partialExpenseCents)),
       ]),
       el("div", { class: "metric" }, [
@@ -1093,11 +1135,13 @@ function summary(data) {
         el("strong", { class: totals.partialBalanceCents < 0 ? "negative" : "positive" }, money(totals.partialBalanceCents)),
       ]),
     ]),
-    jump("cartoes", "Fatura do cartão", money(totals.faturaCents), totals.extrasCardCents
-      ? `${money(totals.invoiceCents)} previstos + ${money(totals.extrasCardCents)} em imprevistos`
-      : "Nubank, Neon e linhas da fatura"),
+    el("p", { class: "eyebrow group" }, "Para onde vai o seu dinheiro"),
     livingJump(totals),
-    jump("extras", "Outros gastos", money(extraSplit(data.expenses).total), `${money(extraSplit(data.expenses).pix)} fora do cartão · ${money(extraSplit(data.expenses).card)} no cartão`),
+    extraCategoryJump("planejado", "Planejados", extras.planned, "Nenhuma compra ou conta planejada neste mês"),
+    extraCategoryJump("imprevisto", "Imprevistos", extras.unexpected, "Nenhum gasto imprevisto neste mês"),
+    el("p", { class: "eyebrow group" }, "Como você está pagando"),
+    jump("cartoes", "Faturas do cartão", money(totals.faturaCents), invoiceSummaryDetail(data.expenses, totals)),
+    jump("avista", "Pagamentos à vista (Pix)", money(pixPaidTotal), pixSummaryDetail(totals, extras)),
     editable() && totals.launchedRemainingCents > 0
       ? el("button", { class: "primary", type: "button", onclick: () => askConfirm("settle") }, "Quitar o que falta")
       : editable() && month.settled
@@ -1933,12 +1977,13 @@ function cashHome(data) {
   ]);
 }
 
-function openCashSpend() {
+function openCashSpend(kind = "casa") {
+  const expenseKind = kind === "planejado" || kind === "imprevisto" || kind === "casa" ? kind : "casa";
   state.sheet = {
     mode: "cash-spend",
     name: "",
     amount: "",
-    expenseKind: "casa",
+    expenseKind,
     invoiceMonthId: state.monthId,
     invoiceTouched: true,
     linkExpenseId: "",
@@ -2163,6 +2208,33 @@ function invoiceFold(key, label, amount, helpLines, body) {
   ]);
 }
 
+function invoiceXray(expenses, fallbackLivingCents = 0) {
+  const inv = invoiceBreakdown(expenses);
+  if (inv.totalCents <= 0) return "";
+  const living = inv.livingCents || fallbackLivingCents || 0;
+  const cells = [
+    el("div", { class: "xray-item" }, [
+      el("small", {}, "Custo de vida na fatura"),
+      el("strong", {}, money(living)),
+    ]),
+    el("div", { class: "xray-item" }, [
+      el("small", {}, "Planejados na fatura"),
+      el("strong", {}, money(inv.plannedCents)),
+    ]),
+    el("div", { class: "xray-item" }, [
+      el("small", {}, "Imprevistos na fatura"),
+      el("strong", {}, money(inv.unexpectedCents)),
+    ]),
+  ];
+  if (inv.otherCents > 0 && inv.livingCents > 0) {
+    cells.push(el("div", { class: "xray-item" }, [
+      el("small", {}, "Parcelamentos / outros"),
+      el("strong", {}, money(inv.otherCents)),
+    ]));
+  }
+  return el("div", { class: "cost-split invoice-xray" }, cells);
+}
+
 function cardsHome(data) {
   const cards = data.cards || [];
   const purchases = purchasesOf(data.month.id);
@@ -2173,6 +2245,8 @@ function cardsHome(data) {
   if (nextKnown) ensureNextInvoices(data.month.id);
   const nextData = state.nextInvoicesFor === data.month.id ? state.nextInvoices : null;
   const invoiceRows = [];
+  const xray = invoiceXray(data.expenses, data.totals.fixedOnCardCents);
+  if (xray) invoiceRows.push(xray);
   if (!cards.length) invoiceRows.push(el("p", { class: "muted" }, "Nenhum cartão ainda."));
   for (const card of cards) {
     invoiceRows.push(cardManageRow(card, cardInvoiceCents(data.expenses, card.name), expensesForCardName(data.expenses, card.name)));
@@ -2211,7 +2285,7 @@ function cardsHome(data) {
         onDesktop()
           ? "Clique num cartão para ver a fatura. Os botões editam ou quitam o cartão. Excluir só quando ele não tiver gastos."
           : "Toque num cartão para ver a fatura. Dá para editar o cartão. Excluir só quando ele não tiver gastos.",
-        "Cada gasto no crédito pede a classificação. A data de fechamento sugere a fatura, e dá para escolher outro mês.",
+        "O raio-X acima mostra quanto da fatura veio do Custo de vida, de Planejados e de Imprevistos.",
         "Ver lançamentos feitos no mês soma as compras pela data da compra, inclusive as que caíram na fatura seguinte.",
         data.totals.fixedOnCardCents
           ? `${money(data.totals.fixedOnCardCents)} de custo de vida já foram lançados no cartão e não somam de novo.`
@@ -2286,12 +2360,13 @@ function cardDetail(data) {
     el("div", { class: "section-head" }, [
       titleWithHelp(data.month.label, card ? card.name : "Sem cartão", [
         card
-          ? "Os gastos vinculados a este cartão aparecem aqui. O custo de vida que já virou lançamento entra na fatura."
+          ? "Os gastos vinculados a este cartão aparecem aqui, separados entre Custo de vida, Planejados e Imprevistos."
           : "Estes gastos ainda não têm um cartão cadastrado.",
         "O gasto entra na aba da classificação escolhida. O fechamento sugere a fatura e você pode trocar o mês.",
       ]),
       el("h2", {}, card ? card.name : "Sem cartão"),
       el("p", { class: "money inline" }, money(total)),
+      invoiceXray(all),
     ]),
     editable() && card ? cardTools(card) : "",
     editable() ? el("div", { class: "stack-actions" }, [
@@ -2299,14 +2374,18 @@ function cardDetail(data) {
     ]) : "",
   ];
   const groups = [
-    ["Fatura prevista", visible.filter((expense) => expense.section === "card")],
-    ["Imprevistos", visible.filter((expense) => expense.section === "extra" && !isPlannedNote(expense.note))],
-    ["Planejados", visible.filter((expense) => expense.section === "extra" && isPlannedNote(expense.note))],
-    ["Custo de vida, já na fatura", visible.filter((expense) => expense.section === "fixed" && !linkedInvoice(expense))],
+    [
+      "Custo de vida na fatura",
+      visible.filter((expense) => (!fixedOnCard(expense) && cardTrack(expense) === "casa") || (expense.section === "fixed" && !linkedInvoice(expense))),
+    ],
+    ["Planejados na fatura", visible.filter((expense) => !fixedOnCard(expense) && cardTrack(expense) === "planejado")],
+    ["Imprevistos na fatura", visible.filter((expense) => !fixedOnCard(expense) && cardTrack(expense) === "imprevisto")],
+    ["Fatura prevista / parcelamentos", visible.filter((expense) => expense.section === "card" && cardTrack(expense) === "")],
   ];
   for (const [title, rows] of groups) {
     if (!rows.length) continue;
-    children.push(el("p", { class: "eyebrow group" }, title));
+    const groupTotal = rows.reduce((sum, row) => sum + row.amountCents, 0);
+    children.push(el("p", { class: "eyebrow group" }, `${title} · ${money(groupTotal)}`));
     children.push(el("div", { class: "list" }, rows.slice().sort(compareInvoiceItems).map((expense) => expenseRow(expense, "card", { manage: editable(), cardExpense: editable() }))));
   }
   if (!visible.length) {
@@ -2683,17 +2762,6 @@ function cardMirror(expense, section) {
   return section === "extra" && expense.section === "extra" && expense.payment === "card";
 }
 
-function chargedInvoiceMonth(note) {
-  const line = String(note || "").split("\n").map((item) => item.trim()).find((item) => /^fatura:\d{4}-\d{2}$/.test(item));
-  return line ? line.slice("fatura:".length) : "";
-}
-
-function extraOnOwnInvoice(expense) {
-  if (expense.section !== "extra" || expense.payment !== "card") return false;
-  const invoice = chargedInvoiceMonth(expense.note);
-  return !invoice || invoice === expense.monthId;
-}
-
 function expenseBelongsToCard(expense) {
   return expense.section === "card" || extraOnOwnInvoice(expense) || fixedOnCard(expense);
 }
@@ -2805,33 +2873,77 @@ function firstCardName() {
   return state.data?.cards?.[0]?.name || "";
 }
 
+function extraSplitCards(extras) {
+  const active = state.extraFilter || "all";
+  return el("div", { class: "cost-split" }, [
+    el("button", {
+      type: "button",
+      class: `wide${active === "all" ? " on" : ""}`,
+      onclick: () => {
+        state.extraFilter = "all";
+        render();
+      },
+    }, [
+      el("small", {}, "Total (Planejados + Imprevistos)"),
+      el("strong", {}, money(extras.total)),
+      el("small", {}, `${money(extras.pix)} no Pix · ${money(extras.card)} no cartão`),
+    ]),
+    el("button", {
+      type: "button",
+      class: active === "planejado" ? "on" : "",
+      onclick: () => {
+        state.extraFilter = active === "planejado" ? "all" : "planejado";
+        render();
+      },
+    }, [
+      el("small", {}, "Planejados"),
+      el("strong", {}, money(extras.planned.total)),
+      el("small", {}, `${money(extras.planned.pix)} Pix · ${money(extras.planned.card)} cartão`),
+    ]),
+    el("button", {
+      type: "button",
+      class: active === "imprevisto" ? "on" : "",
+      onclick: () => {
+        state.extraFilter = active === "imprevisto" ? "all" : "imprevisto";
+        render();
+      },
+    }, [
+      el("small", {}, "Imprevistos"),
+      el("strong", {}, money(extras.unexpected.total)),
+      el("small", {}, `${money(extras.unexpected.pix)} Pix · ${money(extras.unexpected.card)} cartão`),
+    ]),
+  ]);
+}
+
 function sectionList(data, section) {
   const totals = data.totals;
   const all = data.expenses.filter((expense) => belongs(expense, section));
   const visible = all.filter((expense) => state.showEmpty || expense.amountCents !== 0 || expense.source === "user");
   const hidden = all.length - visible.length;
+  const extras = section === "extra" ? extrasBreakdown(all) : null;
   const total = section === "card"
     ? totals.faturaCents
     : section === "fixed"
       ? (totals.fixedAllSettled ? totals.fixedLaunchedCents : totals.fixedForecastCents)
-      : extraSplit(all).total;
+      : extras.total;
   const children = [
     el("div", { class: "section-head" }, [
       section === "fixed"
         ? titleWithHelp("Custo de vida", "Custo de vida", [
-          "Aqui fica só o previsto e o que já foi pago.",
-          "O Pix é lançado em À vista. O crédito é lançado em Cartões de crédito.",
+          "Aqui fica o previsto da casa e o que já foi pago no Pix ou lançado no cartão.",
+          "Toque num custo (ou arraste para a direita no celular) para dar baixa direto no Pix ou enviar para a fatura do cartão.",
           "Falta no cartão é o previsto que ainda será pago no crédito. Falta no Pix é o que ainda será pago à vista.",
         ])
         : section === "extra"
-          ? titleWithHelp("Outros gastos", "Outros gastos", [
-            "Esta aba só consulta imprevistos e planejados.",
-            "Um gasto novo entra por Cartões de crédito ou À vista.",
+          ? titleWithHelp("Planejados e imprevistos", "Planejados e imprevistos", [
+            "Separa o que foi compra ou conta planejada do que foi gasto imprevisto neste mês.",
+            "Toque nos cartões abaixo para filtrar só Planejados ou só Imprevistos, ou lance um novo gasto no cartão ou no Pix.",
           ])
           : el("p", { class: "eyebrow" }, data.month.label),
       section === "fixed" || section === "extra" ? el("p", { class: "muted" }, data.month.label) : "",
-      section === "fixed" ? "" : el("h2", {}, money(total)),
+      section === "fixed" || section === "extra" ? "" : el("h2", {}, money(total)),
       section === "fixed" ? costSplit(totals) : "",
+      section === "extra" ? extraSplitCards(extras) : "",
     ]),
   ];
   if (editable() && section === "fixed") {
@@ -2841,9 +2953,48 @@ function sectionList(data, section) {
       onclick: () => openCreate(section, "pix"),
     }, "Adicionar custo"));
   }
-  children.push(el("div", { class: "list" }, visible.map((expense) => expenseRow(expense, section))));
-  if (!visible.length) {
-    children.push(el("p", { class: "muted" }, section === "extra" ? "Nenhum imprevisto ou planejado neste mês." : section === "fixed" ? "Nenhum custo de vida neste mês." : "Nada com valor neste mês."));
+  if (editable() && section === "extra") {
+    const kind = state.extraFilter === "planejado" ? "planejado" : "imprevisto";
+    children.push(el("div", { class: "stack-actions" }, [
+      el("button", {
+        class: "primary",
+        type: "button",
+        onclick: () => openCardExpense("", kind),
+      }, "+ Lançar no cartão"),
+      el("button", {
+        class: "secondary",
+        type: "button",
+        onclick: () => openCashSpend(kind),
+      }, "+ Lançar no Pix"),
+    ]));
+  }
+  if (section === "extra") {
+    const active = state.extraFilter || "all";
+    const plannedRows = visible.filter((expense) => isPlannedNote(expense.note));
+    const unexpectedRows = visible.filter((expense) => !isPlannedNote(expense.note));
+    const groups = [
+      active !== "imprevisto" ? ["Planejados", plannedRows, extras.planned.total] : null,
+      active !== "planejado" ? ["Imprevistos", unexpectedRows, extras.unexpected.total] : null,
+    ].filter(Boolean);
+    let shownAny = false;
+    for (const [title, rows, groupTotal] of groups) {
+      if (!rows.length) continue;
+      shownAny = true;
+      children.push(el("p", { class: "eyebrow group" }, `${title} · ${money(groupTotal)}`));
+      children.push(el("div", { class: "list" }, rows.map((expense) => expenseRow(expense, section))));
+    }
+    if (!shownAny) {
+      children.push(el("p", { class: "muted" }, active === "planejado"
+        ? "Nenhum gasto planejado neste mês."
+        : active === "imprevisto"
+          ? "Nenhum imprevisto neste mês."
+          : "Nenhum imprevisto ou planejado neste mês."));
+    }
+  } else {
+    children.push(el("div", { class: "list" }, visible.map((expense) => expenseRow(expense, section))));
+    if (!visible.length) {
+      children.push(el("p", { class: "muted" }, section === "fixed" ? "Nenhum custo de vida neste mês." : "Nada com valor neste mês."));
+    }
   }
   if (hidden > 0) {
     children.push(el("button", {
@@ -3427,17 +3578,9 @@ function costDetailDialog() {
   return overlay;
 }
 
-function isPlannedNote(note) {
-  return String(note || "").split("\n").some((item) => item.trim() === "tipo:planejado");
-}
-
 function systemCardLine(expense) {
   const note = String(expense.note || "");
   return note.includes("parcelamento:") || note.includes("quitado-cartao:");
-}
-
-function isImprevistoNote(note) {
-  return String(note || "").split("\n").some((item) => item.trim() === "tipo:imprevisto");
 }
 
 function cardTrack(expense) {
@@ -3507,7 +3650,7 @@ function expenseRow(expense, section, options = {}) {
     ]),
   ]);
   if (!editable()) return front;
-  const informational = section === "fixed" || section === "extra";
+  const informational = section === "extra";
   const onCardHere = section === "fixed" && expense.onCard;
   const living = section === "fixed" && !expense.onCard;
   const cardFirst = expense.payment === "card" && !expense.onCard;
@@ -3668,7 +3811,7 @@ function openCreate(section, payment, kind = "imprevisto") {
   render();
 }
 
-function openCardExpense(cardName = "") {
+function openCardExpense(cardName = "", kind = "imprevisto") {
   const cards = state.data?.cards ?? [];
   if (!cards.length) {
     state.error = "Adicione um cartão antes de lançar o gasto.";
@@ -3683,12 +3826,13 @@ function openCardExpense(cardName = "") {
     name: "",
     amount: "",
     cardLabel: selected,
-    expenseKind: "imprevisto",
+    expenseKind: kind === "planejado" || kind === "casa" ? kind : "imprevisto",
     purchaseDate,
     invoiceMonthId: state.monthId,
     invoiceTouched: false,
     costMonthId: (state.data?.months || []).some((month) => month.id === purchaseDate.slice(0, 7)) ? purchaseDate.slice(0, 7) : state.monthId,
     costTouched: false,
+    showCostMonth: false,
     linkExpenseId: "",
     billing: "once",
     installmentCount: "2",
@@ -3937,6 +4081,7 @@ function cardSpendFields(draft) {
   const parcelado = draft.billing === "installments";
   const amountName = parcelado && draft.amountMode === "total" ? "Valor da compra" : parcelado ? "Valor da parcela" : "Valor";
   const costLabel = monthName(draft.costMonthId || state.monthId) || "este mês";
+  const showBudgetMonth = draft.expenseKind === "casa" || draft.showCostMonth || draft.costTouched;
   return [
     el("h2", {}, "Gasto no crédito"),
     field("Nome", "name", draft.name, "text"),
@@ -3963,18 +4108,31 @@ function cardSpendFields(draft) {
       el("label", {}, "Classificação"),
       segmented("expenseKind", [
         ["casa", "Custo de vida"],
-        ["imprevisto", "Imprevisto"],
         ["planejado", "Planejado"],
+        ["imprevisto", "Imprevisto"],
       ], draft.expenseKind || "imprevisto"),
     ]),
-    el("p", { class: "muted" }, "O lançamento fica no mês escolhido. A fatura do cartão pode ser outra."),
-    el("div", { class: "field" }, [
-      el("label", { for: "costMonthId" }, draft.expenseKind === "casa" ? "Custo de vida de" : draft.expenseKind === "planejado" ? "Planejado de" : "Imprevisto de"),
-      costMonth,
+    el("div", { class: "pair" }, [
+      el("div", { class: "field" }, [el("label", { for: "purchaseDate" }, "Data da compra"), date]),
+      el("div", { class: "field" }, [el("label", { for: "invoiceMonthId" }, "Entra na fatura de"), invoice]),
     ]),
-    el("div", { class: "field" }, [el("label", { for: "purchaseDate" }, "Data da compra"), date]),
-    el("div", { class: "field" }, [el("label", { for: "invoiceMonthId" }, "Entra na fatura de"), invoice]),
     el("p", { class: "muted", id: "invoice-hint" }, invoiceHint(draft)),
+    showBudgetMonth
+      ? el("div", { class: "field" }, [
+        el("label", { for: "costMonthId" }, draft.expenseKind === "casa" ? "Custo de vida de" : draft.expenseKind === "planejado" ? "Mês do orçamento (Planejado)" : "Mês do orçamento (Imprevisto)"),
+        costMonth,
+      ])
+      : el("p", { class: "muted" }, [
+        `Contabilizado no orçamento de ${costLabel}. `,
+        el("button", {
+          type: "button",
+          class: "linkish",
+          onclick: () => {
+            draft.showCostMonth = true;
+            render();
+          },
+        }, "Mudar mês do orçamento"),
+      ]),
     draft.expenseKind === "casa"
       ? el("div", { class: "field" }, [
         el("label", { id: "link-label", for: "linkExpenseId" }, `Vincular a um custo previsto de ${costLabel}`),
@@ -4266,6 +4424,26 @@ function expenseInfoDialog() {
       ...tail.map((line) => el("p", {}, line)),
       el("div", { class: "actions" }, [
         info.canEdit && info.living && !info.paid
+          ? el("button", {
+            class: "secondary",
+            type: "button",
+            onclick: () => {
+              const target = (state.data?.expenses || []).find((item) => item.id === info.id);
+              if (target) openCloseLiving(target);
+            },
+          }, "Pago no Pix")
+          : "",
+        info.canEdit && info.living && !info.paid
+          ? el("button", {
+            class: "secondary",
+            type: "button",
+            onclick: () => {
+              const target = (state.data?.expenses || []).find((item) => item.id === info.id);
+              if (target) openCardPay(target);
+            },
+          }, "Enviar pro cartão")
+          : "",
+        info.canEdit && info.living && !info.paid
           ? el("button", { class: "secondary", type: "button", onclick: () => openPartialPayment(info) }, "Pagamento parcial")
           : "",
         info.canEdit && info.living && (info.partials?.length || info.paid)
@@ -4351,6 +4529,7 @@ function openUndoCard(expense) {
 }
 
 function openCardPay(expense) {
+  state.expenseInfo = null;
   const cards = state.data?.cards ?? [];
   if (!cards.length) {
     state.error = "Adicione um cartão antes de lançar o pagamento.";
