@@ -14,6 +14,7 @@ import {
   isImprevistoNote,
   isPlannedNote,
   isVariableNote,
+  livingCrossMonthSummary,
   money,
   nextMonthId,
   originIdFrom,
@@ -21,7 +22,9 @@ import {
   partialIdFrom,
   passkeyWhen,
   paymentLabel,
+  referenceMonthFrom,
   seriesIdFrom,
+  shortMonthLabel,
   visibleNote,
 } from "./format.js";
 import { compareInvoiceItems } from "./installment-order.js";
@@ -1060,6 +1063,21 @@ function extraSplit(expenses) {
   return extrasBreakdown(expenses);
 }
 
+function formatMonthList(monthIds) {
+  return (monthIds || []).map((id) => shortMonthLabel(id)).filter(Boolean).join(", ");
+}
+
+function cardSplitText(pixCents, cardOwnCents, cardOtherCents, otherMonths, pixLabel = "no Pix", cardLabel = "no cartão") {
+  if (cardOtherCents > 0) {
+    const monthsLabel = formatMonthList(otherMonths) || "outro mês";
+    if (cardOwnCents > 0) {
+      return `${money(pixCents)} ${pixLabel} · ${money(cardOwnCents)} nesta fatura · ${money(cardOtherCents)} na fatura de ${monthsLabel}`;
+    }
+    return `${money(pixCents)} ${pixLabel} · ${money(cardOtherCents)} na fatura de ${monthsLabel}`;
+  }
+  return `${money(pixCents)} ${pixLabel} · ${money(cardOwnCents)} ${cardLabel}`;
+}
+
 function invoiceSummaryDetail(expenses, totals) {
   const inv = invoiceBreakdown(expenses);
   const living = inv.livingCents || totals.fixedOnCardCents || 0;
@@ -1071,7 +1089,10 @@ function invoiceSummaryDetail(expenses, totals) {
   if (!parts.length) {
     return totals.faturaCents > 0 ? "Linhas da fatura deste mês" : "Nenhuma cobrança na fatura neste mês";
   }
-  return `${parts.join(" · ")} (já incluídos nas categorias acima)`;
+  const fromOther = inv.fromOtherMonthsCents > 0
+    ? ` · inclui ${money(inv.fromOtherMonthsCents)} vindos de ${formatMonthList(inv.originMonths)}`
+    : "";
+  return `${parts.join(" · ")} (já incluídos nas categorias acima)${fromOther}`;
 }
 
 function pixSummaryDetail(totals, extras) {
@@ -1095,7 +1116,7 @@ function extraCategoryJump(filter, title, bucket, emptyCopy) {
   }, [
     el("div", { class: "row-between" }, [el("span", {}, title), el("strong", {}, money(bucket.total))]),
     el("small", {}, bucket.total > 0
-      ? `${money(bucket.pix)} no Pix · ${money(bucket.card)} no cartão`
+      ? cardSplitText(bucket.pix, bucket.cardOwnInvoice, bucket.cardOtherInvoice, bucket.otherInvoiceMonths)
       : emptyCopy),
   ]);
 }
@@ -1109,7 +1130,7 @@ function summary(data) {
       titleWithHelp(month.label, "Resumo mensal", [
         "Para onde vai o seu dinheiro divide o mês em Custo de vida, Planejados e Imprevistos (independentemente de ser pago no Pix ou no cartão).",
         "Como você está pagando mostra quanto desse mesmo total está na Fatura do cartão e quanto saiu no Pix.",
-        "Gastos pagos no cartão aparecem tanto na categoria quanto na fatura, mas são somados uma única vez no total do mês.",
+        "Quando um gasto deste mês entra na fatura de outro mês (ou vice-versa), o mês da fatura fica destacado em cada categoria e dentro da fatura.",
       ]),
       el("p", { class: "muted" }, "Falta pagar"),
       el("p", { class: "money" }, money(totals.remainingCents)),
@@ -1136,7 +1157,7 @@ function summary(data) {
       ]),
     ]),
     el("p", { class: "eyebrow group" }, "Para onde vai o seu dinheiro"),
-    livingJump(totals),
+    livingJump(totals, data.expenses),
     extraCategoryJump("planejado", "Planejados", extras.planned, "Nenhuma compra ou conta planejada neste mês"),
     extraCategoryJump("imprevisto", "Imprevistos", extras.unexpected, "Nenhum gasto imprevisto neste mês"),
     el("p", { class: "eyebrow group" }, "Como você está pagando"),
@@ -2212,18 +2233,22 @@ function invoiceXray(expenses, fallbackLivingCents = 0) {
   const inv = invoiceBreakdown(expenses);
   if (inv.totalCents <= 0) return "";
   const living = inv.livingCents || fallbackLivingCents || 0;
+  const origins = formatMonthList(inv.originMonths);
   const cells = [
     el("div", { class: "xray-item" }, [
       el("small", {}, "Custo de vida na fatura"),
       el("strong", {}, money(living)),
+      inv.livingFromOtherCents > 0 ? el("small", { class: "xray-sub" }, `inclui ${money(inv.livingFromOtherCents)} de ${origins}`) : "",
     ]),
     el("div", { class: "xray-item" }, [
       el("small", {}, "Planejados na fatura"),
       el("strong", {}, money(inv.plannedCents)),
+      inv.plannedFromOtherCents > 0 ? el("small", { class: "xray-sub" }, `inclui ${money(inv.plannedFromOtherCents)} de ${origins}`) : "",
     ]),
     el("div", { class: "xray-item" }, [
       el("small", {}, "Imprevistos na fatura"),
       el("strong", {}, money(inv.unexpectedCents)),
+      inv.unexpectedFromOtherCents > 0 ? el("small", { class: "xray-sub" }, `inclui ${money(inv.unexpectedFromOtherCents)} de ${origins}`) : "",
     ]),
   ];
   if (inv.otherCents > 0 && inv.livingCents > 0) {
@@ -2886,7 +2911,7 @@ function extraSplitCards(extras) {
     }, [
       el("small", {}, "Total (Planejados + Imprevistos)"),
       el("strong", {}, money(extras.total)),
-      el("small", {}, `${money(extras.pix)} no Pix · ${money(extras.card)} no cartão`),
+      el("small", {}, cardSplitText(extras.pix, extras.cardOwnInvoice, extras.cardOtherInvoice, extras.otherInvoiceMonths)),
     ]),
     el("button", {
       type: "button",
@@ -2898,7 +2923,7 @@ function extraSplitCards(extras) {
     }, [
       el("small", {}, "Planejados"),
       el("strong", {}, money(extras.planned.total)),
-      el("small", {}, `${money(extras.planned.pix)} Pix · ${money(extras.planned.card)} cartão`),
+      el("small", {}, cardSplitText(extras.planned.pix, extras.planned.cardOwnInvoice, extras.planned.cardOtherInvoice, extras.planned.otherInvoiceMonths, "Pix", "cartão")),
     ]),
     el("button", {
       type: "button",
@@ -2910,7 +2935,7 @@ function extraSplitCards(extras) {
     }, [
       el("small", {}, "Imprevistos"),
       el("strong", {}, money(extras.unexpected.total)),
-      el("small", {}, `${money(extras.unexpected.pix)} Pix · ${money(extras.unexpected.card)} cartão`),
+      el("small", {}, cardSplitText(extras.unexpected.pix, extras.unexpected.cardOwnInvoice, extras.unexpected.cardOtherInvoice, extras.unexpected.otherInvoiceMonths, "Pix", "cartão")),
     ]),
   ]);
 }
@@ -3403,16 +3428,35 @@ function belongs(expense, section) {
   return expense.section === "fixed";
 }
 
-function livingCardPlace(totals) {
-  return `${money(totals.fixedCashCents)} fora do cartão · ${money(totals.fixedOnCardCents)} no cartão`;
+function livingOtherChargeMonths(expense) {
+  const months = new Set();
+  for (const charge of expense?.charges || []) {
+    if (charge?.monthId && expense?.monthId && charge.monthId !== expense.monthId) {
+      months.add(charge.monthId);
+    }
+  }
+  return [...months].sort();
 }
 
-function livingJump(totals) {
+function livingCardPlace(totals, expenses) {
+  const base = `${money(totals.fixedCashCents)} fora do cartão · ${money(totals.fixedOnCardCents)} no cartão`;
+  const cross = livingCrossMonthSummary(expenses || state.data?.expenses || []);
+  const extras = [];
+  if (cross.paidCardOtherCents > 0) {
+    extras.push(`${money(cross.paidCardOtherCents)} na fatura de ${formatMonthList(cross.paidOtherMonths)}`);
+  }
+  if (cross.dueCardOtherCents > 0) {
+    extras.push(`previsto p/ fatura de ${formatMonthList(cross.dueOtherMonths)}: ${money(cross.dueCardOtherCents)}`);
+  }
+  return extras.length ? `${base} (${extras.join(" · ")})` : base;
+}
+
+function livingJump(totals, expenses) {
   const openLiving = () => {
     state.view = "casa";
     render();
   };
-  const place = el("small", { class: "jump-place" }, livingCardPlace(totals));
+  const place = el("small", { class: "jump-place" }, livingCardPlace(totals, expenses));
   if (totals.fixedAllSettled) {
     return el("button", { class: "jump", type: "button", onclick: openLiving }, [
       el("div", { class: "row-between" }, [
@@ -3444,7 +3488,7 @@ function blurb(section, totals) {
   return "Imprevistos deste mês, fora da projeção.";
 }
 
-function costCard(key, label, cents, wide = false) {
+function costCard(key, label, cents, wide = false, sub = "") {
   return el("button", {
     type: "button",
     class: wide ? "wide" : "",
@@ -3456,17 +3500,25 @@ function costCard(key, label, cents, wide = false) {
   }, [
     el("small", {}, label),
     el("strong", {}, money(cents)),
+    sub ? el("small", { class: "xray-sub" }, sub) : "",
   ]);
 }
 
 function costSplit(totals) {
   const paidMonth = (totals.fixedOnCardCents || 0) + (totals.fixedPixPaidCents || 0);
+  const cross = livingCrossMonthSummary(state.data?.expenses || []);
+  const cardPaidSub = cross.paidCardOtherCents > 0
+    ? `inclui ${money(cross.paidCardOtherCents)} na fatura de ${formatMonthList(cross.paidOtherMonths)}`
+    : "";
+  const cardDueSub = cross.dueCardOtherCents > 0
+    ? `inclui ${money(cross.dueCardOtherCents)} p/ fatura de ${formatMonthList(cross.dueOtherMonths)}`
+    : "";
   return el("div", { class: "cost-split" }, [
     costCard("previsto", "Previsto", totals.fixedForecastCents, true),
     costCard("pago", "Já pago no mês", paidMonth, true),
-    costCard("cartao", "Pago no cartão", totals.fixedOnCardCents),
+    costCard("cartao", "Pago no cartão", totals.fixedOnCardCents, false, cardPaidSub),
     costCard("pix", "Pago no Pix", totals.fixedPixPaidCents),
-    costCard("falta-cartao", "Falta no cartão", totals.fixedCardDueCents || 0),
+    costCard("falta-cartao", "Falta no cartão", totals.fixedCardDueCents || 0, false, cardDueSub),
     costCard("falta-pix", "Falta no Pix", totals.fixedPixForecastCents),
   ]);
 }
@@ -3523,14 +3575,27 @@ function costDetailRows(key) {
 }
 
 function costDetailNote(row, key) {
+  const otherMonths = livingOtherChargeMonths(row.expense);
+  const otherSuffix = otherMonths.length ? ` · fatura de ${formatMonthList(otherMonths)}` : "";
+  const nextShiftId = row.expense.payment === "card" && invoiceShift(row.expense.note) === "seguinte"
+    ? nextMonthId(row.expense.monthId)
+    : "";
   if (key === "pago" && row.parts.pagoCartao && row.parts.pagoPix) {
-    return `No cartão ${money(row.parts.pagoCartao)} · no Pix ${money(row.parts.pagoPix)}`;
+    return `No cartão ${money(row.parts.pagoCartao)}${otherSuffix} · no Pix ${money(row.parts.pagoPix)}`;
   }
-  if (key === "cartao" || (key === "pago" && row.parts.pagoCartao)) return row.expense.cardLabel ? `Crédito ${row.expense.cardLabel}` : "Crédito";
+  if (key === "cartao" || (key === "pago" && row.parts.pagoCartao)) {
+    const label = row.expense.cardLabel ? `Crédito ${row.expense.cardLabel}` : "Crédito";
+    return `${label}${otherSuffix}`;
+  }
   if (key === "pix" || (key === "pago" && row.parts.pagoPix)) return "Pix";
-  if (key === "falta-cartao") return "Ainda no crédito";
+  if (key === "falta-cartao") {
+    return nextShiftId ? `Ainda no crédito · entrará na fatura de ${shortMonthLabel(nextShiftId)}` : "Ainda no crédito · fatura deste mês";
+  }
   if (key === "falta-pix") return "Ainda no Pix";
-  return row.expense.payment === "card" ? "Previsto no crédito" : "Previsto no Pix";
+  if (row.expense.payment === "card") {
+    return nextShiftId ? `Previsto no crédito · fatura de ${shortMonthLabel(nextShiftId)}` : "Previsto no crédito";
+  }
+  return "Previsto no Pix";
 }
 
 function closeCostDetail() {
@@ -3604,8 +3669,20 @@ function expenseRow(expense, section, options = {}) {
   const lockedCard = Boolean(options.cardExpense) && expense.section !== "fixed";
   const meta = [];
   if (expense.section === "extra" && section === "card" && !options.manage && !isPlannedNote(expense.note)) meta.push("Imprevisto");
-  const elsewhere = expense.section === "extra" && chargedInvoiceMonth(expense.note);
-  if (elsewhere && elsewhere !== expense.monthId) meta.push(`Na fatura de ${monthName(elsewhere)}`);
+  const extraInvMonth = expense.section === "extra" ? chargedInvoiceMonth(expense.note) : "";
+  const extraOtherInvoice = Boolean(extraInvMonth && expense.monthId && extraInvMonth !== expense.monthId);
+  if (section === "extra" && expense.payment === "card") {
+    meta.push(extraOtherInvoice
+      ? `Gasto deste mês · entra na fatura de ${monthName(extraInvMonth)}`
+      : "Na fatura deste mês");
+  } else if (extraOtherInvoice) {
+    meta.push(`Na fatura de ${monthName(extraInvMonth)}`);
+  }
+  const refMonth = section === "card" ? referenceMonthFrom(expense.note) : "";
+  const cardFromOtherMonth = Boolean(refMonth && expense.monthId && refMonth !== expense.monthId);
+  if (cardFromOtherMonth) {
+    meta.push(`Gasto de ${monthName(refMonth)} cobrado nesta fatura`);
+  }
   if (onInvoice && section === "card") meta.push("Custo de vida, já incluído");
   if (expense.payment !== "card" || onInvoice) meta.push(paymentLabel(expense.payment));
   if (expense.payment === "card" && !onInvoice && !options.manage) meta.push(expense.cardLabel ? `Crédito ${expense.cardLabel}` : "Crédito");
@@ -3621,15 +3698,41 @@ function expenseRow(expense, section, options = {}) {
   const partialOnCard = section === "fixed" && !onInvoice && !expense.paid && cardPartialCents(expense) > 0;
   const fullOnCard = section === "fixed" && onInvoice;
   const tone = fullOnCard ? " on-card-full" : mirror && !(onInvoice && section === "card") ? " on-card" : onInvoice && section === "card" ? " aside" : expense.paid ? " paid" : " open";
-  const badges = mirror
-    ? [el("span", { class: "badge on-card" }, "Tá no cartão")]
-    : expense.paid
-      ? [el("span", { class: "badge paid" }, "Pago")]
-      : partialOnCard
-        ? [el("span", { class: "badge open" }, "Em aberto"), el("span", { class: "badge on-card" }, "Parcial no cartão")]
-        : forecast
-          ? [el("span", { class: "badge forecast" }, "Previsto")]
-          : [el("span", { class: "badge open" }, "Em aberto")];
+  const otherLivingMonths = expense.section === "fixed" ? livingOtherChargeMonths(expense) : [];
+  const nextLivingInvoice = section === "fixed" && expense.payment === "card" && invoiceShift(expense.note) === "seguinte"
+    ? nextMonthId(expense.monthId)
+    : "";
+  let badges;
+  if (mirror) {
+    if (section === "extra") {
+      badges = [extraOtherInvoice
+        ? el("span", { class: "badge cross-month" }, `Fatura ${shortMonthLabel(extraInvMonth)}`)
+        : el("span", { class: "badge on-card" }, "Fatura deste mês")];
+    } else if (otherLivingMonths.length) {
+      badges = [el("span", { class: "badge cross-month" }, `Fatura ${formatMonthList(otherLivingMonths)}`)];
+    } else {
+      badges = [el("span", { class: "badge on-card" }, "Tá no cartão")];
+    }
+  } else if (expense.paid) {
+    badges = [el("span", { class: "badge paid" }, "Pago")];
+  } else if (partialOnCard) {
+    badges = [
+      el("span", { class: "badge open" }, "Em aberto"),
+      otherLivingMonths.length
+        ? el("span", { class: "badge cross-month" }, `Parcial · Fatura ${formatMonthList(otherLivingMonths)}`)
+        : el("span", { class: "badge on-card" }, "Parcial no cartão"),
+    ];
+  } else if (forecast) {
+    badges = [
+      el("span", { class: "badge forecast" }, "Previsto"),
+      nextLivingInvoice ? el("span", { class: "badge cross-month" }, `Fatura ${shortMonthLabel(nextLivingInvoice)}`) : "",
+    ].filter(Boolean);
+  } else {
+    badges = [el("span", { class: "badge open" }, "Em aberto")];
+  }
+  if (section === "card" && cardFromOtherMonth) {
+    badges.unshift(el("span", { class: "badge cross-month" }, `De ${shortMonthLabel(refMonth)}`));
+  }
   if (section === "card" || section === "extra") {
     const source = cardSourceLabel(expense);
     const sourceClass = source === "Planejado" ? "badge source-planned" : source === "Imprevisto" ? "badge source-extra" : "badge source-fixed";
@@ -3731,7 +3834,7 @@ function livingPay(draft) {
         segmented("costKind", [["fixo", "Fixo"], ["variavel", "Variável"]], draft.costKind === "variavel" ? "variavel" : "fixo"),
       ])
       : "",
-    !editing && payment === "card" && draft.costKind === "variavel"
+    payment === "card" && (!editing || !draft.wasOnCard)
       ? el("div", { class: "field" }, [
         el("label", {}, "Os gastos entram na fatura"),
         segmented("invoiceTiming", [["mes", "Deste mês"], ["seguinte", "Do mês seguinte"]], draft.invoiceTiming === "seguinte" ? "seguinte" : "mes"),
@@ -3739,9 +3842,13 @@ function livingPay(draft) {
       : "",
     el("p", { class: "muted" }, editing
       ? (payment === "card"
-        ? "Pix tira este mês da fatura. Crédito lança o valor cadastrado neste mês."
-        : "Trocar para crédito lança o valor cadastrado na fatura deste mês.")
-      : payment === "card" && draft.costKind === "variavel"
+        ? (draft.invoiceTiming === "seguinte"
+          ? "O valor fica previsto neste mês e será cobrado na fatura do mês seguinte."
+          : "Pix tira este mês da fatura. Crédito mantém previsto para a fatura deste mês.")
+        : "Trocar para crédito permite indicar se entra na fatura deste mês ou do mês seguinte.")
+      : payment === "card" && draft.invoiceTiming === "seguinte"
+        ? "O valor fica previsto neste mês e entra em falta no cartão (previsto para a fatura do mês seguinte)."
+        : payment === "card" && draft.costKind === "variavel"
         ? "O valor fica previsto. O que faltar entra em falta no cartão. O pagamento é feito em Cartões de crédito."
         : payment === "card"
         ? "O valor fica previsto e entra em falta no cartão. Nada vai para a fatura agora. O pagamento é feito em Cartões de crédito."
@@ -4151,10 +4258,29 @@ function livingBalanceLines(expense) {
   const balance = livingBalance(expense);
   const lines = [`Previsto ${money(balance.forecast)}`];
   if (balance.pix) lines.push(`Já lançado no Pix ${money(balance.pix)}`);
-  if (balance.credit) lines.push(`Já lançado no crédito ${money(balance.credit)}`);
+  if (balance.credit) {
+    const charges = Array.isArray(expense.charges) ? expense.charges : [];
+    const otherCharges = charges.filter((item) => item?.monthId && expense.monthId && item.monthId !== expense.monthId);
+    const ownCharges = charges.filter((item) => !item?.monthId || !expense.monthId || item.monthId === expense.monthId);
+    if (otherCharges.length && !ownCharges.length) {
+      const months = formatMonthList([...new Set(otherCharges.map((item) => item.monthId))]);
+      lines.push(`Já lançado na fatura de ${months}: ${money(balance.credit)}`);
+    } else if (otherCharges.length && ownCharges.length) {
+      const detail = otherCharges.map((item) => `${money(item.amountCents)} na fatura de ${shortMonthLabel(item.monthId)}`).join(", ");
+      lines.push(`Já lançado no crédito ${money(balance.credit)} (${detail})`);
+    } else {
+      lines.push(`Já lançado na fatura deste mês ${money(balance.credit)}`);
+    }
+  }
   if (balance.over > 0) lines.push(`Passou ${money(balance.over)}`);
-  else if (balance.remaining > 0 && expense.payment === "card") lines.push(`Previsto no cartão ${money(balance.remaining)}`);
-  else if (balance.remaining > 0) lines.push(`Previsto no Pix ${money(balance.remaining)}`);
+  else if (balance.remaining > 0 && expense.payment === "card") {
+    if (invoiceShift(expense.note) === "seguinte") {
+      const nextId = nextMonthId(expense.monthId);
+      lines.push(`Entrará na fatura de ${monthName(nextId)}: ${money(balance.remaining)}`);
+    } else {
+      lines.push(`Previsto no cartão ${money(balance.remaining)}`);
+    }
+  } else if (balance.remaining > 0) lines.push(`Previsto no Pix ${money(balance.remaining)}`);
   return lines;
 }
 
@@ -4215,6 +4341,7 @@ function openExpenseInfo(expense, section) {
     amount: expense.amountCents === 0 ? "—" : money(expense.amountCents),
     amountCents: expense.amountCents,
     monthId: expense.monthId,
+    section: expense.section,
     mirror,
     living,
     paid: expense.paid,
@@ -4226,6 +4353,10 @@ function openExpenseInfo(expense, section) {
     status: mirror ? "" : (expense.paid ? "Pago" : "Em aberto"),
     installment: expense.installment || "",
     partials: expense.partials || [],
+    charges: expense.charges || [],
+    invoiceMonth: chargedInvoiceMonth(expense.note),
+    refMonth: referenceMonthFrom(expense.note),
+    nextInvoice: invoiceShift(expense.note) === "seguinte",
     variable: isVariableNote(expense.note),
     canEdit: editable(),
   };
@@ -4265,6 +4396,9 @@ function openCloseLiving(expense) {
 function openPartialPayment(info) {
   state.expenseInfo = null;
   const already = (info.partials || []).reduce((sum, item) => sum + item.amountCents, 0);
+  const baseMonth = info.monthId || state.monthId;
+  const nextId = nextMonthId(baseMonth);
+  const hasNext = (state.data?.months || []).some((month) => month.id === nextId);
   state.sheet = {
     mode: "partial",
     id: info.id,
@@ -4274,7 +4408,7 @@ function openPartialPayment(info) {
     cardLabel: firstCardName(),
     billing: "once",
     installmentCount: "2",
-    invoiceMonthId: info.monthId || state.monthId,
+    invoiceMonthId: info.nextInvoice && hasNext ? nextId : baseMonth,
     variable: Boolean(info.variable),
     planned: info.amountCents || 0,
     already,
@@ -4382,9 +4516,23 @@ function expenseInfoDialog() {
   const lines = [];
   if (info.mirror) {
     const card = info.cardName ? ` no cartão ${info.cardName}` : " no cartão";
-    lines.push(`Este valor foi lançado${card}. Ele aparece nesta aba como um demonstrativo, para o seu controle. Não soma duas vezes: a cobrança entra só na fatura do cartão.`);
+    const otherCharges = (info.charges || []).filter((item) => item?.monthId && info.monthId && item.monthId !== info.monthId);
+    if (info.invoiceMonth && info.monthId && info.invoiceMonth !== info.monthId) {
+      lines.push(`Este gasto pertence ao orçamento de ${monthName(info.monthId)}, mas foi lançado${card} na fatura de ${monthName(info.invoiceMonth)}. Ele aparece aqui como demonstrativo e não soma duas vezes.`);
+    } else if (otherCharges.length) {
+      const targetMonths = [...new Set(otherCharges.map((item) => monthName(item.monthId)))].join(", ");
+      lines.push(`Este custo de vida pertence a ${monthName(info.monthId)}, mas foi lançado${card} na fatura de ${targetMonths}. Ele aparece aqui como demonstrativo e não soma duas vezes.`);
+    } else {
+      lines.push(`Este valor foi lançado${card} na fatura de ${monthName(info.monthId)}. Ele aparece nesta aba como um demonstrativo, para o seu controle. Não soma duas vezes: a cobrança entra só na fatura do cartão.`);
+    }
   } else {
     lines.push(...[info.payment, info.status, info.installment].filter(Boolean));
+    if (info.living && !info.paid && info.paymentKind === "card" && info.nextInvoice) {
+      lines.push(`Previsto para entrar na fatura de ${monthName(nextMonthId(info.monthId))}.`);
+    }
+    if (info.section === "card" && info.refMonth && info.monthId && info.refMonth !== info.monthId) {
+      lines.push(`Gasto referente a ${monthName(info.refMonth)}, cobrado nesta fatura de ${monthName(info.monthId)}.`);
+    }
   }
   if (info.note) lines.push(info.note);
   const tail = [];
@@ -4475,6 +4623,7 @@ function openEdit(expense, options = {}) {
     note: visibleNote(expense.note),
     seriesId: seriesIdFrom(expense.note),
     variable: isVariableNote(expense.note),
+    invoiceTiming: invoiceShift(expense.note),
     fromCard: Boolean(options.fromCard),
     expenseKind: options.fromCard ? cardTrack(expense) : (isPlannedNote(expense.note) ? "planejado" : "imprevisto"),
     originalKind: options.fromCard ? cardTrack(expense) : "",
@@ -4539,6 +4688,10 @@ function openCardPay(expense) {
   const selected = cards.some((card) => card.name === expense.cardLabel) ? expense.cardLabel : (cards.length === 1 ? cards[0].name : "");
   const already = paidPartialCents(expense);
   const rest = Math.max(0, expense.amountCents - already);
+  const baseMonth = expense.monthId || state.monthId;
+  const timing = invoiceShift(expense.note);
+  const nextId = nextMonthId(baseMonth);
+  const hasNext = (state.data?.months || []).some((month) => month.id === nextId);
   state.sheet = {
     mode: "card-pay",
     id: expense.id,
@@ -4554,9 +4707,9 @@ function openCardPay(expense) {
     installmentCount: "2",
     installmentAmount: "",
     amountEdits: [],
-    invoiceMonthId: expense.monthId || state.monthId,
-    costMonthId: expense.monthId || state.monthId,
-    invoiceTiming: invoiceShift(expense.note),
+    invoiceMonthId: timing === "seguinte" && hasNext ? nextId : baseMonth,
+    costMonthId: baseMonth,
+    invoiceTiming: timing,
     cardScope: "month",
     variable: isVariableNote(expense.note),
     linked: linkedInvoice(expense) || expense.onCard,
@@ -5730,6 +5883,7 @@ async function saveSheet(event) {
       const dueCard = dueMonth ? draft.cardLabel : "";
       if (dueCard && !acceptPastDue(pastDueWarning(dueCard, dueMonth))) return;
       setWorking(true, "Salvando...");
+      const nextInvoiceFlag = draft.section === "fixed" && draft.payment === "card" && draft.invoiceTiming === "seguinte";
       const body = {
         name: draft.name,
         amountCents,
@@ -5737,7 +5891,7 @@ async function saveSheet(event) {
         payment: (draft.section === "fixed" && draft.onCard) || livingOnCard || wantsCard ? "card" : draft.payment,
         onCard: draft.section === "fixed" && draft.onCard && !relaunch,
         cardLabel: draft.cardLabel,
-        note: composeNote(draft.originId, draft.note, draft.partialId, draft.seriesId, draft.variable || draft.costKind === "variavel", draft.section === "extra" && draft.expenseKind === "planejado", variableCard && draft.invoiceTiming === "seguinte"),
+        note: composeNote(draft.originId, draft.note, draft.partialId, draft.seriesId, draft.variable || draft.costKind === "variavel", draft.section === "extra" && draft.expenseKind === "planejado", nextInvoiceFlag),
         installment: onCardPurchase ? null : draft.installment,
         paid: draft.paid,
         installmentPlan: onCardPurchase ? { totalCount, paidCount, amountMode: draft.amountMode || "installment" } : undefined,
@@ -5761,7 +5915,9 @@ async function saveSheet(event) {
           },
         });
         if (variableCard) {
-          state.notice = "Valor previsto. Nada entrou na fatura. Lance o total ou um parcial quando quiser. A despesa só encerra quando você pedir.";
+          state.notice = nextInvoiceFlag
+            ? "Valor previsto para a fatura do mês seguinte. Nada entrou na fatura agora."
+            : "Valor previsto. Nada entrou na fatura. Lance o total ou um parcial quando quiser. A despesa só encerra quando você pedir.";
         } else if (livingOnCard) {
           state.notice = draft.span === "month"
             ? "Lancei este custo no cartão só deste mês."
@@ -5773,7 +5929,9 @@ async function saveSheet(event) {
         } else if (recurringMonths) {
           const span = recurringMonths.length > 1 ? ` em ${recurringMonths.length} meses` : "";
           state.notice = draft.payment === "card"
-            ? `Valor previsto${span}. O que faltar fica no cartão e o pagamento é feito em Cartões de crédito.`
+            ? (nextInvoiceFlag
+              ? `Valor previsto${span}, marcado para entrar na fatura do mês seguinte.`
+              : `Valor previsto${span}. O que faltar fica no cartão e o pagamento é feito em Cartões de crédito.`)
             : `Valor previsto${span}. O que faltar fica no Pix e o pagamento é feito em À vista.`;
         }
         if (surpriseCard && startMonthId !== state.monthId) await loadMonth(state.monthId);
