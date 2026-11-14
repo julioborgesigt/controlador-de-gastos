@@ -129,3 +129,70 @@ export function parseMoney(value) {
   if (!Number.isSafeInteger(cents) || cents > 100_000_000) return null;
   return negative ? -cents : cents;
 }
+
+export function isPlannedNote(note) {
+  return String(note || "").split("\n").some((item) => item.trim() === "tipo:planejado");
+}
+
+export function isImprevistoNote(note) {
+  return String(note || "").split("\n").some((item) => item.trim() === "tipo:imprevisto");
+}
+
+export function chargedInvoiceMonth(note) {
+  const line = String(note || "").split("\n").map((item) => item.trim()).find((item) => /^fatura:\d{4}-\d{2}$/.test(item));
+  return line ? line.slice("fatura:".length) : "";
+}
+
+export function extraOnOwnInvoice(expense) {
+  if (!expense || expense.section !== "extra" || expense.payment !== "card") return false;
+  const invoice = chargedInvoiceMonth(expense.note);
+  return !invoice || !expense.monthId || invoice === expense.monthId;
+}
+
+export function extrasBreakdown(expenses) {
+  const planned = { pix: 0, card: 0, total: 0 };
+  const unexpected = { pix: 0, card: 0, total: 0 };
+  for (const expense of expenses || []) {
+    if (expense.section !== "extra") continue;
+    const bucket = isPlannedNote(expense.note) ? planned : unexpected;
+    if (expense.payment === "card") bucket.card += expense.amountCents;
+    else bucket.pix += expense.amountCents;
+    bucket.total += expense.amountCents;
+  }
+  return {
+    planned,
+    unexpected,
+    pix: planned.pix + unexpected.pix,
+    card: planned.card + unexpected.card,
+    total: planned.total + unexpected.total,
+  };
+}
+
+export function invoiceBreakdown(expenses) {
+  let livingCents = 0;
+  let plannedCents = 0;
+  let unexpectedCents = 0;
+  let otherCents = 0;
+  for (const expense of expenses || []) {
+    if (expense.section !== "card" && !extraOnOwnInvoice(expense)) continue;
+    const note = String(expense.note || "");
+    if (note.includes("parcelamento:") || note.includes("quitado-cartao:")) {
+      otherCents += expense.amountCents;
+    } else if (isPlannedNote(note)) {
+      plannedCents += expense.amountCents;
+    } else if (isImprevistoNote(note) || expense.section === "extra") {
+      unexpectedCents += expense.amountCents;
+    } else if (originIdFrom(note)) {
+      livingCents += expense.amountCents;
+    } else {
+      otherCents += expense.amountCents;
+    }
+  }
+  return {
+    livingCents,
+    plannedCents,
+    unexpectedCents,
+    otherCents,
+    totalCents: livingCents + plannedCents + unexpectedCents + otherCents,
+  };
+}

@@ -6,7 +6,9 @@ import {
   cardChargeTitle,
   centsToInput,
   composeNote,
+  extrasBreakdown,
   formatCpf,
+  invoiceBreakdown,
   invoiceShift,
   isVariableNote,
   nextMonthId,
@@ -57,3 +59,35 @@ test("visibleNote e composeNote filtram todos os marcadores internos do cliente"
   const composed = composeNote("o1", "origem:injetado\nquitado-cartao:falso\nNota limpa", "p1", "s1", true, false, true);
   assert.equal(composed, "serie:s1\ntipo:variavel\nfatura:seguinte\norigem:o1\nparcial:p1\nNota limpa");
 });
+
+test("extrasBreakdown e invoiceBreakdown separam Custo de vida, Planejados e Imprevistos sem dupla contagem", () => {
+  const expenses = [
+    { section: "extra", amountCents: 15000, payment: "pix", monthId: "2026-11", note: "tipo:planejado" },
+    { section: "extra", amountCents: 25000, payment: "card", cardLabel: "Nubank", monthId: "2026-11", note: "tipo:planejado" },
+    { section: "extra", amountCents: 8000, payment: "pix", monthId: "2026-11", note: "" },
+    { section: "extra", amountCents: 12000, payment: "card", cardLabel: "Nubank", monthId: "2026-11", note: "tipo:imprevisto" },
+    { section: "extra", amountCents: 9000, payment: "card", cardLabel: "Nubank", monthId: "2026-11", note: "tipo:imprevisto\nfatura:2026-12" },
+    { section: "card", amountCents: 30000, payment: "card", cardLabel: "Nubank", monthId: "2026-11", note: "origem:f1" },
+    { section: "card", amountCents: 10000, payment: "card", cardLabel: "Inter", monthId: "2026-11", note: "tipo:planejado" },
+    { section: "card", amountCents: 5000, payment: "card", cardLabel: "Nubank", monthId: "2026-11", note: "parcelamento:c1:2026-11" },
+  ];
+
+  const extras = extrasBreakdown(expenses);
+  assert.equal(extras.planned.total, 40000);
+  assert.equal(extras.planned.pix, 15000);
+  assert.equal(extras.planned.card, 25000);
+  assert.equal(extras.unexpected.total, 29000);
+  assert.equal(extras.unexpected.pix, 8000);
+  assert.equal(extras.unexpected.card, 21000);
+  assert.equal(extras.pix, 23000);
+  assert.equal(extras.card, 46000);
+  assert.equal(extras.total, 69000);
+
+  const invoice = invoiceBreakdown(expenses);
+  assert.equal(invoice.livingCents, 30000);
+  assert.equal(invoice.plannedCents, 35000);
+  assert.equal(invoice.unexpectedCents, 12000);
+  assert.equal(invoice.otherCents, 5000);
+  assert.equal(invoice.totalCents, 82000);
+});
+

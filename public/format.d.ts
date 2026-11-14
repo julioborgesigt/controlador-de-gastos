@@ -23,3 +23,37 @@ export function paymentLabel(payment: string): "Crédito" | "Pix";
 export function money(cents: number): string;
 export function centsToInput(cents: number): string;
 export function parseMoney(value: string): number | null;
+export function isPlannedNote(note: string | null | undefined): boolean;
+export function isImprevistoNote(note: string | null | undefined): boolean;
+export function chargedInvoiceMonth(note: string | null | undefined): string;
+export function extraOnOwnInvoice(expense: {
+  section?: string;
+  payment?: string;
+  monthId?: string | null;
+  note?: string | null;
+}): boolean;
+export function extrasBreakdown(expenses: ReadonlyArray<{
+  section?: string;
+  payment?: string;
+  amountCents: number;
+  note?: string | null;
+}>): {
+  planned: { pix: number; card: number; total: number };
+  unexpected: { pix: number; card: number; total: number };
+  pix: number;
+  card: number;
+  total: number;
+};
+export function invoiceBreakdown(expenses: ReadonlyArray<{
+  section?: string;
+  payment?: string;
+  monthId?: string | null;
+  amountCents: number;
+  note?: string | null;
+}>): {
+  livingCents: number;
+  plannedCents: number;
+  unexpectedCents: number;
+  otherCents: number;
+  totalCents: number;
+};

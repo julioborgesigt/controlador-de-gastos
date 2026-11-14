@@ -633,13 +633,19 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   margin-top: 12px;
 }
 
-.cost-split button {
+.cost-split button,
+.cost-split .xray-item {
   background: white;
-  border: 0;
+  border: 1px solid transparent;
   border-radius: 12px;
   padding: 12px 14px;
   text-align: left;
   width: 100%;
+}
+
+.cost-split button.on {
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
 }
 
 .cost-split .wide { grid-column: 1 / -1; }
@@ -727,7 +733,8 @@ html[data-theme="dark"] .toggle,
 html[data-theme="dark"] .check.off,
 html[data-theme="dark"] .linkish.back,
 html[data-theme="dark"] .menu,
-html[data-theme="dark"] .cost-split button {
+html[data-theme="dark"] .cost-split button,
+html[data-theme="dark"] .cost-split .xray-item {
   background: var(--card);
 }
 
