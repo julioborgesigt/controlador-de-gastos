@@ -1199,11 +1199,31 @@ export async function placeExtrasOnPurchaseMonth(db: D1Database, ownerId: string
   }
 }
 
+const reconciledOwners = new Set<string>();
+const reconcilingOwners = new Map<string, Promise<void>>();
+
+async function reconcileOwnerOnce(db: D1Database, ownerId: string): Promise<void> {
+  if (reconciledOwners.has(ownerId)) return;
+  const inflight = reconcilingOwners.get(ownerId);
+  if (inflight) {
+    await inflight;
+    return;
+  }
+  const task = (async () => {
+    await placeExtrasOnPurchaseMonth(db, ownerId);
+    await clearOrphanCardPartials(db, ownerId);
+    reconciledOwners.add(ownerId);
+  })().finally(() => {
+    reconcilingOwners.delete(ownerId);
+  });
+  reconcilingOwners.set(ownerId, task);
+  await task;
+}
+
 export async function monthPayload(db: D1Database, ownerId: string, monthId: string) {
   const month = await getMonth(db, ownerId, monthId);
   if (!month) return null;
-  await placeExtrasOnPurchaseMonth(db, ownerId);
-  await clearOrphanCardPartials(db, ownerId);
+  await reconcileOwnerOnce(db, ownerId);
   const expenses = await attachPartials(db, ownerId, await listExpenses(db, ownerId, monthId));
   const charges = await livingInvoiceCharges(db, ownerId, expenses.filter((expense) => expense.section === "fixed").map((expense) => expense.id));
   const expensesWithCharges = expenses.map((expense) => ({ ...expense, charges: charges.get(expense.id) ?? [] }));

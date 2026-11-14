@@ -145,6 +145,10 @@ app.post("/api/register", async (c) => {
   if (body.passwordConfirmation !== password.password) {
     return c.json({ error: "A confirmação da senha não confere." }, 400);
   }
+  const ipKey = `register_ip:${clientIp(c)}`;
+  const ipFailures = await failureState(c.env.DB, ipKey);
+  const ipLocked = lockedMessage(ipFailures);
+  if (ipLocked) return c.json({ error: ipLocked }, 429);
   const salt = randomBytes(16);
   const created = await createUser(c.env.DB, {
     cpf: cpf.cpf,
@@ -152,7 +156,12 @@ app.post("/api/register", async (c) => {
     passwordHash: await hashSecret(password.password, salt),
     passwordSalt: toHex(salt),
   });
-  if (!created.ok) return c.json({ error: created.error }, 409);
+  if (!created.ok) {
+    const updated = nextFailure(ipFailures);
+    await setSetting(c.env.DB, failureKey(ipKey), JSON.stringify(updated));
+    const lockMsg = lockedMessage(updated);
+    return c.json({ error: lockMsg ?? created.error }, lockMsg ? 429 : 409);
+  }
   await startSession(c, created.id);
   return c.json({ ok: true }, 201);
 });
@@ -162,15 +171,24 @@ app.post("/api/login", async (c) => {
   const cpf = parseCpf(body.cpf);
   const password = parsePassword(body.password);
   if (!cpf.ok || !password.ok) return c.json({ error: "CPF ou senha incorretos." }, 401);
-  const failures = await failureState(c.env.DB, cpf.cpf);
-  const locked = lockedMessage(failures);
+  const ipKey = `ip:${clientIp(c)}`;
+  const [failures, ipFailures] = await Promise.all([
+    failureState(c.env.DB, cpf.cpf),
+    failureState(c.env.DB, ipKey),
+  ]);
+  const locked = lockedMessage(failures) ?? lockedMessage(ipFailures);
   if (locked) return c.json({ error: locked }, 429);
   const user = await findUserByCpf(c.env.DB, cpf.cpf);
   const actual = await hashSecret(password.password, user ? fromHex(user.passwordSalt) : new Uint8Array(16));
   if (!user || !safeEqual(actual, user.passwordHash)) {
     const updated = nextFailure(failures);
-    await setSetting(c.env.DB, failureKey(cpf.cpf), JSON.stringify(updated));
-    return c.json({ error: lockedMessage(updated) ?? "CPF ou senha incorretos." }, 401);
+    const updatedIp = nextFailure(ipFailures);
+    await Promise.all([
+      setSetting(c.env.DB, failureKey(cpf.cpf), JSON.stringify(updated)),
+      setSetting(c.env.DB, failureKey(ipKey), JSON.stringify(updatedIp)),
+    ]);
+    const lockMsg = lockedMessage(updated) ?? lockedMessage(updatedIp);
+    return c.json({ error: lockMsg ?? "CPF ou senha incorretos." }, lockMsg ? 429 : 401);
   }
   await setSetting(c.env.DB, failureKey(cpf.cpf), JSON.stringify(clearFailures()));
   await startSession(c, user.id);
@@ -284,8 +302,17 @@ app.post("/api/shares", async (c) => {
   if (!cpf.ok) return c.json({ error: cpf.error }, 400);
   const permission = body.permission === "edit" ? "edit" : body.permission === "view" ? "view" : null;
   if (!permission) return c.json({ error: "Escolha se a pessoa pode ver ou também editar." }, 400);
+  const shareRateKey = `share_lookup:${writer.scope.actorId}`;
+  const shareFailures = await failureState(c.env.DB, shareRateKey);
+  const shareLocked = lockedMessage(shareFailures);
+  if (shareLocked) return c.json({ error: shareLocked }, 429);
   const saved = await shareWithCpf(c.env.DB, writer.scope.ownerId, cpf.cpf, permission);
-  if (!saved.ok) return c.json({ error: saved.error }, 404);
+  if (!saved.ok) {
+    const updated = nextFailure(shareFailures);
+    await setSetting(c.env.DB, failureKey(shareRateKey), JSON.stringify(updated));
+    const lockMsg = lockedMessage(updated);
+    return c.json({ error: lockMsg ?? saved.error }, lockMsg ? 429 : 404);
+  }
   return c.json({ shares: await listOutgoingShares(c.env.DB, writer.scope.ownerId) }, 201);
 });
 
@@ -1459,6 +1486,14 @@ function isMonthId(value: unknown): value is string {
 }
 
 type FailureState = { count: number; lockedUntil: string | null };
+
+function clientIp(c: AppContext): string {
+  return (
+    c.req.header("cf-connecting-ip")?.trim() ||
+    c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ||
+    "local"
+  );
+}
 
 function failureKey(cpf: string): string {
   return `login_failures:${cpf}`;
