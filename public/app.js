@@ -71,6 +71,7 @@ const state = {
   confirm: null,
   expenseInfo: null,
   help: null,
+  tabIntro: null,
   needsPeriod: false,
   devicePrompt: false,
   periodDraft: null,
@@ -91,6 +92,83 @@ const views = [
   ["extras", "Outros gastos"],
   ["receita", "Receita mensal"],
 ];
+
+const TAB_INFO_KEY = "tabIntroDismissed:v1";
+
+const TAB_INFO = {
+  resumo: {
+    title: "Resumo mensal",
+    role: "Mostra a saúde financeira do mês atual e uma prévia do próximo mês.",
+    display: "Exibe os pagamentos do mês (fatura + Pix previsto), os lançamentos feitos neste mês para próximas faturas e a despesa prevista do mês atual e do seguinte.",
+    launches: "Não faz lançamentos diretos — funciona como painel consolidado de acompanhamento (com atalhos para quitar o mês ou trazer lançamentos do mês anterior).",
+  },
+  cartoes: {
+    title: "Cartões de crédito",
+    role: "Centraliza seus cartões, faturas mensais e compras no crédito.",
+    display: "Mostra o total e a composição de cada fatura (parcelamentos, Custo de vida, Planejados e Imprevistos cobrados naquele mês).",
+    launches: "Permite lançamentos: cadastre ou edite cartões, lance gastos no crédito (à vista ou parcelados), marque a fatura como paga ou parcele a fatura.",
+  },
+  avista: {
+    title: "À vista",
+    role: "Controla os gastos pagos diretamente via Pix ou dinheiro no mês.",
+    display: "Exibe os lançamentos à vista já realizados no mês (pagamentos de Custo de vida, Planejados e Imprevistos no Pix).",
+    launches: "Permite lançamentos: use “Lançar à vista” para registrar um pagamento em Pix/dinheiro e vinculá-lo a um Custo de vida ou criar um novo gasto.",
+  },
+  casa: {
+    title: "Custo de vida",
+    role: "Organiza o orçamento mensal das despesas recorrentes e essenciais (água, luz, internet, mercado, etc.).",
+    display: "Exibe o valor previsto de cada conta e um demonstrativo do que já foi lançado nela no mês (no Pix ou na fatura de cartão, inclusive em faturas de outros meses).",
+    launches: "Aqui você cadastra e edita o previsto (ou desliza para a direita para finalizar apenas o mês atual). Os pagamentos reais entram pelas abas Cartões de crédito e À vista, ou tocando na despesa em “Lançar pagamento”.",
+  },
+  extras: {
+    title: "Outros gastos",
+    role: "Agrupa os gastos Planejados e Imprevistos vinculados ao orçamento do mês.",
+    display: "Exibe um demonstrativo por categoria (Planejados e Imprevistos), diferenciando o que foi pago no Pix e o que entrou no cartão (inclusive em faturas futuras, sem somar duas vezes).",
+    launches: "Permite lançamentos: cadastre ou edite gastos Planejados e Imprevistos no Pix ou no crédito.",
+  },
+  receita: {
+    title: "Receita mensal",
+    role: "Gerencia a renda base e as receitas extras que financiam o mês.",
+    display: "Mostra a receita base dos meses, os adicionais cadastrados (13º, férias, bônus, IR) e o total de receita do mês.",
+    launches: "Permite lançamentos: defina a receita base, ajuste a receita de um mês específico e adicione ou edite receitas extras.",
+  },
+};
+
+function readDismissedTabs() {
+  try {
+    const raw = localStorage.getItem(TAB_INFO_KEY);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function isTabIntroDismissed(tabId) {
+  return Boolean(readDismissedTabs()[tabId]);
+}
+
+function dismissTabIntro(tabId) {
+  try {
+    const current = readDismissedTabs();
+    current[tabId] = true;
+    localStorage.setItem(TAB_INFO_KEY, JSON.stringify(current));
+  } catch {
+    /* ignore storage errors */
+  }
+}
+
+function maybeOpenTabIntro(tabId) {
+  if (!state.authed || !state.data || state.needsPeriod || state.choosing) return;
+  if (!TAB_INFO[tabId] || isTabIntroDismissed(tabId)) return;
+  state.tabIntro = tabId;
+}
+
+function closeTabIntro(dontShowAgain = false) {
+  if (dontShowAgain && state.tabIntro) dismissTabIntro(state.tabIntro);
+  state.tabIntro = null;
+  render();
+}
 
 let bootGeneration = 0;
 
@@ -319,8 +397,9 @@ function render() {
   if (state.expenseInfo) root.append(expenseInfoDialog());
   if (state.help) root.append(helpDialog());
   if (state.costDetail) root.append(costDetailDialog());
+  if (state.tabIntro) root.append(tabIntroDialog());
   if (state.confirm) root.append(confirmDialog());
-  if (state.sheet || state.confirm || state.expenseInfo || state.help || state.costDetail) lockPage(keepPlace ? lockedScroll : 0);
+  if (state.sheet || state.confirm || state.expenseInfo || state.help || state.costDetail || state.tabIntro) lockPage(keepPlace ? lockedScroll : 0);
   else unlockPage(keepPlace ? lockedScroll : 0);
   state.viewKey = viewKey;
   if (keepPlace && onDesktop()) {
@@ -332,7 +411,7 @@ function render() {
 }
 
 function overlayIsOpen() {
-  return Boolean(state.sheet || state.confirm || state.accountMenu || state.expenseInfo || state.help || state.costDetail);
+  return Boolean(state.sheet || state.confirm || state.accountMenu || state.expenseInfo || state.help || state.costDetail || state.tabIntro);
 }
 
 function syncOverlayHistory() {
@@ -365,6 +444,7 @@ function leavePage() {
   state.expenseInfo = null;
   state.help = null;
   state.costDetail = null;
+  state.tabIntro = null;
   state.sheet = null;
   state.accountMenu = false;
   overlayPushed = false;
@@ -380,6 +460,7 @@ window.addEventListener("popstate", () => {
     state.expenseInfo = null;
     state.help = null;
     state.costDetail = null;
+    state.tabIntro = null;
     state.sheet = null;
     state.accountMenu = false;
     render();
@@ -392,6 +473,7 @@ window.addEventListener("popstate", () => {
   if (overlayPushed) {
     overlayPushed = false;
     if (state.confirm) state.confirm = null;
+    else if (state.tabIntro) state.tabIntro = null;
     else if (state.costDetail) state.costDetail = null;
     else if (state.help) state.help = null;
     else if (state.expenseInfo) state.expenseInfo = null;
@@ -955,10 +1037,46 @@ function shell() {
         state.showEmpty = false;
         state.error = "";
         state.notice = "";
+        maybeOpenTabIntro(id);
         render();
       },
     }, [glyph(id), label]))),
   ]);
+}
+
+function tabIntroDialog() {
+  const info = TAB_INFO[state.tabIntro];
+  if (!info) return el("div");
+  const overlay = el("div", {
+    class: "overlay center",
+    role: "presentation",
+    onclick: (event) => {
+      if (event.target === overlay) closeTabIntro(false);
+    },
+  }, [
+    el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "tab-intro-title" }, [
+      el("button", { class: "dialog-close", type: "button", "aria-label": "Fechar", onclick: () => closeTabIntro(false) }, "×"),
+      el("h2", { id: "tab-intro-title" }, info.title),
+      el("div", { class: "tab-info-list" }, [
+        el("div", { class: "tab-info-row" }, [
+          el("strong", {}, "Função da aba"),
+          el("p", {}, info.role),
+        ]),
+        el("div", { class: "tab-info-row" }, [
+          el("strong", {}, "O que exibe"),
+          el("p", {}, info.display),
+        ]),
+        el("div", { class: "tab-info-row" }, [
+          el("strong", {}, "Lançamentos"),
+          el("p", {}, info.launches),
+        ]),
+      ]),
+      el("div", { class: "actions" }, [
+        el("button", { class: "primary", type: "button", onclick: () => closeTabIntro(true) }, "Não mostrar novamente"),
+      ]),
+    ]),
+  ]);
+  return overlay;
 }
 
 function monthChip(month) {
@@ -5281,11 +5399,12 @@ function sheet() {
       draft.pix ? `Pix ${money(draft.pix)}` : "",
       draft.credit ? `Crédito ${money(draft.credit)}` : "",
     ].filter(Boolean).join(" · ");
+    const monthLabel = monthName(state.monthId) || "deste mês";
     panel.append(
       el("h2", {}, "Finalizar despesa"),
-      el("p", {}, `Ao finalizar “${draft.name}”, você indica que não será lançado mais nada nesta despesa neste mês.`),
+      el("p", {}, `Ao finalizar “${draft.name}”, apenas a despesa de ${monthLabel} será encerrada (os meses seguintes continuam em aberto).`),
       el("p", {}, `Custo atual considerado para os cálculos: ${money(already)}${breakdown ? ` (${breakdown})` : " (nenhum lançamento neste mês)"} · previsto original ${money(draft.planned || 0)}.`),
-      el("p", { class: "muted" }, "Qualquer diferença prevista que ainda estava em aberto deixa de ser reservada nos pagamentos e no custo previsto do mês. Se precisar lançar algo antes, use Crédito ou À vista no topo."),
+      el("p", { class: "muted" }, "Qualquer diferença prevista que ainda estava em aberto deixa de ser reservada nos pagamentos e no custo previsto deste mês. Se precisar lançar algo antes, use Crédito ou À vista no topo."),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
         el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Finalizando..." : "Finalizar despesa"),

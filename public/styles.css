@@ -1149,6 +1149,26 @@ html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
 
 .dialog p { margin: 0 0 16px; line-height: 1.45; }
 
+.tab-info-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 8px 0 16px;
+}
+
+.tab-info-row strong {
+  display: block;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 2px;
+}
+
+.tab-info-row p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
 .dialog .money { font-size: 28px; margin: 0 0 14px; }
 
 .breakdown {
