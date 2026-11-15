@@ -1383,7 +1383,7 @@ function confirmCopy() {
   if (state.confirm === "settle") {
     return {
       title: "Quitar o que falta",
-      body: `Marca como pagos a fatura e os imprevistos ainda em aberto em ${month}. O custo de vida previsto continua em falta até você lançar Pago no Pix, Enviar pro cartão ou Pagamento parcial. O mês só fica quitado quando esse valor zera.`,
+      body: `Marca como pagos a fatura e os imprevistos ainda em aberto em ${month}. O custo de vida previsto continua em falta até você usar Lançar pagamento ou Finalizar despesa. O mês só fica quitado quando esse valor zera.`,
       action: "Quitar",
       cancel: "Cancelar",
     };
@@ -4750,27 +4750,7 @@ function expenseInfoDialog() {
       ...tail.map((line) => el("p", {}, line)),
       el("div", { class: "actions" }, [
         info.canEdit && info.living && !info.paid
-          ? el("button", {
-            class: "secondary",
-            type: "button",
-            onclick: () => {
-              const target = (state.data?.expenses || []).find((item) => item.id === info.id);
-              if (target) openCloseLiving(target);
-            },
-          }, "Finalizar despesa")
-          : "",
-        info.canEdit && info.living && info.paid
-          ? el("button", {
-            class: "secondary",
-            type: "button",
-            onclick: () => {
-              const target = (state.data?.expenses || []).find((item) => item.id === info.id);
-              if (target) reopenLivingExpense(target);
-            },
-          }, "Reabrir despesa")
-          : "",
-        info.canEdit && info.living && !info.paid
-          ? el("button", { class: "secondary", type: "button", onclick: () => openPartialPayment(info) }, "Pagamento parcial")
+          ? el("button", { class: "secondary", type: "button", onclick: () => openPartialPayment(info) }, "Lançar pagamento")
           : "",
         info.canEdit && info.living && (info.partials?.length || (info.paid && !info.zeroFinalized))
           ? el("button", {
@@ -5319,7 +5299,7 @@ function sheet() {
     );
   } else if (draft.mode === "partial") {
     panel.append(
-      el("h2", {}, "Pagamento parcial"),
+      el("h2", {}, "Lançar pagamento"),
       el("p", { class: "muted" }, `“${draft.name}” continua em aberto. Dá para lançar outra ida depois, como na feira do mês.`),
       field("Valor pago agora", "amount", draft.amount, "decimal"),
       el("div", { class: "field" }, [
@@ -5348,7 +5328,7 @@ function sheet() {
         : "Finalizar só depois do lançamento. A tarja fica Finalizada, com o custo atual consolidado e o fundo verde."),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
-        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : (draft.closeAfter === "close" ? "Lançar e finalizar" : "Lançar parcial")),
+        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : (draft.closeAfter === "close" ? "Lançar e finalizar" : "Lançar pagamento")),
       ]),
     );
   } else if (draft.fromCard && draft.mode === "edit") {
@@ -5645,8 +5625,8 @@ async function saveSheet(event) {
           });
         }
         state.notice = draft.closeAfter === "close"
-          ? `Lancei ${money(amountCents)} e encerrei “${draft.name}”.`
-          : `Pagamento parcial de ${money(amountCents)} lançado em “${draft.name}”.`;
+          ? `Lancei ${money(amountCents)} e finalizei “${draft.name}”.`
+          : `Pagamento de ${money(amountCents)} lançado em “${draft.name}”.`;
       }
       rememberMonth(state.data);
       state.sheet = null;
