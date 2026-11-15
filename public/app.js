@@ -83,6 +83,8 @@ const state = {
 let overlayPushed = false;
 let suppressHistory = false;
 let allowLeave = false;
+const monthStore = new Map();
+const monthLoads = new Map();
 
 const views = [
   ["resumo", "Resumo mensal"],
@@ -262,9 +264,6 @@ async function loadMonth(monthId) {
   rememberMonth(data);
   await preloadAround(data);
 }
-
-const monthStore = new Map();
-const monthLoads = new Map();
 
 function storeMonth(data) {
   if (!data?.month?.id) return;
