@@ -587,7 +587,7 @@ export async function listFixedExpenses(db: D1Database, ownerId: string): Promis
   return (result.results ?? []).map((row) => ({ ...mapExpense(row), hasPartials: Number(row.partial_count) > 0 }));
 }
 
-async function listSectionExpenses(db: D1Database, ownerId: string, section: Section): Promise<Expense[]> {
+export async function listSectionExpenses(db: D1Database, ownerId: string, section: Section): Promise<Expense[]> {
   const result = await db
     .prepare("SELECT * FROM expenses WHERE owner_id = ? AND section = ?")
     .bind(ownerId, section)
@@ -740,12 +740,19 @@ export async function applySeriesEdit(
       }
       continue;
     }
+    const clearCard = row.onCard && (variable || shift === "seguinte");
     statements.push(
       db.prepare(
-        "UPDATE expenses SET name = ?, amount_cents = ?, payment = 'card', card_label = ?, note = ? WHERE owner_id = ? AND id = ?",
-      ).bind(input.name, input.amountCents, input.cardLabel, note, input.ownerId, row.id),
+        "UPDATE expenses SET name = ?, amount_cents = ?, payment = 'card', on_card = ?, card_label = ?, note = ? WHERE owner_id = ? AND id = ?",
+      ).bind(input.name, input.amountCents, clearCard ? 0 : row.onCard ? 1 : 0, input.cardLabel, note, input.ownerId, row.id),
     );
-    if (row.onCard) {
+    if (clearCard) {
+      for (const line of cardLines) {
+        if (originExpenseId(line.note) === row.id && !partialIdFromNote(line.note)) {
+          statements.push(db.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(input.ownerId, line.id));
+        }
+      }
+    } else if (row.onCard) {
       for (const line of cardLines) {
         if (originExpenseId(line.note) === row.id && !partialIdFromNote(line.note)) {
           statements.push(
@@ -757,23 +764,6 @@ export async function applySeriesEdit(
     }
   }
   await runStatements(db, statements);
-  if (current.section === "fixed" && input.payment === "card") {
-    const pending = targets
-      .filter((row) => !row.onCard && !("hasPartials" in row && row.hasPartials))
-      .map((row) => ({ ...row, name: input.name, amountCents: input.amountCents }));
-    if (pending.length) {
-      const charged = await chargeLivingRowsOnCard(db, {
-        ownerId: input.ownerId,
-        rows: pending,
-        anchorId: current.id,
-        cardLabel: input.cardLabel || "",
-        alias: input.name,
-        amountCents: input.amountCents,
-        startMonthId: current.monthId,
-      });
-      if (!charged.ok) return charged;
-    }
-  }
   return { ok: true, count: targets.length };
 }
 

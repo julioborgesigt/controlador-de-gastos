@@ -20,12 +20,15 @@ import { loginOptions, loginWithPasskey, registerPasskey, registrationOptions } 
 import {
   cardLinkRequired,
   countsTowardPayment,
+  invoiceShiftFromNote,
   isPlannedCost,
   isVariableCost,
   livingCardChargeKind,
   noteWithChargeContext,
   noteWithFinalizedZero,
   noteWithPlanned,
+  originExpenseId,
+  partialIdFromNote,
   planCardPurchase,
   noteWithSeries,
   noteWithVariable,
@@ -58,6 +61,7 @@ import {
   clearLivingCardCharges,
   clearRecurringCardLines,
   getExpense,
+  listSectionExpenses,
   reclassifyExpense,
   getMonth,
   listCardPurchasesInMonth,
@@ -976,6 +980,13 @@ app.patch("/api/expenses/:id", async (c) => {
   const nextNote = parsed.value.section === "fixed" && !parsed.value.paid
     ? (noteWithFinalizedZero(parsed.value.note, false) || null)
     : parsed.value.note;
+  const clearFixedCard = parsed.value.section === "fixed" && current.onCard && (
+    !parsed.value.onCard
+    || parsed.value.payment !== "card"
+    || isVariableCost(nextNote)
+    || invoiceShiftFromNote(nextNote) === "seguinte"
+  );
+  const nextOnCard = clearFixedCard ? false : parsed.value.onCard;
   await c.env.DB.prepare(
     `UPDATE expenses
      SET name = ?, section = ?, amount_cents = ?, payment = ?, on_card = ?, card_label = ?, paid = ?, note = ?, installment = ?
@@ -986,7 +997,7 @@ app.patch("/api/expenses/:id", async (c) => {
       parsed.value.section,
       parsed.value.amountCents,
       parsed.value.payment,
-      parsed.value.onCard ? 1 : 0,
+      nextOnCard ? 1 : 0,
       parsed.value.cardLabel,
       parsed.value.paid ? 1 : 0,
       nextNote,
@@ -995,6 +1006,14 @@ app.patch("/api/expenses/:id", async (c) => {
       current.id,
     )
     .run();
+  if (clearFixedCard) {
+    const cardLines = await listSectionExpenses(c.env.DB, writer.scope.ownerId, "card");
+    for (const line of cardLines) {
+      if (originExpenseId(line.note) === current.id && !partialIdFromNote(line.note)) {
+        await c.env.DB.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(writer.scope.ownerId, line.id).run();
+      }
+    }
+  }
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
 });
 
