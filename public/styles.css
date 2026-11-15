@@ -25,6 +25,7 @@ html, body {
   min-height: 100%;
   background: var(--paper);
   color: var(--ink);
+  overflow-x: clip;
 }
 
 body {
@@ -945,7 +946,7 @@ select:disabled { opacity: 0.72; }
 
 .switch { width: 100%; justify-content: space-between; padding: 0 14px; }
 
-.actions { display: flex; gap: 8px; margin-top: 8px; }
+.actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 
 .actions .primary { margin-top: 0; }
 
@@ -1104,9 +1105,12 @@ html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
 }
 
 .dialog {
+  position: relative;
   width: min(420px, 100%);
   max-height: min(80dvh, 520px);
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
   overscroll-behavior: contain;
   touch-action: pan-y;
   -webkit-overflow-scrolling: touch;
@@ -1118,7 +1122,30 @@ html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
   box-shadow: 0 16px 40px rgba(16, 24, 40, 0.18);
 }
 
-.dialog h2 { margin: 0 0 8px; font-size: 20px; }
+.dialog-close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  font-size: 24px;
+  line-height: 1;
+  padding: 0;
+}
+
+.dialog-close:hover,
+.dialog-close:focus-visible {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
+}
+
+.dialog h2 { margin: 0 0 8px; padding-right: 36px; font-size: 20px; }
 
 .dialog p { margin: 0 0 16px; line-height: 1.45; }
 

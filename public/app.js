@@ -3787,6 +3787,7 @@ function costDetailDialog() {
     },
   }, [
     el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-label": title }, [
+      el("button", { class: "dialog-close", type: "button", "aria-label": "Fechar", onclick: closeCostDetail }, "×"),
       el("h2", {}, title),
       el("p", { class: "muted" }, lede),
       el("p", { class: "money" }, money(total)),
@@ -3806,9 +3807,6 @@ function costDetailDialog() {
           el("span", { class: "amount" }, money(row.amount)),
         ])))
         : el("p", {}, "Nenhum custo neste grupo."),
-      el("div", { class: "actions" }, [
-        el("button", { class: "primary", type: "button", onclick: closeCostDetail }, "Fechar"),
-      ]),
     ]),
   ]);
   return overlay;
@@ -4735,6 +4733,18 @@ function expenseInfoDialog() {
       }, "Desfazer")
       : "",
   ]));
+  const dialogActions = [
+    info.canEdit && info.living && !info.paid
+      ? el("button", { class: "secondary", type: "button", onclick: () => openPartialPayment(info) }, "Lançar pagamento")
+      : null,
+    info.canEdit && info.living && (info.partials?.length || (info.paid && !info.zeroFinalized))
+      ? el("button", {
+        class: "secondary",
+        type: "button",
+        onclick: () => openUndoPayments((state.data?.expenses || []).find((item) => item.id === info.id)),
+      }, "Desfazer lançamentos")
+      : null,
+  ].filter(Boolean);
   const overlay = el("div", {
     class: "overlay center",
     role: "presentation",
@@ -4743,24 +4753,13 @@ function expenseInfoDialog() {
     },
   }, [
     el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "expense-info-title" }, [
+      el("button", { class: "dialog-close", type: "button", "aria-label": "Fechar", onclick: closeExpenseInfo }, "×"),
       el("h2", { id: "expense-info-title" }, info.name),
       el("p", { class: "money inline" }, info.amount),
       ...lines.filter(Boolean).map((line) => el("p", {}, line)),
       partialItems.length ? el("div", { class: "partial-list" }, partialItems) : "",
       ...tail.map((line) => el("p", {}, line)),
-      el("div", { class: "actions" }, [
-        info.canEdit && info.living && !info.paid
-          ? el("button", { class: "secondary", type: "button", onclick: () => openPartialPayment(info) }, "Lançar pagamento")
-          : "",
-        info.canEdit && info.living && (info.partials?.length || (info.paid && !info.zeroFinalized))
-          ? el("button", {
-            class: "secondary",
-            type: "button",
-            onclick: () => openUndoPayments((state.data?.expenses || []).find((item) => item.id === info.id)),
-          }, "Desfazer lançamentos")
-          : "",
-        el("button", { class: "primary", type: "button", onclick: closeExpenseInfo }, "Fechar"),
-      ]),
+      dialogActions.length ? el("div", { class: "actions" }, dialogActions) : "",
     ]),
   ]);
   return overlay;
