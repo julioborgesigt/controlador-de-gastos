@@ -59,7 +59,7 @@ export function extrasBreakdown(expenses: ReadonlyArray<{
   monthId?: string | null;
   amountCents: number;
   note?: string | null;
-}>): {
+}>, options?: { includeCardExtras?: boolean }): {
   planned: {
     pix: number;
     card: number;

@@ -2370,13 +2370,20 @@ function purchaseDetail(data) {
     children.push(el("p", { class: "eyebrow group" }, same
       ? `Cobrado na fatura deste mês (${monthPhrase(group.invoiceMonthId)}) · ${money(group.totalCents)}`
       : `Vai ser pago na fatura de ${monthPhrase(group.invoiceMonthId)} · ${money(group.totalCents)}`));
-    children.push(el("div", { class: "list" }, group.rows.map((item) => el("article", { class: "item" }, [
-      el("div", { class: "item-copy" }, [
-        el("strong", {}, cardChargeTitle(item)),
-        ...[item.cardLabel || "Sem cartão", cardSourceLabel(item) || "Crédito"].filter(Boolean).map((line) => el("small", {}, line)),
-      ]),
-      el("span", { class: "amount" }, money(item.amountCents)),
-    ]))));
+    children.push(el("div", { class: "list" }, group.rows.map((item) => {
+      const source = cardSourceLabel(item);
+      const sourceClass = source === "Planejado" ? "badge source-planned" : source === "Imprevisto" ? "badge source-extra" : "badge source-fixed";
+      return el("article", { class: "item" }, [
+        el("div", { class: "item-copy" }, [
+          el("strong", {}, cardChargeTitle(item)),
+          ...[item.cardLabel || "Sem cartão", "Crédito"].filter(Boolean).map((line) => el("small", {}, line)),
+        ]),
+        el("div", { class: "item-end" }, [
+          source ? el("div", { class: "badges" }, [el("span", { class: sourceClass }, source)]) : "",
+          el("span", { class: "amount" }, money(item.amountCents)),
+        ]),
+      ]);
+    })));
   }
   return el("section", {}, children);
 }
@@ -3225,7 +3232,7 @@ function sectionList(data, section) {
   const all = data.expenses.filter((expense) => belongs(expense, section));
   const visible = all.filter((expense) => state.showEmpty || expense.amountCents !== 0 || expense.source === "user");
   const hidden = all.length - visible.length;
-  const extras = section === "extra" ? extrasBreakdown(all) : null;
+  const extras = section === "extra" ? extrasBreakdown(all, { includeCardExtras: true }) : null;
   const total = section === "card"
     ? totals.faturaCents
     : section === "fixed"
@@ -3707,7 +3714,9 @@ async function removeIncomeExtra(extra) {
 
 function belongs(expense, section) {
   if (section === "card") return expense.section === "card" || extraOnOwnInvoice(expense) || (expense.section === "fixed" && expense.onCard);
-  if (section === "extra") return expense.section === "extra";
+  if (section === "extra") {
+    return expense.section === "extra" || (expense.section === "card" && (isPlannedNote(expense.note) || isImprevistoNote(expense.note)));
+  }
   return expense.section === "fixed";
 }
 
@@ -3965,15 +3974,17 @@ function expenseRow(expense, section, options = {}) {
   if (expense.section === "extra" && section === "card" && !options.manage && !isPlannedNote(expense.note)) meta.push("Imprevisto");
   const extraInvMonth = expense.section === "extra" ? chargedInvoiceMonth(expense.note) : "";
   const extraOtherInvoice = Boolean(extraInvMonth && expense.monthId && extraInvMonth !== expense.monthId);
+  const refMonth = section === "card" || (section === "extra" && expense.section === "card") ? referenceMonthFrom(expense.note) : "";
+  const cardFromOtherMonth = Boolean(refMonth && expense.monthId && refMonth !== expense.monthId);
   if (section === "extra" && expense.payment === "card") {
-    meta.push(extraOtherInvoice
-      ? `Gasto deste mês · entra na fatura de ${monthName(extraInvMonth)}`
-      : "Na fatura deste mês");
+    if (extraOtherInvoice) {
+      meta.push(`Gasto deste mês · entra na fatura de ${monthName(extraInvMonth)}`);
+    } else if (!cardFromOtherMonth) {
+      meta.push("Na fatura deste mês");
+    }
   } else if (extraOtherInvoice) {
     meta.push(`Na fatura de ${monthName(extraInvMonth)}`);
   }
-  const refMonth = section === "card" ? referenceMonthFrom(expense.note) : "";
-  const cardFromOtherMonth = Boolean(refMonth && expense.monthId && refMonth !== expense.monthId);
   if (cardFromOtherMonth) {
     meta.push(`Gasto de ${monthName(refMonth)} cobrado nesta fatura`);
   }
@@ -4024,7 +4035,7 @@ function expenseRow(expense, section, options = {}) {
   } else {
     badges = [el("span", { class: "badge open" }, "Em aberto")];
   }
-  if (section === "card" && cardFromOtherMonth) {
+  if ((section === "card" || section === "extra") && cardFromOtherMonth) {
     badges.unshift(el("span", { class: "badge cross-month" }, `De ${shortMonthLabel(refMonth)}`));
   }
   if (section === "card" || section === "extra") {
@@ -4037,7 +4048,7 @@ function expenseRow(expense, section, options = {}) {
   const front = el("article", { class: `item${tone}` }, [
     el("div", { class: "item-copy" }, [
       el("button", { type: "button", class: "item-main", onclick: () => openExpenseInfo(expense, section) }, [
-        el("strong", {}, section === "card" ? cardChargeTitle(expense) : expense.name),
+        el("strong", {}, section === "card" || expense.section === "card" ? cardChargeTitle(expense) : expense.name),
         ...meta.filter(Boolean).map((line) => el("small", {}, line)),
       ]),
       onInvoice && section === "card" ? el("span", { class: "badge" }, "Já contabilizado, não soma de novo") : "",

@@ -226,13 +226,15 @@ export function livingCrossMonthSummary(expenses) {
   };
 }
 
-export function extrasBreakdown(expenses) {
+export function extrasBreakdown(expenses, options = {}) {
+  const includeCardExtras = Boolean(options?.includeCardExtras);
   const planned = { pix: 0, card: 0, cardOwnInvoice: 0, cardOtherInvoice: 0, otherInvoiceMonths: [], inMonth: 0, total: 0 };
   const unexpected = { pix: 0, card: 0, cardOwnInvoice: 0, cardOtherInvoice: 0, otherInvoiceMonths: [], inMonth: 0, total: 0 };
   const plannedMonths = new Set();
   const unexpectedMonths = new Set();
   for (const expense of expenses || []) {
-    if (expense.section !== "extra") continue;
+    const isCardExtra = includeCardExtras && expense?.section === "card" && (isPlannedNote(expense.note) || isImprevistoNote(expense.note));
+    if (expense?.section !== "extra" && !isCardExtra) continue;
     const isPlanned = isPlannedNote(expense.note);
     const bucket = isPlanned ? planned : unexpected;
     const monthSet = isPlanned ? plannedMonths : unexpectedMonths;
