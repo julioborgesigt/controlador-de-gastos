@@ -124,7 +124,7 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
       fixedOpen += 1;
       continue;
     }
-    if (expense.section === "fixed" && !isFixedOnCard(expense) && partials.length) {
+    if (expense.section === "fixed" && !isFixedOnCard(expense) && (partials.length || (expense.paid && isFinalizedWithoutSpend(expense.note)))) {
       const split = partialSplit(partials);
       const shown = expense.paid ? split.total : Math.max(expense.amountCents, split.total);
       fixedForecastCents += expense.amountCents;
@@ -188,7 +188,7 @@ function pixAlreadyPaid(expense: Expense): number {
   const fromPartials = partials
     .filter((item) => item.payment === "pix")
     .reduce((sum, item) => sum + item.amountCents, 0);
-  if (partials.length) return fromPartials;
+  if (partials.length || isFinalizedWithoutSpend(expense.note)) return fromPartials;
   if (expense.paid && expense.payment === "pix") return expense.amountCents;
   return 0;
 }
@@ -374,7 +374,7 @@ export function editTargets<T extends ExpenseDeleteRef>(
     .sort((left, right) => left.monthId.localeCompare(right.monthId) || left.id.localeCompare(right.id));
 }
 
-const NOTE_MARKERS = ["serie:", "origem:", "parcial:", "tipo:", "fatura:", "compra:", "ref:", "quitado-cartao:", "parcelamento:"];
+const NOTE_MARKERS = ["serie:", "origem:", "parcial:", "tipo:", "fatura:", "compra:", "ref:", "quitado-cartao:", "parcelamento:", "finalizado:"];
 
 const REFERENCE_MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
 
@@ -417,6 +417,16 @@ export function isVariableCost(note: string | null | undefined): boolean {
 
 export function isPlannedCost(note: string | null | undefined): boolean {
   return String(note || "").split("\n").some((line) => line.trim() === "tipo:planejado");
+}
+
+export function isFinalizedWithoutSpend(note: string | null | undefined): boolean {
+  return String(note || "").split("\n").some((line) => line.trim() === "finalizado:0");
+}
+
+export function noteWithFinalizedZero(note: string | null | undefined, finalized: boolean): string {
+  const lines = String(note || "").split("\n").map((line) => line.trim()).filter((line) => line && !line.startsWith("finalizado:"));
+  if (!finalized) return lines.join("\n");
+  return ["finalizado:0", ...lines].join("\n");
 }
 
 export type ExpenseTrack = "imprevisto" | "planejado" | "casa";
@@ -682,6 +692,9 @@ export function carryForward(expense: Expense): Expense | null {
     next.onCard = false;
     next.payment = expense.payment === "card" ? "pix" : expense.payment;
     next.cardLabel = null;
+    if (next.note) {
+      next.note = noteWithFinalizedZero(next.note, false) || null;
+    }
   }
   return next;
 }

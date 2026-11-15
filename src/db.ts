@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, PartialPayment, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, chargedInvoiceMonth, coercePayment, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, isPlannedCost, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteForTrack, noteWithChargeContext, noteWithOrigin, noteWithSeries, noteWithVisibleText, isVariableCost, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, purchaseMonthFromNote, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope, type ExpenseTrack } from "./domain.ts";
+import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, chargedInvoiceMonth, coercePayment, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, isPlannedCost, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteForTrack, noteWithChargeContext, noteWithFinalizedZero, noteWithOrigin, noteWithSeries, noteWithVisibleText, isVariableCost, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, purchaseMonthFromNote, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope, type ExpenseTrack } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -1089,7 +1089,8 @@ export async function undoExpensePayments(
   const partialIds = (rows.results ?? []).map((row) => row.id);
   if (!partialIds.length) {
     if (!expense.paid) return { ok: false, error: "Não há pagamento para desfazer." };
-    await db.prepare("UPDATE expenses SET paid = 0 WHERE owner_id = ? AND id = ?").bind(ownerId, expenseId).run();
+    const nextNote = noteWithFinalizedZero(expense.note, false) || null;
+    await db.prepare("UPDATE expenses SET paid = 0, note = ? WHERE owner_id = ? AND id = ?").bind(nextNote, ownerId, expenseId).run();
     return { ok: true, count: 1 };
   }
   const targets = scope === "all" ? partialIds : partialIds.slice(0, 1);

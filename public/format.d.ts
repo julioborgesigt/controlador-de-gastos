@@ -6,6 +6,7 @@ export function originIdFrom(note: string | null | undefined): string;
 export function partialIdFrom(note: string | null | undefined): string;
 export function seriesIdFrom(note: string | null | undefined): string;
 export function isVariableNote(note: string | null | undefined): boolean;
+export function isZeroFinalizedNote(note: string | null | undefined): boolean;
 export function cardChargeTitle(expense: { name?: string | null; note?: string | null; monthId?: string | null }): string;
 export function visibleNote(note: string | null | undefined): string;
 export function composeNote(

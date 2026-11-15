@@ -46,6 +46,10 @@ export function isVariableNote(note) {
   return String(note || "").split("\n").some((item) => item.trim() === "tipo:variavel");
 }
 
+export function isZeroFinalizedNote(note) {
+  return String(note || "").split("\n").some((item) => item.trim() === "finalizado:0");
+}
+
 export function cardChargeTitle(expense) {
   const name = String(expense.name || "").trim();
   const note = String(expense.note || "");
@@ -73,7 +77,8 @@ export function visibleNote(note) {
       && !item.startsWith("compra:")
       && !item.startsWith("ref:")
       && !item.startsWith("quitado-cartao:")
-      && !item.startsWith("parcelamento:"),
+      && !item.startsWith("parcelamento:")
+      && !item.startsWith("finalizado:"),
     )
     .join("\n");
 }
@@ -375,7 +380,10 @@ export function monthFinancialSummary(data, nextData = null, prevData = null, pu
   const currentPixForecastCents = pixTotalCents;
   const currentExpenseForecastCents = currentInvoiceForecastCents + currentPixForecastCents;
   const currentBalanceForecastCents = incomeCents - currentExpenseForecastCents;
-  const currentCategoryBudgetCents = (totals.fixedAllSettled ? Number(totals.fixedLaunchedCents || 0) : Number(totals.fixedForecastCents || 0)) + extras.total;
+  const effectiveFixedCents = totals.fixedCents !== undefined
+    ? Number(totals.fixedCents || 0)
+    : (totals.fixedAllSettled ? Number(totals.fixedLaunchedCents || 0) : Number(totals.fixedForecastCents || 0));
+  const currentCategoryBudgetCents = effectiveFixedCents + extras.total;
 
   const nextId = nextMonthId(monthId);
   const nextReady = Boolean(nextData && !nextData.error && nextData.totals);

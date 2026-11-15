@@ -11,6 +11,7 @@ import {
   invoiceBreakdown,
   invoiceShift,
   isVariableNote,
+  isZeroFinalizedNote,
   livingCrossMonthSummary,
   monthFinancialSummary,
   nextMonthId,
@@ -51,8 +52,10 @@ test("formatCpf aplica máscara progressiva e base64Url faz roundtrip exato", ()
 });
 
 test("visibleNote e composeNote filtram todos os marcadores internos do cliente", () => {
-  const raw = "serie:s1\ntipo:variavel\nfatura:seguinte\norigem:o1\nparcial:p1\nquitado-cartao:c1:2026-11\nparcelamento:c1:2026-11\ncompra:2026-11-10\nref:2026-11\nObservação real";
+  const raw = "serie:s1\ntipo:variavel\nfatura:seguinte\nfinalizado:0\norigem:o1\nparcial:p1\nquitado-cartao:c1:2026-11\nparcelamento:c1:2026-11\ncompra:2026-11-10\nref:2026-11\nObservação real";
   assert.equal(visibleNote(raw), "Observação real");
+  assert.equal(isZeroFinalizedNote(raw), true);
+  assert.equal(isZeroFinalizedNote("serie:s1"), false);
   assert.equal(originIdFrom(raw), "o1");
   assert.equal(partialIdFrom(raw), "p1");
   assert.equal(seriesIdFrom(raw), "s1");

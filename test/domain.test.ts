@@ -41,6 +41,8 @@ import {
   planCardPurchase,
   resolveCardLabel,
   unassignedCardExpenses,
+  isFinalizedWithoutSpend,
+  noteWithFinalizedZero,
   type Expense,
 } from "../src/domain.ts";
 import seedJson from "../src/seed-data.json" with { type: "json" };
@@ -738,3 +740,62 @@ test("conta exige CPF válido, e-mail e senha, e bloqueia depois de oito erros",
     "serie:s1\norigem:o1\nnota limpa",
   );
 });
+
+test("finalizar despesa de custo de vida considera o custo atual lançado (parcial ou zero) e libera o previsto restante", () => {
+  const zeroNote = noteWithFinalizedZero("serie:s1\nObservação", true);
+  assert.equal(isFinalizedWithoutSpend(zeroNote), true);
+  assert.equal(visibleExpenseNote(zeroNote), "Observação");
+  assert.equal(isFinalizedWithoutSpend(noteWithFinalizedZero(zeroNote, false)), false);
+
+  const expenses: Expense[] = [
+    {
+      id: "fix-partial",
+      monthId: "2026-11",
+      name: "Feira",
+      section: "fixed",
+      amountCents: 60000,
+      payment: "pix",
+      onCard: false,
+      cardLabel: null,
+      paid: true,
+      note: "serie:s-feira",
+      installment: null,
+      sortOrder: 1,
+      source: "user",
+      partials: [
+        { id: "p1", amountCents: 38000, payment: "pix", cardLabel: null, installment: null, createdAt: "2026-11-10T12:00:00Z" },
+      ],
+    },
+    {
+      id: "fix-zero",
+      monthId: "2026-11",
+      name: "Gás",
+      section: "fixed",
+      amountCents: 12000,
+      payment: "pix",
+      onCard: false,
+      cardLabel: null,
+      paid: true,
+      note: zeroNote,
+      installment: null,
+      sortOrder: 2,
+      source: "user",
+      partials: [],
+    },
+  ];
+
+  const totals = computeTotals(expenses, 500000);
+  assert.equal(totals.fixedCents, 38000);
+  assert.equal(totals.fixedCashCents, 38000);
+  assert.equal(totals.commitmentsCents, 38000);
+  assert.equal(totals.remainingCents, 0);
+  assert.equal(totals.fixedPixForecastCents, 0);
+  assert.equal(totals.fixedAllSettled, true);
+  assert.equal(totals.balanceCents, 500000 - 38000);
+
+  const carriedZero = carryForward(expenses[1]!);
+  assert.ok(carriedZero);
+  assert.equal(carriedZero.paid, false);
+  assert.equal(isFinalizedWithoutSpend(carriedZero.note), false);
+});
+
