@@ -12,11 +12,13 @@ import {
   invoiceShift,
   isVariableNote,
   livingCrossMonthSummary,
+  monthFinancialSummary,
   nextMonthId,
   originIdFrom,
   parseMoney,
   partialIdFrom,
   paymentLabel,
+  previousMonthId,
   referenceMonthFrom,
   seriesIdFrom,
   shortMonthLabel,
@@ -57,6 +59,8 @@ test("visibleNote e composeNote filtram todos os marcadores internos do cliente"
   assert.equal(isVariableNote(raw), true);
   assert.equal(invoiceShift(raw), "seguinte");
   assert.equal(nextMonthId("2026-12"), "2027-01");
+  assert.equal(previousMonthId("2026-01"), "2025-12");
+  assert.equal(previousMonthId("2026-11"), "2026-10");
   assert.equal(shortMonthLabel("2026-12"), "Dez/26");
   assert.equal(referenceMonthFrom(raw), "2026-11");
   assert.equal(referenceMonthFrom("compra:2026-10-28"), "2026-10");
@@ -143,5 +147,123 @@ test("livingCrossMonthSummary identifica custo de vida previsto ou lançado na f
   assert.equal(summary.dueCardOtherCents, 30000);
   assert.deepEqual(summary.dueOtherMonths, ["2026-12"]);
 });
+
+test("monthFinancialSummary separa pagamentos do mês, lançamentos para próximas faturas e despesa prevista do mês atual e próximo", () => {
+  const novData = {
+    month: { id: "2026-11", incomeCents: 800000 },
+    totals: {
+      faturaCents: 200000,
+      fixedCashCents: 250000,
+      fixedPixForecastCents: 30000,
+      extrasPixCents: 10000,
+      paidCents: 260000,
+      fixedAllSettled: false,
+      fixedLaunchedCents: 310000,
+      fixedForecastCents: 430000,
+    },
+    expenses: [
+      {
+        section: "fixed",
+        monthId: "2026-11",
+        amountCents: 250000,
+        payment: "pix",
+        paid: true,
+        note: "",
+        charges: [],
+        partials: [],
+      },
+      {
+        section: "fixed",
+        monthId: "2026-11",
+        amountCents: 30000,
+        payment: "pix",
+        paid: false,
+        note: "",
+        charges: [],
+        partials: [],
+      },
+      {
+        section: "fixed",
+        monthId: "2026-11",
+        amountCents: 150000,
+        payment: "card",
+        paid: false,
+        note: "tipo:variavel\nfatura:seguinte",
+        charges: [{ monthId: "2026-12", amountCents: 60000 }],
+        partials: [{ amountCents: 60000, payment: "card" }],
+      },
+      {
+        section: "extra",
+        monthId: "2026-11",
+        amountCents: 40000,
+        payment: "card",
+        paid: false,
+        note: "tipo:planejado\nfatura:2026-12",
+      },
+      {
+        section: "extra",
+        monthId: "2026-11",
+        amountCents: 10000,
+        payment: "pix",
+        paid: true,
+        note: "tipo:imprevisto",
+      },
+    ],
+  };
+
+  const decData = {
+    month: { id: "2026-12", incomeCents: 800000 },
+    totals: {
+      faturaCents: 100000,
+      fixedCashCents: 0,
+      fixedPixForecastCents: 280000,
+      extrasPixCents: 0,
+      paidCents: 0,
+      fixedAllSettled: false,
+      fixedLaunchedCents: 0,
+      fixedForecastCents: 430000,
+    },
+    expenses: [
+      {
+        section: "fixed",
+        monthId: "2026-12",
+        amountCents: 150000,
+        payment: "card",
+        paid: false,
+        note: "tipo:variavel\nfatura:seguinte",
+        charges: [],
+        partials: [],
+      },
+    ],
+  };
+
+  const fin = monthFinancialSummary(novData, decData);
+
+  // 1. Pagamentos de novembro: fatura de novembro (2000) + Pix pago/previsto (2500 + 300 + 100 = 2900) = 4900
+  assert.equal(fin.payments.faturaCents, 200000);
+  assert.equal(fin.payments.pixTotalCents, 290000);
+  assert.equal(fin.payments.totalCents, 490000);
+  assert.equal(fin.payments.paidCents, 260000);
+  assert.equal(fin.payments.remainingCents, 230000);
+  assert.equal(fin.payments.cashBalanceCents, 310000);
+
+  // 2. Lançamentos de novembro p/ próximas faturas: 600 (custo de vida) + 400 (planejado) = 1000 já lançados, + 900 ainda previstos
+  assert.equal(fin.launches.launchedFutureCents, 100000);
+  assert.equal(fin.launches.forecastNextInvoiceCents, 90000);
+  assert.equal(fin.launches.totalFutureInvoicesCents, 190000);
+  assert.deepEqual(fin.launches.futureInvoiceMonths, ["2026-12"]);
+
+  // 3. Despesa prevista de novembro (mês atual) e dezembro (próximo mês)
+  assert.equal(fin.forecast.current.expenseCents, 490000);
+  assert.equal(fin.forecast.current.balanceCents, 310000);
+  assert.equal(fin.forecast.next.ready, true);
+  assert.equal(fin.forecast.next.invoiceLaunchedCents, 100000);
+  assert.equal(fin.forecast.next.invoicePendingFromCurrentCents, 90000);
+  assert.equal(fin.forecast.next.invoiceForecastCents, 190000);
+  assert.equal(fin.forecast.next.pixForecastCents, 280000);
+  assert.equal(fin.forecast.next.expenseCents, 470000);
+  assert.equal(fin.forecast.next.balanceCents, 330000);
+});
+
 
 

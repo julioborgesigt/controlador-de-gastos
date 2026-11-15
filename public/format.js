@@ -191,9 +191,15 @@ export function livingCrossMonthSummary(expenses) {
         paidCardOwnCents += amount;
       }
     }
-    const partialCents = partials.reduce((sum, item) => sum + Number(item?.amountCents || 0), 0);
-    const settled = creditCents + partialCents;
-    const remaining = expense.paid ? 0 : Math.max(0, Number(expense.amountCents || 0) - settled);
+    let creditFromPartials = 0;
+    let pixFromPartials = 0;
+    for (const partial of partials) {
+      const amount = Number(partial?.amountCents || 0);
+      if (partial?.payment === "card") creditFromPartials += amount;
+      else pixFromPartials += amount;
+    }
+    const settled = Math.max(creditCents, creditFromPartials) + pixFromPartials;
+    const remaining = expense.paid || expense.onCard ? 0 : Math.max(0, Number(expense.amountCents || 0) - settled);
     if (remaining > 0 && expense.payment === "card") {
       if (invoiceShift(expense.note) === "seguinte") {
         dueCardOtherCents += remaining;
@@ -300,5 +306,145 @@ export function invoiceBreakdown(expenses) {
     plannedFromOtherCents,
     unexpectedFromOtherCents,
     originMonths: [...originMonths].sort(),
+  };
+}
+
+export function previousMonthId(monthId) {
+  const match = /^(\d{4})-(\d{2})$/.exec(String(monthId || ""));
+  if (!match) return "";
+  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 2, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+export function monthFinancialSummary(data, nextData = null, prevData = null, purchasesPayload = null) {
+  const monthId = String(data?.month?.id || "");
+  const incomeCents = Number(data?.month?.incomeCents || 0);
+  const totals = data?.totals || {};
+  const expenses = Array.isArray(data?.expenses) ? data.expenses : [];
+  const cross = livingCrossMonthSummary(expenses);
+  const extras = extrasBreakdown(expenses);
+
+  const faturaCents = Number(totals.faturaCents || 0);
+  const livingPixPaidCents = Number(totals.fixedCashCents || 0);
+  const livingPixDueCents = Number(totals.fixedPixForecastCents || 0);
+  const livingPixTotalCents = livingPixPaidCents + livingPixDueCents;
+  const extrasPixCents = Number(totals.extrasPixCents || 0);
+  const pixPaidCents = livingPixPaidCents + extrasPixCents;
+  const pixTotalCents = livingPixTotalCents + extrasPixCents;
+  const paymentsTotalCents = faturaCents + pixTotalCents;
+  const paymentsPaidCents = Number(totals.paidCents || 0);
+  const paymentsRemainingCents = Math.max(0, paymentsTotalCents - paymentsPaidCents);
+  const cashBalanceCents = incomeCents - paymentsTotalCents;
+
+  let purchaseFutureCents = 0;
+  let purchaseOwnCents = 0;
+  const purchaseFutureMonths = new Set();
+  if (Array.isArray(purchasesPayload?.items)) {
+    for (const item of purchasesPayload.items) {
+      const amount = Number(item?.amountCents || 0);
+      const invMonth = String(item?.invoiceMonthId || "");
+      if (invMonth && monthId && invMonth !== monthId) {
+        purchaseFutureCents += amount;
+        purchaseFutureMonths.add(invMonth);
+      } else {
+        purchaseOwnCents += amount;
+      }
+    }
+  }
+
+  const expensesFutureLaunchedCents = cross.paidCardOtherCents + extras.cardOtherInvoice;
+  const expensesOwnLaunchedCents = cross.paidCardOwnCents + extras.cardOwnInvoice;
+  const launchedFutureCents = Math.max(expensesFutureLaunchedCents, purchaseFutureCents);
+  const launchedOwnInvoiceCents = Math.max(expensesOwnLaunchedCents, purchaseOwnCents);
+  const forecastNextInvoiceCents = cross.dueCardOtherCents;
+  const totalFutureInvoicesCents = launchedFutureCents + forecastNextInvoiceCents;
+  const futureInvoiceMonths = [
+    ...new Set([
+      ...cross.paidOtherMonths,
+      ...extras.otherInvoiceMonths,
+      ...cross.dueOtherMonths,
+      ...purchaseFutureMonths,
+    ]),
+  ].sort();
+
+  const prevCross = prevData && Array.isArray(prevData.expenses)
+    ? livingCrossMonthSummary(prevData.expenses)
+    : null;
+  const pendingFromPrevCents = prevCross ? prevCross.dueCardOtherCents : 0;
+  const currentInvoiceForecastCents = faturaCents + cross.dueCardOwnCents + pendingFromPrevCents;
+  const currentPixForecastCents = pixTotalCents;
+  const currentExpenseForecastCents = currentInvoiceForecastCents + currentPixForecastCents;
+  const currentBalanceForecastCents = incomeCents - currentExpenseForecastCents;
+  const currentCategoryBudgetCents = (totals.fixedAllSettled ? Number(totals.fixedLaunchedCents || 0) : Number(totals.fixedForecastCents || 0)) + extras.total;
+
+  const nextId = nextMonthId(monthId);
+  const nextReady = Boolean(nextData && !nextData.error && nextData.totals);
+  const nextTotals = nextData?.totals || {};
+  const nextCross = nextReady && Array.isArray(nextData?.expenses)
+    ? livingCrossMonthSummary(nextData.expenses)
+    : { dueCardOwnCents: 0, dueCardOtherCents: 0 };
+  const nextInvoiceLaunchedCents = nextReady
+    ? Number(nextTotals.faturaCents || 0)
+    : launchedFutureCents;
+  const nextInvoicePendingFromCurrentCents = cross.dueCardOtherCents;
+  const nextInvoicePendingOwnCents = nextReady ? nextCross.dueCardOwnCents : 0;
+  const nextInvoiceForecastCents = nextInvoiceLaunchedCents + nextInvoicePendingFromCurrentCents + nextInvoicePendingOwnCents;
+  const nextPixForecastCents = nextReady
+    ? Number(nextTotals.fixedCashCents || 0) + Number(nextTotals.fixedPixForecastCents || 0) + Number(nextTotals.extrasPixCents || 0)
+    : 0;
+  const nextExpenseForecastCents = nextInvoiceForecastCents + nextPixForecastCents;
+  const nextIncomeCents = nextReady ? Number(nextData?.month?.incomeCents || 0) : incomeCents;
+  const nextBalanceForecastCents = nextIncomeCents - nextExpenseForecastCents;
+
+  return {
+    payments: {
+      faturaCents,
+      livingPixPaidCents,
+      livingPixDueCents,
+      livingPixTotalCents,
+      extrasPixCents,
+      pixPaidCents,
+      pixTotalCents,
+      totalCents: paymentsTotalCents,
+      paidCents: paymentsPaidCents,
+      remainingCents: paymentsRemainingCents,
+      cashBalanceCents,
+    },
+    launches: {
+      launchedFutureCents,
+      forecastNextInvoiceCents,
+      totalFutureInvoicesCents,
+      launchedOwnInvoiceCents,
+      totalLaunchedCents: launchedFutureCents + launchedOwnInvoiceCents,
+      futureInvoiceMonths,
+      livingLaunchedOtherCents: cross.paidCardOtherCents,
+      plannedLaunchedOtherCents: extras.planned.cardOtherInvoice,
+      unexpectedLaunchedOtherCents: extras.unexpected.cardOtherInvoice,
+    },
+    forecast: {
+      current: {
+        monthId,
+        invoiceForecastCents: currentInvoiceForecastCents,
+        pixForecastCents: currentPixForecastCents,
+        pendingOwnCardCents: cross.dueCardOwnCents,
+        pendingFromPrevCents,
+        expenseCents: currentExpenseForecastCents,
+        incomeCents,
+        balanceCents: currentBalanceForecastCents,
+        categoryBudgetCents: currentCategoryBudgetCents,
+      },
+      next: {
+        monthId: nextId,
+        ready: nextReady,
+        invoiceLaunchedCents: nextInvoiceLaunchedCents,
+        invoicePendingFromCurrentCents: nextInvoicePendingFromCurrentCents,
+        invoicePendingOwnCents: nextInvoicePendingOwnCents,
+        invoiceForecastCents: nextInvoiceForecastCents,
+        pixForecastCents: nextPixForecastCents,
+        expenseCents: nextExpenseForecastCents,
+        incomeCents: nextIncomeCents,
+        balanceCents: nextBalanceForecastCents,
+      },
+    },
   };
 }
