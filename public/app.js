@@ -14,6 +14,7 @@ import {
   isImprevistoNote,
   isPlannedNote,
   isVariableNote,
+  isZeroFinalizedNote,
   livingCrossMonthSummary,
   money,
   monthFinancialSummary,
@@ -2589,17 +2590,26 @@ document.addEventListener("keydown", (event) => {
 });
 let ignoreSwipeClickUntil = 0;
 
+function syncSwipeDirection(front, x) {
+  const shell = front?.parentElement;
+  if (!shell) return;
+  shell.classList.toggle("swipe-right", x > 0);
+  shell.classList.toggle("swipe-left", x < 0);
+}
+
 function closeSwipe(front) {
   if (!front) return;
   front.classList.remove("dragging");
   front.style.transform = "";
   front.dataset.x = "0";
+  syncSwipeDirection(front, 0);
   if (openSwipe === front) openSwipe = null;
 }
 
 function placeSwipe(front, x) {
   front.style.transform = x ? `translateX(${x}px)` : "";
   front.dataset.x = String(x);
+  syncSwipeDirection(front, x);
   if (x === 0) {
     if (openSwipe === front) openSwipe = null;
     return;
@@ -2658,17 +2668,20 @@ function swipeRow(front, { pay, leads, actions, card }) {
   let suppressClick = false;
 
   function widthOfTrail() {
+    if (!(actions || []).length) return 0;
     return trail.getBoundingClientRect().width || (actions || []).length * 88;
   }
 
   function widthOfLead() {
-    return leadBox.getBoundingClientRect().width || leadActions.length * 84;
+    if (!leadActions.length) return 0;
+    return leadBox.getBoundingClientRect().width || leadActions.length * 88;
   }
 
   function moveTo(x) {
     const next = Math.max(-widthOfTrail(), Math.min(widthOfLead(), x));
     front.style.transform = `translateX(${next}px)`;
     front.dataset.x = String(next);
+    syncSwipeDirection(front, next);
     return next;
   }
 
@@ -3094,15 +3107,15 @@ function sectionList(data, section) {
   const total = section === "card"
     ? totals.faturaCents
     : section === "fixed"
-      ? (totals.fixedAllSettled ? totals.fixedLaunchedCents : totals.fixedForecastCents)
+      ? (totals.fixedAllSettled ? totals.fixedLaunchedCents : (totals.fixedCents ?? totals.fixedForecastCents))
       : extras.total;
   const children = [
     el("div", { class: "section-head" }, [
       section === "fixed"
         ? titleWithHelp("Custo de vida", "Custo de vida", [
           "Aqui fica o previsto da casa e o que já foi pago no Pix ou lançado no cartão.",
-          "Toque num custo (ou arraste para a direita no celular) para dar baixa direto no Pix ou enviar para a fatura do cartão.",
-          "Falta no cartão é o previsto que ainda será pago no crédito. Falta no Pix é o que ainda será pago à vista.",
+          "Os lançamentos são feitos pelas abas Cartões de crédito e À vista, vinculando ao custo de vida. Arraste um custo para a direita (ou toque nele) para finalizar a despesa quando não for mais lançar nada nela neste mês.",
+          "Ao finalizar uma despesa, o custo atual dela passa a valer para os cálculos do mês e o restante previsto deixa de constar como falta.",
         ])
         : section === "extra"
           ? titleWithHelp("Planejados e imprevistos", "Planejados e imprevistos", [
@@ -3612,11 +3625,13 @@ function livingJump(totals, expenses) {
       place,
     ]);
   }
+  const effectiveForecast = totals.fixedCents ?? totals.fixedForecastCents;
+  const adjusted = effectiveForecast !== totals.fixedForecastCents;
   return el("button", { class: "jump", type: "button", onclick: openLiving }, [
     el("div", { class: "jump-pair" }, [
       el("span", {}, "Custo de vida"),
       el("strong", {}, money(totals.fixedLaunchedCents)),
-      el("small", {}, `Previsto ${money(totals.fixedForecastCents)}`),
+      el("small", {}, adjusted ? `Previsto atual ${money(effectiveForecast)} (inicial ${money(totals.fixedForecastCents)})` : `Previsto ${money(effectiveForecast)}`),
       el("small", { class: "jump-caption" }, "Parcial"),
     ]),
     place,
@@ -3628,7 +3643,7 @@ function blurb(section, totals) {
     return `${money(totals.fixedOnCardCents)} de custo de vida já foram lançados no cartão e não somam de novo.`;
   }
   if (section === "card") return "Linhas previstas da planilha mais os gastos lançados no cartão.";
-  if (section === "fixed" && totals.fixedAllSettled) return "Todas as despesas deste mês foram quitadas.";
+  if (section === "fixed" && totals.fixedAllSettled) return "Todas as despesas deste mês foram finalizadas.";
   if (section === "fixed") return "O previsto só entra na fatura ou sai da receita quando você lançar o pagamento.";
   return "Imprevistos deste mês, fora da projeção.";
 }
@@ -3652,6 +3667,10 @@ function costCard(key, label, cents, wide = false, sub = "") {
 function costSplit(totals) {
   const paidMonth = (totals.fixedOnCardCents || 0) + (totals.fixedPixPaidCents || 0);
   const cross = livingCrossMonthSummary(state.data?.expenses || []);
+  const effectiveForecast = totals.fixedCents ?? totals.fixedForecastCents;
+  const forecastSub = effectiveForecast !== totals.fixedForecastCents
+    ? `previsto inicial ${money(totals.fixedForecastCents)}`
+    : "";
   const cardPaidSub = cross.paidCardOtherCents > 0
     ? `inclui ${money(cross.paidCardOtherCents)} na fatura de ${formatMonthList(cross.paidOtherMonths)}`
     : "";
@@ -3662,7 +3681,7 @@ function costSplit(totals) {
     ? "entra nos pagamentos deste mês"
     : "";
   return el("div", { class: "cost-split" }, [
-    costCard("previsto", "Previsto", totals.fixedForecastCents, true),
+    costCard("previsto", "Previsto", effectiveForecast, true, forecastSub),
     costCard("pago", "Já pago / lançado", paidMonth, true),
     costCard("cartao", "Lançado no cartão", totals.fixedOnCardCents, false, cardPaidSub),
     costCard("pix", "Pago no Pix", totals.fixedPixPaidCents),
@@ -3682,11 +3701,12 @@ function costPortions(expense) {
   else if (partials.length) {
     pagoCartao = cardPaid;
     pagoPix = pixPaid;
-  } else if (expense.paid && expense.payment === "pix") pagoPix = expense.amountCents;
-  const spent = partials.reduce((sum, item) => sum + item.amountCents, 0);
+  } else if (expense.paid && !isZeroFinalizedNote(expense.note) && expense.payment === "pix") pagoPix = expense.amountCents;
+  const spent = pagoCartao + pagoPix;
   const left = !expense.paid && !onCard ? Math.max(0, expense.amountCents - spent) : 0;
+  const previsto = onCard ? expense.amountCents : expense.paid ? spent : Math.max(expense.amountCents, spent);
   return {
-    previsto: expense.amountCents,
+    previsto,
     pagoCartao,
     pagoPix,
     faltaCartao: expense.payment === "card" ? left : 0,
@@ -3704,7 +3724,7 @@ function costPortionAmount(parts, key) {
 }
 
 function costDetailCopy(key) {
-  if (key === "previsto") return ["Previsto", "Soma do que está cadastrado em Custo de vida neste mês."];
+  if (key === "previsto") return ["Previsto", "Soma do custo considerado em Custo de vida neste mês (despesas finalizadas entram pelo custo atual)."];
   if (key === "pago") return ["Já pago no mês", "O que já foi pago no Pix ou lançado no cartão."];
   if (key === "cartao") return ["Pago no cartão", "Valores deste mês que já entraram numa fatura."];
   if (key === "pix") return ["Pago no Pix", "Valores deste mês já pagos no Pix."];
@@ -3728,6 +3748,9 @@ function costDetailNote(row, key) {
   const nextShiftId = row.expense.payment === "card" && invoiceShift(row.expense.note) === "seguinte"
     ? nextMonthId(row.expense.monthId)
     : "";
+  if (key === "previsto" && row.expense.paid && !row.expense.onCard && row.parts.previsto !== row.expense.amountCents) {
+    return `Finalizada · previsto inicial ${money(row.expense.amountCents)}`;
+  }
   if (key === "pago" && row.parts.pagoCartao && row.parts.pagoPix) {
     return `No cartão ${money(row.parts.pagoCartao)}${otherSuffix} · no Pix ${money(row.parts.pagoPix)}`;
   }
@@ -3862,7 +3885,7 @@ function expenseRow(expense, section, options = {}) {
       badges = [el("span", { class: "badge on-card" }, "Tá no cartão")];
     }
   } else if (expense.paid) {
-    badges = [el("span", { class: "badge paid" }, "Pago")];
+    badges = [el("span", { class: "badge paid" }, section === "fixed" ? "Finalizada" : "Pago")];
   } else if (partialOnCard) {
     badges = [
       el("span", { class: "badge open" }, "Em aberto"),
@@ -3886,6 +3909,8 @@ function expenseRow(expense, section, options = {}) {
     const sourceClass = source === "Planejado" ? "badge source-planned" : source === "Imprevisto" ? "badge source-extra" : "badge source-fixed";
     if (source) badges.unshift(el("span", { class: sourceClass }, source));
   }
+  const finalizedLiving = section === "fixed" && expense.paid && !onInvoice;
+  const shownAmount = finalizedLiving ? livingBalance(expense).spent : expense.amountCents;
   const front = el("article", { class: `item${tone}` }, [
     el("div", { class: "item-copy" }, [
       el("button", { type: "button", class: "item-main", onclick: () => openExpenseInfo(expense, section) }, [
@@ -3897,14 +3922,13 @@ function expenseRow(expense, section, options = {}) {
     ]),
     el("div", { class: "item-end" }, [
       el("div", { class: "badges" }, badges),
-      el("span", { class: `amount${onInvoice && section === "card" ? " aside" : ""}` }, expense.amountCents === 0 ? "—" : money(expense.amountCents)),
+      el("span", { class: `amount${onInvoice && section === "card" ? " aside" : ""}` }, shownAmount === 0 && !finalizedLiving ? "—" : money(shownAmount)),
     ]),
   ]);
   if (!editable()) return front;
   const informational = section === "extra";
   const onCardHere = section === "fixed" && expense.onCard;
   const living = section === "fixed" && !expense.onCard;
-  const cardFirst = expense.payment === "card" && !expense.onCard;
   const leads = informational
     ? null
     : onCardHere
@@ -3912,21 +3936,9 @@ function expenseRow(expense, section, options = {}) {
     : living
     ? [
       expense.paid
-        ? { label: "Desfazer", tone: "undo", commit: true, run: () => openUndoPayments(expense) }
-        : cardFirst
-          ? { label: "Pago\nno crédito", tone: "send", run: () => openCardPay(expense) }
-          : {
-            label: "Pago\nno Pix",
-            tone: "pay",
-            run: () => openCloseLiving(expense),
-          },
-      expense.paid ? null : cardFirst
-        ? { label: "Pago\nno Pix", tone: "pay", run: () => openCloseLiving(expense) }
-        : { label: "Enviar pro\ncartão", tone: "send", run: () => openCardPay(expense) },
-      !expense.paid && partials.length
-        ? { label: "Desfazer", tone: "undo", commit: true, run: () => openUndoPayments(expense) }
-        : null,
-    ].filter(Boolean)
+        ? { label: "Reabrir\ndespesa", tone: "undo", commit: true, run: () => reopenLivingExpense(expense) }
+        : { label: "Finalizar\ndespesa", tone: "pay", run: () => openCloseLiving(expense) },
+    ]
     : null;
   return swipeRow(front, {
     leads,
@@ -4124,14 +4136,17 @@ function livingBalance(expense) {
   }
   const charged = (expense.charges || []).reduce((sum, charge) => sum + charge.amountCents, 0);
   if (charged > credit) credit = charged;
-  if (!partials.length && expense.paid && expense.payment !== "card") pix += expense.amountCents;
+  if (!partials.length && expense.paid && !isZeroFinalizedNote(expense.note) && expense.payment !== "card") pix += expense.amountCents;
   if (!partials.length && expense.onCard && credit === 0) credit += expense.amountCents;
   const spent = pix + credit;
+  const finalized = Boolean(expense.paid && !expense.onCard);
   return {
     forecast: expense.amountCents,
     pix,
     credit,
-    remaining: Math.max(0, expense.amountCents - spent),
+    spent,
+    finalized,
+    remaining: finalized || expense.onCard ? 0 : Math.max(0, expense.amountCents - spent),
     over: Math.max(0, spent - expense.amountCents),
   };
 }
@@ -4420,7 +4435,9 @@ function livingBalanceLines(expense) {
       lines.push(`Já lançado na fatura deste mês ${money(balance.credit)}`);
     }
   }
-  if (balance.over > 0) lines.push(`Passou ${money(balance.over)}`);
+  if (balance.finalized) {
+    lines.push(`Finalizada · custo atual ${money(balance.spent)}`);
+  } else if (balance.over > 0) lines.push(`Passou ${money(balance.over)}`);
   else if (balance.remaining > 0 && expense.payment === "card") {
     if (invoiceShift(expense.note) === "seguinte") {
       const nextId = nextMonthId(expense.monthId);
@@ -4466,9 +4483,9 @@ function closeAfterField(draft) {
   const closeAfter = draft.closeAfter === "close" ? "close" : "open";
   return el("div", { class: "field" }, [
     el("label", {}, "Depois deste lançamento"),
-    segmented("closeAfter", [["open", "Deixar em aberto"], ["close", "Encerrar despesa"]], closeAfter),
+    segmented("closeAfter", [["open", "Deixar em aberto"], ["close", "Finalizar despesa"]], closeAfter),
     el("p", { class: "muted" }, closeAfter === "close"
-      ? "Encerrar coloca a tarja Pago, risca o nome e deixa o fundo verde."
+      ? "Finalizar considera o custo atual para o mês e coloca a tarja Finalizada."
       : "A conta continua em aberto. Dá para lançar outro pagamento depois, tocando nela."),
   ]);
 }
@@ -4483,11 +4500,14 @@ function partialLine(partial) {
 function openExpenseInfo(expense, section) {
   const mirror = cardMirror(expense, section);
   const living = expense.section === "fixed" && !expense.onCard;
+  const balance = living ? livingBalance(expense) : null;
   state.expenseInfo = {
     id: expense.id,
     name: expense.name,
     amount: expense.amountCents === 0 ? "—" : money(expense.amountCents),
     amountCents: expense.amountCents,
+    spentCents: balance ? balance.spent : 0,
+    zeroFinalized: isZeroFinalizedNote(expense.note),
     monthId: expense.monthId,
     section: expense.section,
     mirror,
@@ -4498,7 +4518,7 @@ function openExpenseInfo(expense, section) {
     note: visibleNote(expense.note),
     payment: mirror ? "" : paymentLabel(expense.payment),
     paymentKind: expense.payment,
-    status: mirror ? "" : (expense.paid ? "Pago" : "Em aberto"),
+    status: mirror ? "" : (expense.paid ? (living ? "Finalizada" : "Pago") : "Em aberto"),
     installment: expense.installment || "",
     partials: expense.partials || [],
     charges: expense.charges || [],
@@ -4522,23 +4542,31 @@ function paidPartialCents(expense) {
 }
 
 function openCloseLiving(expense) {
-  const already = paidPartialCents(expense);
-  const rest = Math.max(0, expense.amountCents - already);
+  const balance = livingBalance(expense);
   state.expenseInfo = null;
   state.sheet = {
     mode: "close-living",
     id: expense.id,
     name: expense.name,
     planned: expense.amountCents,
-    described: rest,
-    already,
-    payment: "pix",
-    amountChoice: already > 0 ? (rest > 0 ? "rest" : "none") : "registered",
-    amount: "",
+    already: balance.spent,
+    pix: balance.pix,
+    credit: balance.credit,
     partials: expense.partials || [],
   };
   state.error = "";
   render();
+}
+
+async function reopenLivingExpense(expense) {
+  if (!expense?.id) return;
+  state.expenseInfo = null;
+  await patchExpense(expense, { paid: false });
+  if (!state.error && state.data) {
+    rememberMonth(state.data);
+    state.notice = `“${expense.name}” reaberta neste mês.`;
+    renderSafely();
+  }
 }
 
 function openPartialPayment(info) {
@@ -4675,7 +4703,9 @@ function expenseInfoDialog() {
     }
   } else {
     lines.push(...[info.payment, info.status, info.installment].filter(Boolean));
-    if (info.living && !info.paid && info.paymentKind === "card" && info.nextInvoice) {
+    if (info.living && info.paid) {
+      lines.push(`Custo atual consolidado neste mês: ${money(info.spentCents || 0)}.`);
+    } else if (info.living && !info.paid && info.paymentKind === "card" && info.nextInvoice) {
       lines.push(`Previsto para entrar na fatura de ${monthName(nextMonthId(info.monthId))}.`);
     }
     if (info.section === "card" && info.refMonth && info.monthId && info.refMonth !== info.monthId) {
@@ -4686,8 +4716,8 @@ function expenseInfoDialog() {
   const tail = [];
   if (info.partials?.length) {
     lines.push(info.paid
-      ? "Pagamentos desta despesa:"
-      : "Pagamentos parciais, a despesa continua em aberto:");
+      ? "Lançamentos desta despesa:"
+      : "Lançamentos parciais, a despesa continua em aberto:");
   }
   if (info.registered) tail.push(`Cadastrado em ${info.registered}.`);
   if (info.canEdit) {
@@ -4727,22 +4757,22 @@ function expenseInfoDialog() {
               const target = (state.data?.expenses || []).find((item) => item.id === info.id);
               if (target) openCloseLiving(target);
             },
-          }, "Pago no Pix")
+          }, "Finalizar despesa")
           : "",
-        info.canEdit && info.living && !info.paid
+        info.canEdit && info.living && info.paid
           ? el("button", {
             class: "secondary",
             type: "button",
             onclick: () => {
               const target = (state.data?.expenses || []).find((item) => item.id === info.id);
-              if (target) openCardPay(target);
+              if (target) reopenLivingExpense(target);
             },
-          }, "Enviar pro cartão")
+          }, "Reabrir despesa")
           : "",
         info.canEdit && info.living && !info.paid
           ? el("button", { class: "secondary", type: "button", onclick: () => openPartialPayment(info) }, "Pagamento parcial")
           : "",
-        info.canEdit && info.living && (info.partials?.length || info.paid)
+        info.canEdit && info.living && (info.partials?.length || (info.paid && !info.zeroFinalized))
           ? el("button", {
             class: "secondary",
             type: "button",
@@ -5272,30 +5302,19 @@ function sheet() {
       ]),
     );
   } else if (draft.mode === "close-living") {
-    const method = "no Pix";
     const already = draft.already || 0;
-    const choices = already > 0
-      ? [
-        draft.described > 0 ? ["rest", `O restante · ${money(draft.described)}`] : null,
-        ["other", "Outro valor"],
-        ["none", "Sem acréscimo"],
-      ].filter(Boolean)
-      : [["registered", `O cadastrado · ${money(draft.planned)}`], ["other", "Outro valor"]];
+    const breakdown = [
+      draft.pix ? `Pix ${money(draft.pix)}` : "",
+      draft.credit ? `Crédito ${money(draft.credit)}` : "",
+    ].filter(Boolean).join(" · ");
     panel.append(
-      el("h2", {}, "Encerrar despesa"),
-      el("p", {}, `O pagamento ${method} encerra “${draft.name}” neste mês. Só então o valor sai da receita.`),
-      el("p", { class: "muted" }, onDesktop()
-        ? "Para lançar só uma parte e deixar a despesa aberta, feche esta tela, clique na despesa e escolha Pagamento parcial."
-        : "Para lançar só uma parte e deixar a despesa aberta, feche esta tela, toque na despesa e escolha Pagamento parcial."),
-      already > 0 ? el("p", {}, `Já pago: ${money(already)}. O sugerido é o que ainda falta do cadastrado.`) : "",
-      el("div", { class: "field" }, [
-        el("label", {}, already > 0 ? "Quanto entra neste pagamento?" : "O valor pago foi o cadastrado?"),
-        segmented("amountChoice", choices, draft.amountChoice),
-      ]),
-      draft.amountChoice === "other" ? field("Valor pago", "amount", draft.amount, "decimal") : "",
+      el("h2", {}, "Finalizar despesa"),
+      el("p", {}, `Ao finalizar “${draft.name}”, você indica que não será lançado mais nada nesta despesa neste mês.`),
+      el("p", {}, `Custo atual considerado para os cálculos: ${money(already)}${breakdown ? ` (${breakdown})` : " (nenhum lançamento neste mês)"} · previsto original ${money(draft.planned || 0)}.`),
+      el("p", { class: "muted" }, "Qualquer diferença prevista que ainda estava em aberto deixa de ser reservada nos pagamentos e no custo previsto do mês. Se precisar lançar algo antes, use Crédito ou À vista no topo."),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
-        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : "Encerrar despesa"),
+        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Finalizando..." : "Finalizar despesa"),
       ]),
     );
   } else if (draft.mode === "partial") {
@@ -5326,10 +5345,10 @@ function sheet() {
         ? ""
         : draft.payment === "card"
         ? "Se o valor for o previsto inteiro, a conta fica com a tarja Tá no cartão e o fundo verde. Um valor menor fica em aberto, com Em aberto e Parcial no cartão."
-        : "Encerrar só depois do lançamento. A tarja fica Pago, com o nome riscado e o fundo verde."),
+        : "Finalizar só depois do lançamento. A tarja fica Finalizada, com o custo atual consolidado e o fundo verde."),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
-        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : (draft.closeAfter === "close" ? "Lançar e encerrar" : "Lançar parcial")),
+        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : (draft.closeAfter === "close" ? "Lançar e finalizar" : "Lançar parcial")),
       ]),
     );
   } else if (draft.fromCard && draft.mode === "edit") {
@@ -5569,23 +5588,13 @@ async function saveSheet(event) {
   try {
     if (draft.mode === "passkey" || draft.mode === "undo-payments") return;
     if (draft.mode === "close-living") {
-      const noAddition = draft.amountChoice === "none";
-      const useRegistered = draft.amountChoice === "registered";
-      const amountCents = noAddition
-        ? 0
-        : useRegistered
-          ? draft.planned
-          : draft.amountChoice === "rest"
-            ? draft.described
-            : parseMoney(draft.amount || "");
-      if (!noAddition && (amountCents === null || amountCents <= 0)) throw new Error("Informe o valor pago. Exemplo: 75,90");
-      setWorking(true, "Encerrando...");
+      setWorking(true, "Finalizando...");
       state.data = await request(`/api/expenses/${draft.id}/settle`, {
         method: "POST",
-        body: { useRegistered, noAddition, amountCents },
+        body: { useRegistered: false, noAddition: true, amountCents: 0 },
       });
       rememberMonth(state.data);
-      state.notice = `“${draft.name}” encerrada neste mês.`;
+      state.notice = `“${draft.name}” finalizada com custo de ${money(draft.already || 0)} neste mês.`;
       state.sheet = null;
       return;
     }

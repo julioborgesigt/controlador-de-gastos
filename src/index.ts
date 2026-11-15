@@ -24,6 +24,7 @@ import {
   isVariableCost,
   livingCardChargeKind,
   noteWithChargeContext,
+  noteWithFinalizedZero,
   noteWithPlanned,
   planCardPurchase,
   noteWithSeries,
@@ -972,6 +973,9 @@ app.patch("/api/expenses/:id", async (c) => {
     if (!edited.ok) return c.json({ error: edited.error }, 400);
     return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
   }
+  const nextNote = parsed.value.section === "fixed" && !parsed.value.paid
+    ? (noteWithFinalizedZero(parsed.value.note, false) || null)
+    : parsed.value.note;
   await c.env.DB.prepare(
     `UPDATE expenses
      SET name = ?, section = ?, amount_cents = ?, payment = ?, on_card = ?, card_label = ?, paid = ?, note = ?, installment = ?
@@ -985,7 +989,7 @@ app.patch("/api/expenses/:id", async (c) => {
       parsed.value.onCard ? 1 : 0,
       parsed.value.cardLabel,
       parsed.value.paid ? 1 : 0,
-      parsed.value.note,
+      nextNote,
       parsed.value.installment,
       writer.scope.ownerId,
       current.id,
@@ -1176,8 +1180,10 @@ app.post("/api/expenses/:id/settle", async (c) => {
   const hasPartials = Number(partials?.n) > 0;
   const already = Number(partials?.total) || 0;
   if (body.noAddition === true) {
-    if (!hasPartials) return c.json({ error: "Informe o valor pago." }, 400);
-    await c.env.DB.prepare("UPDATE expenses SET paid = 1 WHERE owner_id = ? AND id = ?").bind(writer.scope.ownerId, expense.id).run();
+    const finalizedNote = hasPartials
+      ? (noteWithFinalizedZero(expense.note, false) || null)
+      : noteWithFinalizedZero(expense.note, true);
+    await c.env.DB.prepare("UPDATE expenses SET paid = 1, note = ? WHERE owner_id = ? AND id = ?").bind(finalizedNote, writer.scope.ownerId, expense.id).run();
     return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, expense.monthId), writer.scope));
   }
   const amountCents = body.useRegistered === true ? Math.max(0, expense.amountCents - already) : body.amountCents;

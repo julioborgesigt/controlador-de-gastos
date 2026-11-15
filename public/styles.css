@@ -407,11 +407,19 @@ button.metric { cursor: pointer; }
   top: 0;
   bottom: 0;
   display: flex;
+  visibility: hidden;
+  pointer-events: none;
 }
 
 .swipe-lead { left: 0; }
 
 .swipe-trail { right: 0; }
+
+.swipe.swipe-right .swipe-lead,
+.swipe.swipe-left .swipe-trail {
+  visibility: visible;
+  pointer-events: auto;
+}
 
 .swipe-act {
   width: 88px;
@@ -427,10 +435,10 @@ button.metric { cursor: pointer; }
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 84px;
+  width: 88px;
   font-size: 12px;
   line-height: 1.15;
-  padding: 0 4px;
+  padding: 0 6px;
   text-align: center;
 }
 
@@ -1702,6 +1710,8 @@ html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
     flex-direction: row;
     align-items: center;
     gap: 8px;
+    visibility: visible;
+    pointer-events: auto;
   }
 
   .swipe-act {
