@@ -251,6 +251,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .hero .money { font-size: 34px; margin: 2px 0 6px; line-height: 1.05; }
 
+.hero-sub { font-size: 13px; margin-top: 2px; }
+
 .negative { color: var(--bad); }
 
 .positive { color: var(--good); }
@@ -275,6 +277,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   justify-content: center;
   gap: 4px;
 }
+
+button.metric { cursor: pointer; }
 
 .metric.wide { grid-column: 1 / -1; min-height: 0; }
 

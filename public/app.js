@@ -16,12 +16,14 @@ import {
   isVariableNote,
   livingCrossMonthSummary,
   money,
+  monthFinancialSummary,
   nextMonthId,
   originIdFrom,
   parseMoney,
   partialIdFrom,
   passkeyWhen,
   paymentLabel,
+  previousMonthId,
   referenceMonthFrom,
   seriesIdFrom,
   shortMonthLabel,
@@ -219,11 +221,14 @@ async function preloadAround(data) {
     state.nextInvoicesFor = focus;
     state.nextInvoicesLoading = "";
   }
+  if (ids.length) renderSafely();
 }
 
 function rememberMonth(data) {
   state.nextInvoicesFor = "";
   state.nextInvoices = null;
+  state.purchasesMonthId = "";
+  state.purchases = null;
   storeMonth(data);
   try {
     sessionStorage.setItem("monthCache:v1", JSON.stringify({ data }));
@@ -1095,13 +1100,37 @@ function invoiceSummaryDetail(expenses, totals) {
   return `${parts.join(" · ")} (já incluídos nas categorias acima)${fromOther}`;
 }
 
-function pixSummaryDetail(totals, extras) {
+function pixSummaryDetail(payments, extras) {
   const parts = [];
-  if (totals.fixedCashCents > 0) parts.push(`${money(totals.fixedCashCents)} custo de vida`);
+  if (payments.livingPixTotalCents > 0) {
+    parts.push(payments.livingPixDueCents > 0
+      ? `${money(payments.livingPixTotalCents)} custo de vida (${money(payments.livingPixPaidCents)} pago · ${money(payments.livingPixDueCents)} previsto)`
+      : `${money(payments.livingPixTotalCents)} custo de vida`);
+  }
   if (extras.planned.pix > 0) parts.push(`${money(extras.planned.pix)} planejados`);
   if (extras.unexpected.pix > 0) parts.push(`${money(extras.unexpected.pix)} imprevistos`);
-  if (!parts.length) return "Nenhum pagamento no Pix registrado neste mês";
+  if (!parts.length) return "Nenhum pagamento ou previsão no Pix neste mês";
   return parts.join(" · ");
+}
+
+function launchesSummaryDetail(launches) {
+  const parts = [];
+  if (launches.livingLaunchedOtherCents > 0) parts.push(`${money(launches.livingLaunchedOtherCents)} custo de vida`);
+  if (launches.plannedLaunchedOtherCents > 0) parts.push(`${money(launches.plannedLaunchedOtherCents)} planejados`);
+  if (launches.unexpectedLaunchedOtherCents > 0) parts.push(`${money(launches.unexpectedLaunchedOtherCents)} imprevistos`);
+  const months = formatMonthList(launches.futureInvoiceMonths) || "próxima fatura";
+  if (launches.launchedFutureCents > 0 && launches.forecastNextInvoiceCents > 0) {
+    const prefix = parts.length ? `${parts.join(" · ")} · ` : "";
+    return `${prefix}vai p/ fatura de ${months} · +${money(launches.forecastNextInvoiceCents)} previstos no custo de vida (total ${money(launches.totalFutureInvoicesCents)})`;
+  }
+  if (launches.launchedFutureCents > 0) {
+    const prefix = parts.length ? `${parts.join(" · ")} · ` : "";
+    return `${prefix}serão pagos na fatura de ${months}`;
+  }
+  if (launches.forecastNextInvoiceCents > 0) {
+    return `${money(launches.forecastNextInvoiceCents)} previstos no custo de vida que entrarão na fatura de ${months}`;
+  }
+  return "Nenhum gasto deste mês lançado para a próxima ou próximas faturas";
 }
 
 function extraCategoryJump(filter, title, bucket, emptyCopy) {
@@ -1124,45 +1153,97 @@ function extraCategoryJump(filter, title, bucket, emptyCopy) {
 function summary(data) {
   const { month, totals } = data;
   const extras = extraSplit(data.expenses);
-  const pixPaidTotal = (totals.fixedCashCents || 0) + extras.pix;
+  const nextId = nextMonthId(month.id);
+  const prevId = previousMonthId(month.id);
+  const nextKnown = (data.months || []).some((item) => item.id === nextId);
+  if (nextKnown) ensureNextInvoices(month.id);
+  ensurePurchases(month.id);
+  const nextData = state.nextInvoicesFor === month.id ? state.nextInvoices : (monthStore.get(nextId) || null);
+  const prevData = monthStore.get(prevId) || null;
+  const purchases = state.purchasesMonthId === month.id ? state.purchases : null;
+  const fin = monthFinancialSummary(data, nextData, prevData, purchases);
+  const launchesDisplayCents = fin.launches.launchedFutureCents > 0
+    ? fin.launches.launchedFutureCents
+    : fin.launches.forecastNextInvoiceCents;
+
   return el("section", {}, [
     el("article", { class: "hero" }, [
       titleWithHelp(month.label, "Resumo mensal", [
-        "Para onde vai o seu dinheiro divide o mês em Custo de vida, Planejados e Imprevistos (independentemente de ser pago no Pix ou no cartão).",
-        "Como você está pagando mostra quanto desse mesmo total está na Fatura do cartão e quanto saiu no Pix.",
-        "Quando um gasto deste mês entra na fatura de outro mês (ou vice-versa), o mês da fatura fica destacado em cada categoria e dentro da fatura.",
+        "Pagamentos do mês: o que você efetivamente vai precisar pagar durante este mês — soma a fatura do cartão que vence neste mês e as contas previstas ou pagas no Pix.",
+        "Valores lançados p/ próximas faturas: gastos feitos neste mês no cartão que só serão pagos na próxima ou nas próximas faturas.",
+        "Despesa prevista (mês atual e próximo mês): mostra lado a lado a despesa prevista deste mês e a do próximo mês (já somando a próxima fatura e os gastos previstos para ela).",
       ]),
-      el("p", { class: "muted" }, "Falta pagar"),
-      el("p", { class: "money" }, money(totals.remainingCents)),
-      el("p", { class: "muted" }, `Total do mês ${money(totals.forecastExpenseCents)} · já pago ${money(totals.paidCents)}`),
+      el("p", { class: "muted" }, "Falta pagar neste mês (fatura + Pix)"),
+      el("p", { class: "money" }, money(fin.payments.remainingCents)),
+      el("p", { class: "muted" }, `Pagamentos do mês ${money(fin.payments.totalCents)} · já pago ${money(fin.payments.paidCents)}`),
+      el("p", { class: "muted hero-sub" }, `Fatura deste mês ${money(fin.payments.faturaCents)} · Pix do mês ${money(fin.payments.pixTotalCents)}`),
       month.settled ? el("p", { class: "badge paid" }, "Mês quitado") : "",
     ]),
+    el("p", { class: "eyebrow group" }, "Receita e despesa prevista (mês atual e próximo mês)"),
     el("div", { class: "grid" }, [
       el("button", { class: "metric wide", type: "button", onclick: () => { state.view = "receita"; render(); } }, [
         el("small", {}, "Receita mensal"),
         el("strong", {}, money(month.incomeCents)),
         month.extraIncomeCents ? el("small", {}, `inclui ${money(month.extraIncomeCents)} extras`) : "",
+        el("small", {}, `Saldo dos pagamentos do mês: ${money(fin.payments.cashBalanceCents)}`),
       ]),
       el("div", { class: "metric" }, [
-        el("small", {}, "Despesa prevista"),
-        el("strong", {}, money(totals.forecastExpenseCents)),
-        el("small", {}, "Despesa lançada"),
-        el("strong", {}, money(totals.partialExpenseCents)),
+        el("small", {}, `Despesa prevista · ${shortMonthLabel(month.id)}`),
+        el("strong", {}, money(fin.forecast.current.expenseCents)),
+        el("small", { class: "xray-sub" }, `Fatura ${money(fin.forecast.current.invoiceForecastCents)} · Pix ${money(fin.forecast.current.pixForecastCents)}`),
+        el("small", {}, `Saldo previsto · ${shortMonthLabel(month.id)}`),
+        el("strong", { class: fin.forecast.current.balanceCents < 0 ? "negative" : "positive" }, money(fin.forecast.current.balanceCents)),
       ]),
-      el("div", { class: "metric" }, [
-        el("small", {}, "Saldo previsto"),
-        el("strong", { class: totals.balanceCents < 0 ? "negative" : "positive" }, money(totals.balanceCents)),
-        el("small", {}, "Saldo parcial"),
-        el("strong", { class: totals.partialBalanceCents < 0 ? "negative" : "positive" }, money(totals.partialBalanceCents)),
-      ]),
+      nextKnown
+        ? el("button", {
+          class: "metric",
+          type: "button",
+          "aria-label": `Abrir ${monthName(nextId)}`,
+          onclick: () => pickMonth(nextId),
+        }, [
+          el("small", {}, `Despesa prevista · ${shortMonthLabel(nextId)}`),
+          el("strong", {}, fin.forecast.next.ready ? money(fin.forecast.next.expenseCents) : "…"),
+          el("small", { class: "xray-sub" }, fin.forecast.next.ready
+            ? `Fatura prev. ${money(fin.forecast.next.invoiceForecastCents)} · Pix ${money(fin.forecast.next.pixForecastCents)}`
+            : "Calculando próximo mês..."),
+          el("small", {}, `Saldo previsto · ${shortMonthLabel(nextId)}`),
+          el("strong", {
+            class: !fin.forecast.next.ready ? "" : fin.forecast.next.balanceCents < 0 ? "negative" : "positive",
+          }, fin.forecast.next.ready ? money(fin.forecast.next.balanceCents) : "…"),
+        ])
+        : el("div", { class: "metric" }, [
+          el("small", {}, `Próxima fatura · ${shortMonthLabel(nextId)}`),
+          el("strong", {}, money(fin.forecast.next.invoiceForecastCents)),
+          el("small", { class: "xray-sub" }, fin.forecast.next.invoiceForecastCents > 0
+            ? `Já previsto p/ ${shortMonthLabel(nextId)}`
+            : "Último mês do período"),
+        ]),
     ]),
-    el("p", { class: "eyebrow group" }, "Para onde vai o seu dinheiro"),
+    el("p", { class: "eyebrow group" }, "Pagamentos deste mês (o que você vai precisar no mês)"),
+    jump("cartoes", "Fatura do cartão deste mês", money(totals.faturaCents), invoiceSummaryDetail(data.expenses, totals)),
+    jump("avista", "Contas no Pix deste mês (pagas + previstas)", money(fin.payments.pixTotalCents), pixSummaryDetail(fin.payments, extras)),
+    el("p", { class: "eyebrow group" }, "Valores lançados neste mês (p/ próximas faturas)"),
+    el("button", {
+      class: "jump",
+      type: "button",
+      onclick: () => {
+        state.view = "cartoes";
+        state.cardFocus = "purchases";
+        render();
+      },
+    }, [
+      el("div", { class: "row-between" }, [
+        el("span", {}, fin.launches.launchedFutureCents === 0 && fin.launches.forecastNextInvoiceCents > 0
+          ? "Previstos p/ próxima fatura"
+          : "Lançados p/ próxima ou próximas faturas"),
+        el("strong", {}, money(launchesDisplayCents)),
+      ]),
+      el("small", {}, launchesSummaryDetail(fin.launches)),
+    ]),
+    el("p", { class: "eyebrow group" }, "Para onde vai o seu dinheiro (categorias do mês)"),
     livingJump(totals, data.expenses),
     extraCategoryJump("planejado", "Planejados", extras.planned, "Nenhuma compra ou conta planejada neste mês"),
     extraCategoryJump("imprevisto", "Imprevistos", extras.unexpected, "Nenhum gasto imprevisto neste mês"),
-    el("p", { class: "eyebrow group" }, "Como você está pagando"),
-    jump("cartoes", "Faturas do cartão", money(totals.faturaCents), invoiceSummaryDetail(data.expenses, totals)),
-    jump("avista", "Pagamentos à vista (Pix)", money(pixPaidTotal), pixSummaryDetail(totals, extras)),
     editable() && totals.launchedRemainingCents > 0
       ? el("button", { class: "primary", type: "button", onclick: () => askConfirm("settle") }, "Quitar o que falta")
       : editable() && month.settled
@@ -2104,7 +2185,18 @@ function purchaseGroups(items) {
 function purchaseDetail(data) {
   const payload = purchasesOf(data.month.id);
   const items = payload?.items || [];
-  const groups = purchaseGroups(items);
+  const nextId = nextMonthId(data.month.id);
+  const prevId = previousMonthId(data.month.id);
+  const nextData = state.nextInvoicesFor === data.month.id ? state.nextInvoices : (monthStore.get(nextId) || null);
+  const prevData = monthStore.get(prevId) || null;
+  const fin = monthFinancialSummary(data, nextData, prevData, payload);
+  const groups = purchaseGroups(items).sort((left, right) => {
+    const leftSame = left.invoiceMonthId === data.month.id ? 1 : 0;
+    const rightSame = right.invoiceMonthId === data.month.id ? 1 : 0;
+    if (leftSame !== rightSame) return leftSame - rightSame;
+    return left.invoiceMonthId.localeCompare(right.invoiceMonthId);
+  });
+  const futureMonthsLabel = formatMonthList(fin.launches.futureInvoiceMonths) || "próximas faturas";
   const children = [
     el("button", {
       class: "linkish back",
@@ -2116,10 +2208,34 @@ function purchaseDetail(data) {
     }, [backArrow(), "Faturas"]),
     el("div", { class: "section-head" }, [
       titleWithHelp("Lançamentos feitos", "Lançamentos do mês", [
-        "A lista usa a data da compra, não o vencimento.",
-        "Cada grupo é a fatura em que o gasto entrou, conforme o fechamento do cartão e o mês escolhido no cadastro.",
+        "Mostra os gastos deste mês no cartão, separando o que será pago na próxima ou nas próximas faturas do que entrou na fatura deste próprio mês.",
+        "Também destaca o custo de vida deste mês que ainda está previsto para entrar na próxima fatura.",
       ]),
-      el("h2", {}, payload ? money(payload.totalCents || 0) : "…"),
+      el("h2", {}, payload ? money(fin.launches.launchedFutureCents) : "…"),
+      el("p", { class: "muted" }, `Valores lançados em ${monthPhrase(data.month.id)} para pagar na próxima ou nas próximas faturas.`),
+      el("div", { class: "cost-split invoice-xray" }, [
+        el("div", { class: "xray-item wide" }, [
+          el("small", {}, "Lançados p/ próximas faturas"),
+          el("strong", {}, money(fin.launches.launchedFutureCents)),
+          fin.launches.launchedFutureCents > 0
+            ? el("small", { class: "xray-sub" }, `Vai ser pago na fatura de ${futureMonthsLabel}`)
+            : "",
+        ]),
+        el("div", { class: "xray-item" }, [
+          el("small", {}, "Previsto p/ próxima fatura"),
+          el("strong", {}, money(fin.launches.forecastNextInvoiceCents)),
+          fin.launches.forecastNextInvoiceCents > 0
+            ? el("small", { class: "xray-sub" }, "Custo de vida ainda não lançado")
+            : "",
+        ]),
+        el("div", { class: "xray-item" }, [
+          el("small", {}, "Na fatura deste mês"),
+          el("strong", {}, money(fin.launches.launchedOwnInvoiceCents)),
+          fin.launches.launchedOwnInvoiceCents > 0
+            ? el("small", { class: "xray-sub" }, `Fatura de ${shortMonthLabel(data.month.id)}`)
+            : "",
+        ]),
+      ]),
     ]),
   ];
   if (!payload) {
@@ -2127,12 +2243,14 @@ function purchaseDetail(data) {
     return el("section", {}, children);
   }
   if (payload.error) children.push(el("p", { class: "error" }, payload.error));
-  if (!groups.length) children.push(el("p", { class: "muted" }, "Nenhum gasto com data de compra neste mês."));
+  if (!groups.length && fin.launches.forecastNextInvoiceCents <= 0) {
+    children.push(el("p", { class: "muted" }, "Nenhum gasto deste mês lançado no cartão."));
+  }
   for (const group of groups) {
     const same = group.invoiceMonthId === data.month.id;
     children.push(el("p", { class: "eyebrow group" }, same
-      ? `Ainda na fatura de ${monthPhrase(group.invoiceMonthId)} · ${money(group.totalCents)}`
-      : `Fatura de ${monthPhrase(group.invoiceMonthId)} · ${money(group.totalCents)}`));
+      ? `Cobrado na fatura deste mês (${monthPhrase(group.invoiceMonthId)}) · ${money(group.totalCents)}`
+      : `Vai ser pago na fatura de ${monthPhrase(group.invoiceMonthId)} · ${money(group.totalCents)}`));
     children.push(el("div", { class: "list" }, group.rows.map((item) => el("article", { class: "item" }, [
       el("div", { class: "item-copy" }, [
         el("strong", {}, cardChargeTitle(item)),
@@ -2266,9 +2384,12 @@ function cardsHome(data) {
   const phrase = monthPhrase(data.month.id);
   const paidInvoices = monthInvoicesSettled(data);
   const nextId = nextMonthId(data.month.id);
+  const prevId = previousMonthId(data.month.id);
   const nextKnown = (data.months || []).some((month) => month.id === nextId);
   if (nextKnown) ensureNextInvoices(data.month.id);
-  const nextData = state.nextInvoicesFor === data.month.id ? state.nextInvoices : null;
+  const nextData = state.nextInvoicesFor === data.month.id ? state.nextInvoices : (monthStore.get(nextId) || null);
+  const prevData = monthStore.get(prevId) || null;
+  const fin = monthFinancialSummary(data, nextData, prevData, purchases);
   const invoiceRows = [];
   const xray = invoiceXray(data.expenses, data.totals.fixedOnCardCents);
   if (xray) invoiceRows.push(xray);
@@ -2283,6 +2404,12 @@ function cardsHome(data) {
       .reduce((sum, expense) => sum + expense.amountCents, 0);
     invoiceRows.push(cardJump("Sem cartão", amount, loose, () => openCard("unassigned")));
   }
+  const launchesSub = purchases?.error
+    || (fin.launches.launchedFutureCents > 0 || fin.launches.forecastNextInvoiceCents > 0
+      ? `${money(fin.launches.launchedFutureCents)} lançados p/ ${formatMonthList(fin.launches.futureInvoiceMonths) || "próximas faturas"}${fin.launches.forecastNextInvoiceCents > 0 ? ` · +${money(fin.launches.forecastNextInvoiceCents)} previstos` : ""}${fin.launches.launchedOwnInvoiceCents > 0 ? ` · ${money(fin.launches.launchedOwnInvoiceCents)} nesta fatura` : ""}`
+      : fin.launches.launchedOwnInvoiceCents > 0
+        ? `${money(fin.launches.launchedOwnInvoiceCents)} lançados na própria fatura deste mês`
+        : "Valores lançados neste mês para pagar nas próximas faturas.");
   const children = [
     el("button", {
       class: "jump",
@@ -2293,10 +2420,10 @@ function cardsHome(data) {
       },
     }, [
       el("div", { class: "row-between" }, [
-        el("span", {}, `Ver lançamentos feitos em ${phrase}`),
-        el("strong", {}, purchases ? money(purchases.totalCents || 0) : "…"),
+        el("span", {}, `Lançamentos feitos em ${phrase}`),
+        el("strong", {}, purchases ? money(fin.launches.launchedFutureCents || fin.launches.totalLaunchedCents || 0) : "…"),
       ]),
-      el("small", {}, purchases?.error || "Total já gasto neste mês."),
+      el("small", {}, launchesSub),
     ]),
     editable() ? el("div", { class: "stack-actions" }, [
       el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto no crédito"),
@@ -2311,7 +2438,7 @@ function cardsHome(data) {
           ? "Clique num cartão para ver a fatura. Os botões editam ou quitam o cartão. Excluir só quando ele não tiver gastos."
           : "Toque num cartão para ver a fatura. Dá para editar o cartão. Excluir só quando ele não tiver gastos.",
         "O raio-X acima mostra quanto da fatura veio do Custo de vida, de Planejados e de Imprevistos.",
-        "Ver lançamentos feitos no mês soma as compras pela data da compra, inclusive as que caíram na fatura seguinte.",
+        "Lançamentos feitos no mês mostra os valores que serão pagos na próxima ou nas próximas faturas.",
         data.totals.fixedOnCardCents
           ? `${money(data.totals.fixedOnCardCents)} de custo de vida já foram lançados no cartão e não somam de novo.`
           : "A fatura reúne as cobranças com vencimento neste mês.",
@@ -2329,10 +2456,12 @@ function cardsHome(data) {
       return [{ card, balance, amount: cardInvoiceCents(nextExpenses, card.name), list }];
     });
     const openTotal = openCards.reduce((sum, item) => sum + item.balance, 0);
+    const pendingFromCurrent = fin.launches.forecastNextInvoiceCents;
+    const projectedNextInvoiceTotal = openTotal + pendingFromCurrent;
     const nextRows = [];
     if (!nextData) nextRows.push(el("p", { class: "muted" }, "Carregando a projeção..."));
     else if (nextData.error) nextRows.push(el("p", { class: "error" }, nextData.error));
-    else if (!openCards.length) nextRows.push(el("p", { class: "muted" }, `Nenhuma fatura em aberto para ${nextPhrase}.`));
+    else if (!openCards.length && pendingFromCurrent <= 0) nextRows.push(el("p", { class: "muted" }, `Nenhuma fatura em aberto para ${nextPhrase}.`));
     else {
       for (const item of openCards) {
         nextRows.push(el("button", {
@@ -2344,14 +2473,30 @@ function cardsHome(data) {
             el("span", {}, item.card.name),
             el("strong", {}, money(item.balance)),
           ]),
-          el("small", {}, `Projeção em aberto · fatura ${money(item.amount)}`),
+          el("small", {}, `Já lançado na fatura · total ${money(item.amount)}`),
+        ]));
+      }
+      if (pendingFromCurrent > 0) {
+        nextRows.push(el("button", {
+          class: "jump",
+          type: "button",
+          onclick: () => {
+            state.view = "casa";
+            render();
+          },
+        }, [
+          el("div", { class: "row-between" }, [
+            el("span", {}, `Custo de vida previsto p/ ${nextPhrase}`),
+            el("strong", {}, money(pendingFromCurrent)),
+          ]),
+          el("small", {}, `Ainda previsto em ${phrase} · entrará na fatura de ${nextPhrase}`),
         ]));
       }
     }
     children.push(invoiceFold(
       `open:${nextId}`,
-      `Faturas em aberto para ${nextPhrase}`,
-      nextData ? money(openTotal) : "…",
+      `Faturas previstas para ${nextPhrase}`,
+      nextData ? money(projectedNextInvoiceTotal) : "…",
       null,
       nextRows,
     ));
@@ -3513,13 +3658,16 @@ function costSplit(totals) {
   const cardDueSub = cross.dueCardOtherCents > 0
     ? `inclui ${money(cross.dueCardOtherCents)} p/ fatura de ${formatMonthList(cross.dueOtherMonths)}`
     : "";
+  const pixDueSub = totals.fixedPixForecastCents > 0
+    ? "entra nos pagamentos deste mês"
+    : "";
   return el("div", { class: "cost-split" }, [
     costCard("previsto", "Previsto", totals.fixedForecastCents, true),
-    costCard("pago", "Já pago no mês", paidMonth, true),
-    costCard("cartao", "Pago no cartão", totals.fixedOnCardCents, false, cardPaidSub),
+    costCard("pago", "Já pago / lançado", paidMonth, true),
+    costCard("cartao", "Lançado no cartão", totals.fixedOnCardCents, false, cardPaidSub),
     costCard("pix", "Pago no Pix", totals.fixedPixPaidCents),
     costCard("falta-cartao", "Falta no cartão", totals.fixedCardDueCents || 0, false, cardDueSub),
-    costCard("falta-pix", "Falta no Pix", totals.fixedPixForecastCents),
+    costCard("falta-pix", "Falta no Pix", totals.fixedPixForecastCents, false, pixDueSub),
   ]);
 }
 

@@ -542,18 +542,22 @@ export async function listCardPurchasesInMonth(db: D1Database, ownerId: string, 
   const result = await db
     .prepare(
       `SELECT * FROM expenses
-       WHERE owner_id = ? AND note LIKE ?
+       WHERE owner_id = ? AND (note LIKE ? OR note LIKE ?)
          AND (section = 'card' OR (section = 'extra' AND payment = 'card'))
        ORDER BY month_id, name`,
     )
-    .bind(ownerId, `%compra:${monthId}-%`)
+    .bind(ownerId, `%compra:${monthId}-%`, `%ref:${monthId}%`)
     .all<ExpenseRow>();
   return (result.results ?? [])
     .map(mapExpense)
     .filter((expense) => {
       const note = String(expense.note || "");
       if (note.includes("parcelamento:") || note.includes("quitado-cartao:")) return false;
-      return note.split("\n").some((line) => line.trim().startsWith(`compra:${monthId}-`));
+      const invoiceMonth = chargedInvoiceMonth(note);
+      if (expense.section === "extra" && invoiceMonth && invoiceMonth !== expense.monthId) return false;
+      const purchaseMonth = purchaseMonthFromNote(note);
+      if (purchaseMonth) return purchaseMonth === monthId;
+      return note.split("\n").some((line) => line.trim() === `ref:${monthId}`);
     });
 }
 

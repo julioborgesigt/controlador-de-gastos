@@ -40,9 +40,10 @@ export function livingCrossMonthSummary(expenses: ReadonlyArray<{
   monthId?: string | null;
   amountCents: number;
   paid?: boolean;
+  onCard?: boolean;
   note?: string | null;
   charges?: ReadonlyArray<{ monthId: string; amountCents: number }>;
-  partials?: ReadonlyArray<{ amountCents: number }>;
+  partials?: ReadonlyArray<{ amountCents: number; payment?: string }>;
 }>): {
   paidCardOwnCents: number;
   paidCardOtherCents: number;
@@ -98,4 +99,86 @@ export function invoiceBreakdown(expenses: ReadonlyArray<{
   plannedFromOtherCents: number;
   unexpectedFromOtherCents: number;
   originMonths: string[];
+};
+export function previousMonthId(monthId: string | null | undefined): string;
+export interface MonthDataInput {
+  month?: { id?: string; incomeCents?: number } | null;
+  totals?: {
+    faturaCents?: number;
+    fixedCashCents?: number;
+    fixedPixForecastCents?: number;
+    extrasPixCents?: number;
+    paidCents?: number;
+    fixedAllSettled?: boolean;
+    fixedLaunchedCents?: number;
+    fixedForecastCents?: number;
+  } | null;
+  expenses?: ReadonlyArray<{
+    section?: string;
+    payment?: string;
+    monthId?: string | null;
+    amountCents: number;
+    paid?: boolean;
+    onCard?: boolean;
+    note?: string | null;
+    charges?: ReadonlyArray<{ monthId: string; amountCents: number }>;
+    partials?: ReadonlyArray<{ amountCents: number; payment?: string }>;
+  }> | null;
+  error?: string | null;
+}
+export function monthFinancialSummary(
+  data: MonthDataInput | null | undefined,
+  nextData?: MonthDataInput | null,
+  prevData?: MonthDataInput | null,
+  purchasesPayload?: { items?: ReadonlyArray<{ amountCents?: number; invoiceMonthId?: string }> } | null,
+): {
+  payments: {
+    faturaCents: number;
+    livingPixPaidCents: number;
+    livingPixDueCents: number;
+    livingPixTotalCents: number;
+    extrasPixCents: number;
+    pixPaidCents: number;
+    pixTotalCents: number;
+    totalCents: number;
+    paidCents: number;
+    remainingCents: number;
+    cashBalanceCents: number;
+  };
+  launches: {
+    launchedFutureCents: number;
+    forecastNextInvoiceCents: number;
+    totalFutureInvoicesCents: number;
+    launchedOwnInvoiceCents: number;
+    totalLaunchedCents: number;
+    futureInvoiceMonths: string[];
+    livingLaunchedOtherCents: number;
+    plannedLaunchedOtherCents: number;
+    unexpectedLaunchedOtherCents: number;
+  };
+  forecast: {
+    current: {
+      monthId: string;
+      invoiceForecastCents: number;
+      pixForecastCents: number;
+      pendingOwnCardCents: number;
+      pendingFromPrevCents: number;
+      expenseCents: number;
+      incomeCents: number;
+      balanceCents: number;
+      categoryBudgetCents: number;
+    };
+    next: {
+      monthId: string;
+      ready: boolean;
+      invoiceLaunchedCents: number;
+      invoicePendingFromCurrentCents: number;
+      invoicePendingOwnCents: number;
+      invoiceForecastCents: number;
+      pixForecastCents: number;
+      expenseCents: number;
+      incomeCents: number;
+      balanceCents: number;
+    };
+  };
 };
