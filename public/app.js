@@ -3979,38 +3979,32 @@ function managedMonthSelect(draft, key, label) {
 
 function livingPay(draft) {
   const payment = draft.payment === "card" ? "card" : "pix";
-  const editing = draft.mode === "edit";
+  const costKind = draft.costKind === "variavel" ? "variavel" : "fixo";
   return el("div", {}, [
     el("div", { class: "field" }, [
-      el("label", {}, editing ? "Como fica o pagamento" : "Como pretende pagar"),
+      el("label", {}, "Como pretende pagar"),
       segmented("payment", [["pix", "Pix"], ["card", "Crédito"]], payment),
     ]),
     payment === "card" ? cardSelect(draft) : "",
-    !editing && payment === "card"
+    payment === "card"
       ? el("div", { class: "field" }, [
         el("label", {}, "Tipo do custo"),
-        segmented("costKind", [["fixo", "Fixo"], ["variavel", "Variável"]], draft.costKind === "variavel" ? "variavel" : "fixo"),
+        segmented("costKind", [["fixo", "Fixo"], ["variavel", "Variável"]], costKind),
       ])
       : "",
-    payment === "card" && (!editing || !draft.wasOnCard)
+    payment === "card"
       ? el("div", { class: "field" }, [
         el("label", {}, "Os gastos entram na fatura"),
         segmented("invoiceTiming", [["mes", "Deste mês"], ["seguinte", "Do mês seguinte"]], draft.invoiceTiming === "seguinte" ? "seguinte" : "mes"),
       ])
       : "",
-    el("p", { class: "muted" }, editing
-      ? (payment === "card"
-        ? (draft.invoiceTiming === "seguinte"
-          ? "O valor fica previsto neste mês e será cobrado na fatura do mês seguinte."
-          : "Pix tira este mês da fatura. Crédito mantém previsto para a fatura deste mês.")
-        : "Trocar para crédito permite indicar se entra na fatura deste mês ou do mês seguinte.")
-      : payment === "card" && draft.invoiceTiming === "seguinte"
-        ? "O valor fica previsto neste mês e entra em falta no cartão (previsto para a fatura do mês seguinte)."
-        : payment === "card" && draft.costKind === "variavel"
-        ? "O valor fica previsto. O que faltar entra em falta no cartão. O pagamento é feito em Cartões de crédito."
-        : payment === "card"
-        ? "O valor fica previsto e entra em falta no cartão. Nada vai para a fatura agora. O pagamento é feito em Cartões de crédito."
-        : "O valor fica previsto e entra em falta no Pix. O pagamento é feito em À vista."),
+    el("p", { class: "muted" }, payment === "card" && draft.invoiceTiming === "seguinte"
+      ? "O valor fica previsto neste mês e entra em falta no cartão (previsto para a fatura do mês seguinte)."
+      : payment === "card" && costKind === "variavel"
+      ? "O valor fica previsto. O que faltar entra em falta no cartão. O pagamento é feito em Cartões de crédito."
+      : payment === "card"
+      ? "O valor fica previsto e entra em falta no cartão. Nada vai para a fatura agora. O pagamento é feito em Cartões de crédito."
+      : "O valor fica previsto e entra em falta no Pix. O pagamento é feito em À vista."),
   ]);
 }
 
@@ -4780,6 +4774,7 @@ function openEdit(expense, options = {}) {
     note: visibleNote(expense.note),
     seriesId: seriesIdFrom(expense.note),
     variable: isVariableNote(expense.note),
+    costKind: isVariableNote(expense.note) ? "variavel" : "fixo",
     invoiceTiming: invoiceShift(expense.note),
     fromCard: Boolean(options.fromCard),
     expenseKind: options.fromCard ? cardTrack(expense) : (isPlannedNote(expense.note) ? "planejado" : "imprevisto"),
@@ -5535,6 +5530,7 @@ function segmented(key, options, current) {
         if (value === "casa" && !state.sheet.costMonthId) state.sheet.costMonthId = state.monthId;
       }
       if (key === "span") state.sheet.spanChosen = true;
+      if (key === "costKind") state.sheet.variable = value === "variavel";
       if ((key === "payment" || key === "costKind") && state.sheet.section === "fixed" && state.sheet.mode === "create" && !state.sheet.spanChosen) {
         const payment = key === "payment" ? value : state.sheet.payment;
         const kind = key === "costKind" ? value : state.sheet.costKind;
@@ -6020,6 +6016,9 @@ async function saveSheet(event) {
       if (dueCard && !acceptPastDue(pastDueWarning(dueCard, dueMonth))) return;
       setWorking(true, "Salvando...");
       const nextInvoiceFlag = draft.section === "fixed" && draft.payment === "card" && draft.invoiceTiming === "seguinte";
+      const isVariable = draft.section === "fixed"
+        ? (draft.payment === "card" && draft.costKind === "variavel")
+        : Boolean(draft.variable);
       const body = {
         name: draft.name,
         amountCents,
@@ -6027,7 +6026,7 @@ async function saveSheet(event) {
         payment: (draft.section === "fixed" && draft.onCard) || livingOnCard || wantsCard ? "card" : draft.payment,
         onCard: draft.section === "fixed" && draft.onCard && !relaunch,
         cardLabel: draft.cardLabel,
-        note: composeNote(draft.originId, draft.note, draft.partialId, draft.seriesId, draft.variable || draft.costKind === "variavel", draft.section === "extra" && draft.expenseKind === "planejado", nextInvoiceFlag),
+        note: composeNote(draft.originId, draft.note, draft.partialId, draft.seriesId, isVariable, draft.section === "extra" && draft.expenseKind === "planejado", nextInvoiceFlag),
         installment: onCardPurchase ? null : draft.installment,
         paid: draft.paid,
         installmentPlan: onCardPurchase ? { totalCount, paidCount, amountMode: draft.amountMode || "installment" } : undefined,
