@@ -6089,13 +6089,14 @@ async function saveSheet(event) {
           ? "Alterei todos os registros."
           : "Alterei este mês e os seguintes.";
       } else if (editingLiving) {
+        const keepOnCard = draft.wasOnCard && draft.payment === "card" && draft.costKind !== "variavel" && !nextInvoiceFlag;
         state.data = await request(`/api/expenses/${draft.id}`, {
           method: "PATCH",
           body: {
             ...body,
-            payment: draft.wasOnCard ? "card" : draft.payment,
-            onCard: draft.wasOnCard,
-            paid: draft.paid,
+            payment: draft.payment,
+            onCard: keepOnCard,
+            paid: keepOnCard ? draft.paid : (draft.wasOnCard ? false : draft.paid),
           },
         });
         state.notice = "Atualizei o previsto. O pagamento continua em Cartões de crédito ou À vista.";
