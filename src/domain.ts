@@ -469,6 +469,12 @@ export function noteWithVariable(note: string | null | undefined, variable: bool
   return ["tipo:variavel", ...lines].join("\n");
 }
 
+export function noteWithInvoiceShift(note: string | null | undefined, shift: "mes" | "seguinte"): string {
+  const lines = String(note || "").split("\n").map((line) => line.trim()).filter((line) => line && line !== "fatura:seguinte");
+  if (shift !== "seguinte") return lines.join("\n");
+  return ["fatura:seguinte", ...lines].join("\n");
+}
+
 export function visibleExpenseNote(note: string | null | undefined): string {
   return String(note || "")
     .split("\n")

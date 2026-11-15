@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, PartialPayment, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, chargedInvoiceMonth, coercePayment, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, isPlannedCost, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteForTrack, noteWithChargeContext, noteWithFinalizedZero, noteWithOrigin, noteWithSeries, noteWithVisibleText, isVariableCost, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, purchaseMonthFromNote, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope, type ExpenseTrack } from "./domain.ts";
+import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, chargedInvoiceMonth, coercePayment, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, invoiceShiftFromNote, isPlannedCost, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteForTrack, noteWithChargeContext, noteWithFinalizedZero, noteWithInvoiceShift, noteWithOrigin, noteWithSeries, noteWithVariable, noteWithVisibleText, isVariableCost, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, purchaseMonthFromNote, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope, type ExpenseTrack } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -692,10 +692,15 @@ export async function applySeriesEdit(
   const targets = editTargets(pool, current.id, input.scope);
   if (!targets.length) return { ok: false, error: "Gasto não encontrado." };
   const visible = visibleExpenseNote(input.note);
+  const variable = current.section === "fixed" && input.payment === "card" && isVariableCost(input.note);
+  const shift = current.section === "fixed" && input.payment === "card" ? invoiceShiftFromNote(input.note) : "mes";
   const cardLines = await listSectionExpenses(db, input.ownerId, "card");
   const statements: D1PreparedStatement[] = [];
   for (const row of targets) {
-    const note = noteWithVisibleText(row.note, visible);
+    let note = noteWithVisibleText(row.note, visible);
+    if (current.section === "fixed") {
+      note = noteWithInvoiceShift(noteWithVariable(note, variable), shift);
+    }
     if (current.section === "card") {
       statements.push(
         db.prepare(
