@@ -66,6 +66,7 @@ export function extrasBreakdown(expenses: ReadonlyArray<{
     cardOwnInvoice: number;
     cardOtherInvoice: number;
     otherInvoiceMonths: string[];
+    inMonth: number;
     total: number;
   };
   unexpected: {
@@ -74,6 +75,7 @@ export function extrasBreakdown(expenses: ReadonlyArray<{
     cardOwnInvoice: number;
     cardOtherInvoice: number;
     otherInvoiceMonths: string[];
+    inMonth: number;
     total: number;
   };
   pix: number;
@@ -81,6 +83,7 @@ export function extrasBreakdown(expenses: ReadonlyArray<{
   cardOwnInvoice: number;
   cardOtherInvoice: number;
   otherInvoiceMonths: string[];
+  inMonth: number;
   total: number;
 };
 export function invoiceBreakdown(expenses: ReadonlyArray<{

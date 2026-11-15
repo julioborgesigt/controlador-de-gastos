@@ -227,8 +227,8 @@ export function livingCrossMonthSummary(expenses) {
 }
 
 export function extrasBreakdown(expenses) {
-  const planned = { pix: 0, card: 0, cardOwnInvoice: 0, cardOtherInvoice: 0, otherInvoiceMonths: [], total: 0 };
-  const unexpected = { pix: 0, card: 0, cardOwnInvoice: 0, cardOtherInvoice: 0, otherInvoiceMonths: [], total: 0 };
+  const planned = { pix: 0, card: 0, cardOwnInvoice: 0, cardOtherInvoice: 0, otherInvoiceMonths: [], inMonth: 0, total: 0 };
+  const unexpected = { pix: 0, card: 0, cardOwnInvoice: 0, cardOtherInvoice: 0, otherInvoiceMonths: [], inMonth: 0, total: 0 };
   const plannedMonths = new Set();
   const unexpectedMonths = new Set();
   for (const expense of expenses || []) {
@@ -250,6 +250,8 @@ export function extrasBreakdown(expenses) {
     }
     bucket.total += expense.amountCents;
   }
+  planned.inMonth = planned.pix + planned.cardOwnInvoice;
+  unexpected.inMonth = unexpected.pix + unexpected.cardOwnInvoice;
   planned.otherInvoiceMonths = [...plannedMonths].sort();
   unexpected.otherInvoiceMonths = [...unexpectedMonths].sort();
   const allOtherMonths = new Set([...planned.otherInvoiceMonths, ...unexpected.otherInvoiceMonths]);
@@ -261,6 +263,7 @@ export function extrasBreakdown(expenses) {
     cardOwnInvoice: planned.cardOwnInvoice + unexpected.cardOwnInvoice,
     cardOtherInvoice: planned.cardOtherInvoice + unexpected.cardOtherInvoice,
     otherInvoiceMonths: [...allOtherMonths].sort(),
+    inMonth: planned.inMonth + unexpected.inMonth,
     total: planned.total + unexpected.total,
   };
 }

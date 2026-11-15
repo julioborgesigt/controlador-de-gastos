@@ -93,17 +93,20 @@ test("extrasBreakdown e invoiceBreakdown separam Custo de vida, Planejados, Impr
   assert.equal(extras.planned.cardOwnInvoice, 25000);
   assert.equal(extras.planned.cardOtherInvoice, 18000);
   assert.deepEqual(extras.planned.otherInvoiceMonths, ["2026-12"]);
+  assert.equal(extras.planned.inMonth, 40000);
   assert.equal(extras.unexpected.total, 29000);
   assert.equal(extras.unexpected.pix, 8000);
   assert.equal(extras.unexpected.card, 21000);
   assert.equal(extras.unexpected.cardOwnInvoice, 12000);
   assert.equal(extras.unexpected.cardOtherInvoice, 9000);
   assert.deepEqual(extras.unexpected.otherInvoiceMonths, ["2026-12"]);
+  assert.equal(extras.unexpected.inMonth, 20000);
   assert.equal(extras.pix, 23000);
   assert.equal(extras.card, 64000);
   assert.equal(extras.cardOwnInvoice, 37000);
   assert.equal(extras.cardOtherInvoice, 27000);
   assert.deepEqual(extras.otherInvoiceMonths, ["2026-12"]);
+  assert.equal(extras.inMonth, 60000);
   assert.equal(extras.total, 87000);
 
   const invoice = invoiceBreakdown(expenses);

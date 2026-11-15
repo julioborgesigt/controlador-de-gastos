@@ -123,7 +123,7 @@ const TAB_INFO = {
   extras: {
     title: "Outros gastos",
     role: "Agrupa os gastos Planejados e Imprevistos vinculados ao orçamento do mês.",
-    display: "Exibe um demonstrativo por categoria (Planejados e Imprevistos), diferenciando o que foi pago no Pix e o que entrou no cartão (inclusive em faturas futuras, sem somar duas vezes).",
+    display: "Destaca os gastos que entram no mês em visualização (Pix e fatura do mês) e mostra o total lançado de forma acessória (incluindo o que foi para faturas futuras).",
     launches: "Permite lançamentos: cadastre ou edite gastos Planejados e Imprevistos no Pix ou no crédito.",
   },
   receita: {
@@ -3174,8 +3174,9 @@ function firstCardName() {
   return state.data?.cards?.[0]?.name || "";
 }
 
-function extraSplitCards(extras) {
+function extraSplitCards(extras, monthId) {
   const active = state.extraFilter || "all";
+  const monthLabel = shortMonthLabel(monthId);
   return el("div", { class: "cost-split" }, [
     el("button", {
       type: "button",
@@ -3185,9 +3186,10 @@ function extraSplitCards(extras) {
         render();
       },
     }, [
-      el("small", {}, "Total (Planejados + Imprevistos)"),
-      el("strong", {}, money(extras.total)),
-      el("small", {}, cardSplitText(extras.pix, extras.cardOwnInvoice, extras.cardOtherInvoice, extras.otherInvoiceMonths)),
+      el("small", {}, `Gastos em ${monthLabel}`),
+      el("strong", {}, money(extras.inMonth)),
+      el("small", {}, `${money(extras.pix)} no Pix · ${money(extras.cardOwnInvoice)} na fatura do mês`),
+      el("small", { class: "cost-aux" }, `Total lançado: ${money(extras.total)}`),
     ]),
     el("button", {
       type: "button",
@@ -3198,8 +3200,9 @@ function extraSplitCards(extras) {
       },
     }, [
       el("small", {}, "Planejados"),
-      el("strong", {}, money(extras.planned.total)),
-      el("small", {}, cardSplitText(extras.planned.pix, extras.planned.cardOwnInvoice, extras.planned.cardOtherInvoice, extras.planned.otherInvoiceMonths, "Pix", "cartão")),
+      el("strong", {}, money(extras.planned.inMonth)),
+      el("small", {}, `${money(extras.planned.pix)} Pix · ${money(extras.planned.cardOwnInvoice)} cartão`),
+      el("small", { class: "cost-aux" }, `Total: ${money(extras.planned.total)}`),
     ]),
     el("button", {
       type: "button",
@@ -3210,8 +3213,9 @@ function extraSplitCards(extras) {
       },
     }, [
       el("small", {}, "Imprevistos"),
-      el("strong", {}, money(extras.unexpected.total)),
-      el("small", {}, cardSplitText(extras.unexpected.pix, extras.unexpected.cardOwnInvoice, extras.unexpected.cardOtherInvoice, extras.unexpected.otherInvoiceMonths, "Pix", "cartão")),
+      el("strong", {}, money(extras.unexpected.inMonth)),
+      el("small", {}, `${money(extras.unexpected.pix)} Pix · ${money(extras.unexpected.cardOwnInvoice)} cartão`),
+      el("small", { class: "cost-aux" }, `Total: ${money(extras.unexpected.total)}`),
     ]),
   ]);
 }
@@ -3226,7 +3230,7 @@ function sectionList(data, section) {
     ? totals.faturaCents
     : section === "fixed"
       ? (totals.fixedAllSettled ? totals.fixedLaunchedCents : (totals.fixedCents ?? totals.fixedForecastCents))
-      : extras.total;
+      : extras.inMonth;
   const children = [
     el("div", { class: "section-head" }, [
       section === "fixed"
@@ -3237,14 +3241,14 @@ function sectionList(data, section) {
         ])
         : section === "extra"
           ? titleWithHelp("Planejados e imprevistos", "Planejados e imprevistos", [
-            "Separa o que foi compra ou conta planejada do que foi gasto imprevisto neste mês.",
+            "Destaca os gastos que entram no mês em visualização (Pix e fatura do mês) e exibe de forma acessória o total lançado.",
             "Toque nos cartões abaixo para filtrar só Planejados ou só Imprevistos, ou lance um novo gasto no cartão ou no Pix.",
           ])
           : el("p", { class: "eyebrow" }, data.month.label),
       section === "fixed" || section === "extra" ? el("p", { class: "muted" }, data.month.label) : "",
       section === "fixed" || section === "extra" ? "" : el("h2", {}, money(total)),
       section === "fixed" ? costSplit(totals) : "",
-      section === "extra" ? extraSplitCards(extras) : "",
+      section === "extra" ? extraSplitCards(extras, data.month.id) : "",
     ]),
   ];
   if (editable() && section === "fixed") {
@@ -3274,14 +3278,17 @@ function sectionList(data, section) {
     const plannedRows = visible.filter((expense) => isPlannedNote(expense.note));
     const unexpectedRows = visible.filter((expense) => !isPlannedNote(expense.note));
     const groups = [
-      active !== "imprevisto" ? ["Planejados", plannedRows, extras.planned.total] : null,
-      active !== "planejado" ? ["Imprevistos", unexpectedRows, extras.unexpected.total] : null,
+      active !== "imprevisto" ? ["Planejados", plannedRows, extras.planned.inMonth, extras.planned.total] : null,
+      active !== "planejado" ? ["Imprevistos", unexpectedRows, extras.unexpected.inMonth, extras.unexpected.total] : null,
     ].filter(Boolean);
     let shownAny = false;
-    for (const [title, rows, groupTotal] of groups) {
+    for (const [title, rows, groupMonth, groupTotal] of groups) {
       if (!rows.length) continue;
       shownAny = true;
-      children.push(el("p", { class: "eyebrow group" }, `${title} · ${money(groupTotal)}`));
+      const groupLabel = groupTotal !== groupMonth
+        ? `${title} · ${money(groupMonth)} no mês (total ${money(groupTotal)})`
+        : `${title} · ${money(groupMonth)}`;
+      children.push(el("p", { class: "eyebrow group" }, groupLabel));
       children.push(el("div", { class: "list" }, rows.map((expense) => expenseRow(expense, section))));
     }
     if (!shownAny) {

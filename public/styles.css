@@ -686,6 +686,13 @@ button.metric { cursor: pointer; }
   font-weight: 600;
 }
 
+.cost-split .cost-aux {
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  opacity: 0.85;
+}
+
 .cost-split strong {
   display: block;
   margin-top: 4px;
