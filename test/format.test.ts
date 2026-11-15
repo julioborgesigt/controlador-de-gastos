@@ -109,6 +109,12 @@ test("extrasBreakdown e invoiceBreakdown separam Custo de vida, Planejados, Impr
   assert.equal(extras.inMonth, 60000);
   assert.equal(extras.total, 87000);
 
+  const extrasWithCard = extrasBreakdown(expenses, { includeCardExtras: true });
+  assert.equal(extrasWithCard.planned.inMonth, 50000);
+  assert.equal(extrasWithCard.planned.total, 68000);
+  assert.equal(extrasWithCard.inMonth, 70000);
+  assert.equal(extrasWithCard.total, 97000);
+
   const invoice = invoiceBreakdown(expenses);
   assert.equal(invoice.livingCents, 30000);
   assert.equal(invoice.plannedCents, 35000);
