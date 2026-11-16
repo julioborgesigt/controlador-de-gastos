@@ -254,6 +254,55 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
 
 .hero-sub { font-size: 13px; margin-top: 2px; }
 
+.summary-hero .hero-kicker {
+  margin: 6px 0 2px;
+  font-size: 13px;
+}
+
+.hero-bar {
+  height: 6px;
+  border-radius: 99px;
+  background: var(--line);
+  overflow: hidden;
+  margin: 10px 0 12px;
+}
+
+.hero-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 99px;
+  background: var(--good);
+  transition: width 180ms ease;
+}
+
+.hero-stats {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.hero-stat {
+  background: #f6f7fa;
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+
+.hero-stat small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.hero-stat strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
 .negative { color: var(--bad); }
 
 .positive { color: var(--good); }
@@ -284,6 +333,44 @@ button.metric { cursor: pointer; }
 .metric.wide { grid-column: 1 / -1; min-height: 0; }
 
 .metric strong, .jump strong { font-size: 18px; font-variant-numeric: tabular-nums; }
+
+.metric-income > .row-between {
+  width: 100%;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.metric-end {
+  text-align: right;
+}
+
+.metric-note {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  width: 100%;
+}
+
+.metric-forecast {
+  display: flex;
+  justify-content: space-between;
+}
+
+.metric-lines {
+  margin-top: 4px;
+  width: 100%;
+}
+
+.metric-lines small {
+  font-size: 12px;
+}
+
+.metric-footer {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  width: 100%;
+}
 
 .jump {
   width: 100%;
@@ -320,6 +407,13 @@ button.metric { cursor: pointer; }
 .jump-pair > .jump-caption { justify-self: end; text-align: right; }
 
 .jump-place { margin-top: 6px; }
+
+.jump-sub {
+  margin-top: 4px;
+  color: #92400e !important;
+  font-size: 12px !important;
+  font-weight: 600;
+}
 
 .jump small, .item small, .metric small { display: block; color: var(--muted); font-size: 13px; line-height: 1.35; }
 
@@ -801,8 +895,13 @@ html[data-theme="dark"] .badge.cross-month {
   border-color: #f59e0b66;
 }
 
-html[data-theme="dark"] .cost-split .xray-sub {
-  color: #fcd34d;
+html[data-theme="dark"] .hero-stat {
+  background: #242a33;
+}
+
+html[data-theme="dark"] .cost-split .xray-sub,
+html[data-theme="dark"] .jump-sub {
+  color: #fcd34d !important;
 }
 
 html[data-theme="dark"] .nav button.active { background: #2a313b; }

@@ -145,6 +145,13 @@ export function shortMonthLabel(monthId) {
   return `${label}/${match[1].slice(2)}`;
 }
 
+export function formatMonthList(monthIds) {
+  const labels = [...new Set(monthIds || [])].map((id) => shortMonthLabel(id)).filter(Boolean);
+  if (!labels.length) return "";
+  if (labels.length === 1) return labels[0];
+  return `${labels[0]} e outros meses`;
+}
+
 export function referenceMonthFrom(note) {
   const lines = String(note || "").split("\n").map((item) => item.trim());
   const refLine = lines.find((item) => /^ref:\d{4}-\d{2}$/.test(item));
