@@ -8,6 +8,7 @@ import {
   composeNote,
   extrasBreakdown,
   formatCpf,
+  formatMonthList,
   invoiceBreakdown,
   invoiceShift,
   isVariableNote,
@@ -65,6 +66,9 @@ test("visibleNote e composeNote filtram todos os marcadores internos do cliente"
   assert.equal(previousMonthId("2026-01"), "2025-12");
   assert.equal(previousMonthId("2026-11"), "2026-10");
   assert.equal(shortMonthLabel("2026-12"), "Dez/26");
+  assert.equal(formatMonthList([]), "");
+  assert.equal(formatMonthList(["2026-12"]), "Dez/26");
+  assert.equal(formatMonthList(["2026-12", "2027-01", "2027-02"]), "Dez/26 e outros meses");
   assert.equal(referenceMonthFrom(raw), "2026-11");
   assert.equal(referenceMonthFrom("compra:2026-10-28"), "2026-10");
   assert.equal(cardChargeTitle({ name: "Mercado", note: raw, monthId: "2026-11" }), "10/11 Mercado");

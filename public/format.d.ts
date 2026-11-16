@@ -25,6 +25,7 @@ export function money(cents: number): string;
 export function centsToInput(cents: number): string;
 export function parseMoney(value: string): number | null;
 export function shortMonthLabel(monthId: string | null | undefined): string;
+export function formatMonthList(monthIds: ReadonlyArray<string | null | undefined> | null | undefined): string;
 export function referenceMonthFrom(note: string | null | undefined): string;
 export function isPlannedNote(note: string | null | undefined): boolean;
 export function isImprevistoNote(note: string | null | undefined): boolean;
