@@ -2186,13 +2186,19 @@ function cashHome(data) {
     editable() ? el("button", { class: "primary add-top", type: "button", onclick: openCashSpend }, "Lançar à vista") : "",
     el("h2", { class: "subhead" }, "Histórico"),
     entries.length
-      ? el("div", { class: "list" }, entries.map((entry) => el("article", { class: "item" }, [
-        el("div", { class: "item-copy" }, [
-          el("strong", {}, entry.name),
-          ...[historyWhen(entry.at), entry.kind, "Pix"].filter(Boolean).map((line) => el("small", {}, line)),
-        ]),
-        el("span", { class: "amount" }, money(entry.amountCents)),
-      ])))
+      ? el("div", { class: "list" }, entries.map((entry) => {
+        const sourceClass = entry.kind === "Planejado" ? "badge source-planned" : entry.kind === "Imprevisto" ? "badge source-extra" : "badge source-fixed";
+        return el("article", { class: "item" }, [
+          el("div", { class: "item-copy" }, [
+            el("strong", {}, entry.name),
+            ...[historyWhen(entry.at), "Pix"].filter(Boolean).map((line) => el("small", {}, line)),
+          ]),
+          el("div", { class: "item-end" }, [
+            entry.kind ? el("div", { class: "badges" }, [el("span", { class: sourceClass }, entry.kind)]) : "",
+            el("span", { class: "amount" }, money(entry.amountCents)),
+          ]),
+        ]);
+      }))
       : el("p", { class: "muted" }, "Nenhum lançamento à vista neste mês."),
   ]);
 }
