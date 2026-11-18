@@ -103,7 +103,7 @@ const TAB_INFO = {
     title: "Resumo mensal",
     role: "Mostra a saúde financeira do mês atual e uma prévia do próximo mês.",
     display: "Exibe os pagamentos do mês (fatura + Pix previsto), os lançamentos feitos neste mês para próximas faturas e a despesa prevista do mês atual e do seguinte.",
-    launches: "Não faz lançamentos diretos — funciona como painel consolidado de acompanhamento (com atalhos para quitar o mês ou trazer lançamentos do mês anterior).",
+    launches: "Não faz lançamentos diretos — funciona como painel consolidado de acompanhamento.",
   },
   cartoes: {
     title: "Cartões de crédito",
@@ -1403,7 +1403,6 @@ function summary(data) {
       : editable() && month.settled
         ? el("button", { class: "secondary", type: "button", onclick: () => askConfirm("reopen") }, "Reabrir mês")
         : "",
-    editable() ? el("button", { class: "secondary", type: "button", onclick: () => askConfirm("copy") }, "Trazer lançamentos do mês anterior") : "",
   ]);
 }
 
@@ -1550,9 +1549,9 @@ function confirmCopy() {
     };
   }
   return {
-    title: "Trazer lançamentos",
-    body: `Copia para ${month} os gastos fixos e as parcelas que ainda continuam no mês anterior. O que já existe aqui, com o mesmo nome e o mesmo tipo, não é duplicado. Os novos lançamentos entram em aberto.`,
-    action: "Trazer",
+    title: "Confirmar ação",
+    body: "",
+    action: "Confirmar",
     cancel: "Cancelar",
   };
 }
@@ -1560,6 +1559,7 @@ function confirmCopy() {
 function confirmDialog() {
   const copy = confirmCopy();
   const wait = state.confirm === "reset" ? resetSecondsLeft() : 0;
+  const destructive = state.confirm === "reset" || state.confirm === "delete-card";
   const overlay = el("div", {
     class: "overlay center",
     role: "presentation",
@@ -1573,7 +1573,7 @@ function confirmDialog() {
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeConfirm }, copy.cancel),
         el("button", {
-          class: "primary",
+          class: destructive ? "danger" : "primary",
           type: "button",
           disabled: wait > 0 ? "" : null,
           onclick: wait > 0 ? () => {} : runConfirm,
@@ -1860,16 +1860,16 @@ function periodGate() {
     el("div", { class: "actions" }, [
       draft.step > 0 ? el("button", { class: "secondary", type: "button", onclick: () => { draft.step -= 1; state.error = ""; render(); } }, "Voltar") : "",
       draft.step === 4 ? el("button", {
+        class: "secondary",
+        type: "button",
+        onclick: () => { state.error = ""; rememberDevicePrompt(); saveSetup(draft); },
+      }, "Agora não") : "",
+      draft.step === 4 ? el("button", {
         class: "primary",
         type: "button",
         disabled: state.busy ? "" : null,
         onclick: () => offerDevice(() => { rememberDevicePrompt(); saveSetup(draft); }),
       }, state.busy ? "Aguardando..." : "Cadastrar digital") : "",
-      draft.step === 4 ? el("button", {
-        class: "secondary",
-        type: "button",
-        onclick: () => { state.error = ""; rememberDevicePrompt(); saveSetup(draft); },
-      }, "Agora não") : "",
       draft.step === 4 ? "" : el("button", {
         class: "primary",
         type: "button",
@@ -2135,8 +2135,7 @@ async function runConfirm() {
     await saveSheet({ preventDefault() {} });
     return;
   }
-  if (kind === "copy") await copyPrevious();
-  else if (kind === "settle") await settle("pay-remaining");
+  if (kind === "settle") await settle("pay-remaining");
   else if (kind === "reopen") await settle("reopen");
   else render();
 }
@@ -4913,15 +4912,15 @@ function expenseInfoDialog() {
       : "",
   ]));
   const dialogActions = [
-    info.canEdit && info.living && !info.paid
-      ? el("button", { class: "secondary", type: "button", onclick: () => openPartialPayment(info) }, "Lançar pagamento")
-      : null,
     info.canEdit && info.living && (info.partials?.length || (info.paid && !info.zeroFinalized))
       ? el("button", {
         class: "secondary",
         type: "button",
         onclick: () => openUndoPayments((state.data?.expenses || []).find((item) => item.id === info.id)),
       }, "Desfazer lançamentos")
+      : null,
+    info.canEdit && info.living && !info.paid
+      ? el("button", { class: "primary", type: "button", onclick: () => openPartialPayment(info) }, "Lançar pagamento")
       : null,
   ].filter(Boolean);
   const overlay = el("div", {
@@ -5235,7 +5234,7 @@ function sheet() {
       el("h2", {}, "Cadastrar digital"),
       el("p", { class: "muted" }, "Usa a digital já cadastrada neste celular para entrar. A senha continua valendo."),
       window.PublicKeyCredential
-        ? el("button", { class: "secondary", type: "button", onclick: registerPasskey }, "Cadastrar digital")
+        ? el("button", { class: "primary", type: "button", onclick: registerPasskey }, "Cadastrar digital")
         : el("p", { class: "note" }, "Este navegador não oferece entrada com digital."),
       el("div", { class: "list" }, (state.passkeys || []).map((passkey) => el("article", { class: "item" }, [
         el("div", { class: "item-copy" }, [
@@ -5290,7 +5289,7 @@ function sheet() {
         : "",
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
-        el("button", { class: "primary", type: "button", onclick: askReset }, "Apagar"),
+        el("button", { class: "danger", type: "button", onclick: askReset }, "Apagar"),
       ]),
     );
   } else if (draft.mode === "delete-expense") {
@@ -6371,23 +6370,6 @@ async function deleteExpenseNow(expense, scope = "month") {
 
 async function removeExpense() {
   openDeleteExpense(state.sheet);
-}
-
-async function copyPrevious() {
-  state.error = "";
-  setWorking(true, "Trazendo lançamentos...");
-  try {
-    const data = await request(`/api/months/${state.monthId}/copy`, { method: "POST", body: {} });
-    state.data = data;
-    state.notice = data.copied > 0
-      ? `Trouxe ${data.copied} ${data.copied === 1 ? "lançamento" : "lançamentos"} do mês anterior.`
-      : "Não havia lançamento novo para trazer. A planilha de cada mês já está carregada.";
-  } catch (error) {
-    state.error = messageOf(error);
-  } finally {
-    setWorking(false);
-  }
-  render();
 }
 
 async function settle(mode) {
