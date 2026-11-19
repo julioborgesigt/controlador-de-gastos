@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "check": "wrangler types && tsc --noEmit && wrangler deploy --dry-run",
+    "check": "wrangler types && tsc --noEmit && npm run lint:public && wrangler deploy --dry-run",
+    "lint:public": "node scripts/check-public.mjs",
     "types": "wrangler types",
     "test": "node --experimental-strip-types --test test/**/*.test.ts",
     "db:create": "wrangler d1 create controlador-de-gastos",

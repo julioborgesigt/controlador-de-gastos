@@ -1,0 +1,31 @@
+name: Verificação de Pull Request
+
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Baixar o código
+        uses: actions/checkout@v6
+
+      - name: Instalar o Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Testar
+        run: npm test
+
+      - name: Verificar tipos, frontend e empacotamento
+        run: npm run check
