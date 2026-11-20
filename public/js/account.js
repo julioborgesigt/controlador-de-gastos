@@ -9,6 +9,7 @@ import {
   setWorking,
   state,
 } from "./state.js";
+import { openOverview } from "./views/overview.js";
 
 async function openShares() {
   if (!editable() || state.data?.access?.own === false) {
@@ -157,6 +158,14 @@ function accountMenu() {
       cpf ? el("small", {}, cpf) : "",
     ]),
     state.spaces.length > 1 ? menuItem("Trocar acesso", () => { state.accountMenu = false; state.choosing = true; render(); }) : "",
+    menuItem("Busca e visão anual", openOverview),
+    menuItem("Exportar backup", () => {
+      state.accountMenu = false;
+      state.error = "";
+      state.notice = "";
+      state.sheet = { mode: "export", scope: "all" };
+      render();
+    }),
     state.data?.access?.own === true ? menuItem("Período gerenciado", openPeriod) : "",
     state.data?.access?.own === true ? menuItem(document.documentElement.dataset.theme === "dark" ? "Usar modo claro" : "Usar modo escuro", toggleTheme) : "",
     state.data?.access?.own === true ? menuItem("Resetar meus dados", openReset, "danger") : "",

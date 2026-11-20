@@ -13,7 +13,7 @@ export async function saveSheet(event) {
   state.error = "";
   state.notice = "";
   try {
-    if (draft.mode === "passkey" || draft.mode === "undo-payments") return;
+    if (draft.mode === "passkey" || draft.mode === "undo-payments" || draft.mode === "export") return;
 
     const paymentResult = await savePaymentSheet(draft);
     if (paymentResult) {

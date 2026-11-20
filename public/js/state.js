@@ -37,6 +37,12 @@ export const state = {
   confirmTarget: null,
   resetReadyAt: 0,
   resetTimer: 0,
+  offline: false,
+  summaryFocus: null,
+  overview: null,
+  overviewLoading: false,
+  overviewError: "",
+  overviewFilter: { year: "", q: "", card: "", track: "" },
 };
 
 export const monthStore = new Map();
@@ -130,7 +136,7 @@ export function closeTabIntro(dontShowAgain = false) {
 }
 
 export function editable() {
-  return state.data?.access?.permission !== "view";
+  return !state.offline && state.data?.access?.permission !== "view";
 }
 
 export function setWorking(active, label = "Salvando...") {

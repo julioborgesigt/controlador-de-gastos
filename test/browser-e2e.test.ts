@@ -218,7 +218,31 @@ test("E2E navegador real: swipe mobile, menu da conta, tema escuro e viewport de
     // Alterna para viewport desktop e navega entre abas
     await page.setViewport(1280, 800, false);
     await page.click('nav.nav button[data-key="resumo"]');
+    await dismissTabIntroIfOpen(page);
     await page.waitForText("Resumo mensal");
+
+    // Abre Busca e visão anual pelo Resumo e pesquisa "Energia" preservando foco e barras CSSOM
+    await page.clickButton("Busca e visão anual");
+    await page.waitForSelector("#overview-q");
+    await page.waitForText("Evolução mês a mês");
+    await page.evaluate(`(() => {
+      window.__searchRef = document.querySelector('#overview-q');
+      window.__searchRef.focus();
+    })()`);
+    await page.typeKeys("Energia");
+    await page.waitForText("Resultados da busca (12)");
+    const sameSearch = await page.evaluate<boolean>('document.querySelector("#overview-q") === window.__searchRef');
+    assert.equal(sameSearch, true, "campo de busca deve preservar identidade DOM durante re-render");
+
+    // Abre sheet de Exportar backup pelo menu da conta
+    await page.click('header.top button[aria-label="Conta"]');
+    await page.waitForSelector('.menu[role="menu"]');
+    await page.clickButton("Exportar backup", '.menu[role="menu"]');
+    await page.waitForSelector("form.sheet");
+    await page.waitForText("Baixar planilha (CSV)");
+    await page.waitForText("Baixar backup completo (JSON)");
+    await page.pressKey("Escape");
+    await page.waitFor('!document.querySelector("form.sheet")');
 
     assert.deepEqual(page.errors, []);
   } finally {

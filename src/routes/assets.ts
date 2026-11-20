@@ -25,6 +25,7 @@ export function registerAssetRoutes(app: App): void {
 }
 
 function isRevalidatableAsset(pathname: string): boolean {
+  if (pathname === "/sw.js") return false;
   return /\.(?:js|css|svg|png|ico|webp|woff2?)$/i.test(pathname);
 }
 

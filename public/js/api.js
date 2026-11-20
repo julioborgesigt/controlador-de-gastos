@@ -102,31 +102,106 @@ export function rememberMonth(data, { keepOthers = false, preload = true } = {})
   state.nextInvoices = null;
   state.purchasesMonthId = "";
   state.purchases = null;
+  state.offline = false;
   if (!keepOthers) monthStore.clear();
   storeMonth(data);
+  const serialized = JSON.stringify({ data });
   try {
-    sessionStorage.setItem("monthCache:v1", JSON.stringify({ data }));
+    sessionStorage.setItem("monthCache:v1", serialized);
   } catch {
     sessionStorage.removeItem("monthCache:v1");
+  }
+  try {
+    localStorage.setItem("monthOffline:v1", serialized);
+  } catch {
+    localStorage.removeItem("monthOffline:v1");
   }
   if (preload) void preloadAround(data);
 }
 
 export function readMonthCache(monthId) {
-  try {
-    const parsed = JSON.parse(sessionStorage.getItem("monthCache:v1") || "");
-    const data = parsed?.data;
-    if (!data?.month?.id || !Array.isArray(data.months) || !Array.isArray(data.expenses)) return null;
-    if (monthId && data.month.id !== monthId) return null;
-    return data;
-  } catch {
-    return null;
+  for (const [storage, key] of [[sessionStorage, "monthCache:v1"], [localStorage, "monthOffline:v1"]]) {
+    try {
+      const parsed = JSON.parse(storage.getItem(key) || "");
+      const data = parsed?.data;
+      if (!data?.month?.id || !Array.isArray(data.months) || !Array.isArray(data.expenses)) continue;
+      if (monthId && data.month.id !== monthId) continue;
+      return data;
+    } catch {
+      /* ignore invalid cache */
+    }
   }
+  return null;
 }
 
 export function clearMonthCache() {
   monthStore.clear();
+  state.overview = null;
   sessionStorage.removeItem("monthCache:v1");
+  localStorage.removeItem("monthOffline:v1");
+}
+
+let overviewSeq = 0;
+
+export async function loadOverview(filter = state.overviewFilter) {
+  const seq = ++overviewSeq;
+  const params = new URLSearchParams();
+  if (filter?.year) params.set("year", filter.year);
+  if (filter?.q) params.set("q", filter.q);
+  if (filter?.card) params.set("card", filter.card);
+  if (filter?.track) params.set("track", filter.track);
+  state.overviewLoading = true;
+  state.overviewError = "";
+  renderSafely();
+  try {
+    const query = params.toString();
+    const data = await request(`/api/overview${query ? `?${query}` : ""}`);
+    if (seq !== overviewSeq) return;
+    state.overview = data;
+    state.overviewError = "";
+  } catch (error) {
+    if (seq !== overviewSeq) return;
+    state.overviewError = messageOf(error);
+  } finally {
+    if (seq === overviewSeq) {
+      state.overviewLoading = false;
+      renderSafely();
+    }
+  }
+}
+
+export async function downloadExport(format, scope = "all") {
+  state.error = "";
+  state.notice = "";
+  const params = new URLSearchParams({ format: format === "csv" ? "csv" : "json" });
+  if (scope === "month" && state.monthId) params.set("monthId", state.monthId);
+  setWorking(true, format === "csv" ? "Gerando CSV..." : "Gerando backup...");
+  try {
+    const response = await fetch(`/api/export?${params.toString()}`);
+    if (!response.ok) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || "Não foi possível exportar os dados.");
+    }
+    const blob = await response.blob();
+    const disposition = response.headers.get("content-disposition") || "";
+    const match = /filename="([^"]+)"/.exec(disposition);
+    const filename = match?.[1] || `gastos-backup.${format === "csv" ? "csv" : "json"}`;
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    state.notice = format === "csv" ? "Planilha CSV baixada." : "Backup JSON baixado.";
+    state.sheet = null;
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    renderSafely();
+  }
 }
 
 export async function loadMonth(monthId) {
