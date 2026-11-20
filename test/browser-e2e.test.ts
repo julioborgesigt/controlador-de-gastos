@@ -116,12 +116,12 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       await page.waitFor('!document.querySelector("form.sheet")');
 
       // Expande as faturas do mês (se dobrado) e abre detalhe do cartão Nubank
-      const nubankVisible = await page.evaluate<boolean>('document.body.innerText.includes("Nubank")');
-      if (!nubankVisible) {
+      const cardRowVisible = await page.evaluate<boolean>('Boolean(document.querySelector(".card-manage .item-main"))');
+      if (!cardRowVisible) {
         await page.clickButton("Faturas a serem pagas");
       }
-      await page.waitForText("Nubank");
-      await page.clickButton("Nubank");
+      await page.waitForSelector(".card-manage .item-main");
+      await page.click(".card-manage .item-main");
       await page.waitForText("Notebook");
       await page.waitForText("1/2");
 
@@ -258,6 +258,86 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       await page.waitForText("Baixar backup completo (JSON)");
       await page.pressKey("Escape");
       await page.waitFor('!document.querySelector("form.sheet")');
+
+      assert.deepEqual(page.errors, []);
+    } finally {
+      await page.close();
+      await server.close();
+    }
+  });
+
+  test("sugestão de cartões brasileiros + importação e sincronização de CSV Nubank com parcelas futuras", { timeout: 30_000 }, async () => {
+    const server = await startAppServer();
+    const page = await browser!.newPage(server.baseUrl);
+    try {
+      await completeOnboarding(page);
+
+      // Vai para Cartões de crédito e abre "Adicionar cartão" para validar sugestões brasileiras + dica Nubank
+      await page.click('nav.nav button[data-key="cartoes"]');
+      await dismissTabIntroIfOpen(page);
+      await page.clickButton("Adicionar cartão");
+      await page.waitForSelector(".card-presets");
+      await page.waitForText("Itaú");
+      await page.waitForText("Inter");
+      await page.clickButton("Nubank", ".card-presets");
+      await page.waitForText("Importe sua fatura do Nubank em CSV");
+
+      // Abre a sheet de importação direto pela sugestão do Nubank
+      await page.clickButton("Importar CSV do Nubank", ".nubank-tip");
+      await page.waitForSelector("#nubank-csv-file");
+
+      const csvContent = [
+        "date,title,amount",
+        "2026-10-24,Farmacia Central - Parcela 1/2,74.37",
+        "2026-10-26,Google Garena,20.99",
+        "2026-10-05,Pagamento recebido,-500.00",
+      ].join("\n");
+
+      const uploadCsv = async () => {
+        await page.evaluate(`(() => {
+          const input = document.querySelector("#nubank-csv-file");
+          const dt = new DataTransfer();
+          dt.items.add(new File([${JSON.stringify(csvContent)}], "Nubank_2026-11-05.csv", { type: "text/csv" }));
+          input.files = dt.files;
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        })()`);
+      };
+
+      await uploadCsv();
+      await page.waitForSelector("#nubank-due-date");
+      const detectedDue = await page.evaluate<string>('document.querySelector("#nubank-due-date")?.value || ""');
+      assert.equal(detectedDue, "2026-11-05");
+      await page.waitForText("1 parcela futura será projetada");
+
+      // Confirma data de vencimento captada e importa
+      await page.click("#nubank-due-confirm");
+      await page.clickButton("Importar e sincronizar", "form.sheet");
+      await page.waitFor('!document.querySelector("form.sheet")');
+      await page.waitForText("projetei 1 parcela nos meses seguintes");
+
+      // Confere 1/2 em nov/26 e 2/2 projetada em dez/26
+      const rowVisible = await page.evaluate<boolean>('Boolean(document.querySelector(".card-manage .item-main"))');
+      if (!rowVisible) {
+        await page.clickButton("Faturas a serem pagas");
+      }
+      await page.waitForSelector(".card-manage .item-main");
+      await page.click(".card-manage .item-main");
+      await page.waitForText("Farmacia Central");
+      await page.waitForText("1/2");
+      await page.click('div.months button[data-key="2026-12"]');
+      await page.waitForText("2/2");
+
+      // Reimporta o mesmo CSV pelo menu do usuário e confirma sincronização sem duplicar
+      await page.click('header.top button[aria-label="Conta"]');
+      await page.waitForSelector('.menu[role="menu"]');
+      await page.clickButton("Importar fatura Nubank (CSV)", '.menu[role="menu"]');
+      await page.waitForSelector("#nubank-csv-file");
+      await uploadCsv();
+      await page.waitForSelector("#nubank-due-confirm");
+      await page.click("#nubank-due-confirm");
+      await page.clickButton("Importar e sincronizar", "form.sheet");
+      await page.waitFor('!document.querySelector("form.sheet")');
+      await page.waitForText("já estava sincronizada");
 
       assert.deepEqual(page.errors, []);
     } finally {

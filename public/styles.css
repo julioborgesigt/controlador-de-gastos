@@ -2166,3 +2166,88 @@ html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
   background: var(--bad);
 }
 
+.card-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.card-preset {
+  appearance: none;
+  border: 1px solid var(--line);
+  background: var(--card);
+  color: var(--ink);
+  border-radius: 999px;
+  padding: 6px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.card-preset.on {
+  background: var(--ink);
+  color: var(--bg);
+  border-color: var(--ink);
+}
+
+.nubank-tip {
+  background: color-mix(in srgb, #820ad1 8%, var(--card));
+  border: 1px solid color-mix(in srgb, #820ad1 28%, var(--line));
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.nubank-tip strong { font-size: 14px; }
+.nubank-tip p { margin: 0; font-size: 13px; }
+.nubank-tip button { margin-top: 4px; width: fit-content; }
+
+.file-pick input[type="file"] {
+  padding: 10px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+}
+
+.import-preview {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 12px 14px;
+  margin-bottom: 14px;
+  display: grid;
+  gap: 6px;
+}
+
+.import-sample {
+  display: grid;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.confirm-check {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  margin-bottom: 14px;
+  font-size: 13px;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.confirm-check input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 2px 0 0;
+  flex: 0 0 auto;
+}
+
+

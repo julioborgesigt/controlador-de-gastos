@@ -3,8 +3,12 @@ import { loadMonth, rememberMonth, request } from "../api.js";
 import { savePeriod } from "../setup.js";
 import { setWorking, state } from "../state.js";
 import { cardClosingDay, cardDueDay, sameCardName } from "../views/card-helpers.js";
+import { saveNubankImportSheet } from "./import-nubank.js";
 
 export async function saveAccountSheet(draft) {
+  if (draft.mode === "import-nubank") {
+    return saveNubankImportSheet(draft);
+  }
   if (draft.mode === "share") {
     setWorking(true, "Salvando...");
     const data = await request("/api/shares", { method: "POST", body: { cpf: draft.cpf, permission: draft.permission } });

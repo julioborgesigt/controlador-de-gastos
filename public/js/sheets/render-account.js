@@ -7,9 +7,14 @@ import { askReset, periodFields, periodSelect } from "../setup.js";
 import { editable, state } from "../state.js";
 import { extraAmountField, openIncomeExtra, useBaseIncome } from "../views/income.js";
 import { field, monthChecks, monthSelect, segmented } from "./fields.js";
+import { renderNubankImportSheet } from "./import-nubank.js";
 import { closeSheet } from "./openers.js";
 
 export function renderAccountSheet(panel, draft) {
+  if (draft.mode === "import-nubank") {
+    renderNubankImportSheet(panel, draft);
+    return true;
+  }
   if (draft.mode === "export") {
     const scope = draft.scope === "month" ? "month" : "all";
     panel.append(

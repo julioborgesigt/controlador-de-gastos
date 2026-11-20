@@ -13,6 +13,7 @@ import { ensureNextInvoices, openMonthCard, purchasesOf } from "../api.js";
 import { linkedInvoice } from "../dialogs/expense-info.js";
 import { helpButton, titleWithHelp } from "../dialogs/info.js";
 import { backArrow, el, monthPhrase, onDesktop } from "../dom.js";
+import { openNubankImport } from "../sheets/import-nubank.js";
 import { openCardExpense } from "../sheets/openers.js";
 import { editable, monthStore, render, state } from "../state.js";
 import {
@@ -241,6 +242,7 @@ export function cardsHome(data) {
     editable() ? el("div", { class: "stack-actions" }, [
       el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto no crédito"),
       el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
+      el("button", { class: "secondary", type: "button", onclick: () => openNubankImport() }, "Importar CSV Nubank"),
     ]) : "",
     invoiceFold(
       `invoices:${data.month.id}`,

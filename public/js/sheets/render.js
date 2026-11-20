@@ -1,5 +1,6 @@
+import { isNubankName } from "../../shared/nubank-csv.js";
 import { amountLabel, el, on } from "../dom.js";
-import { state } from "../state.js";
+import { render, state } from "../state.js";
 import { attachSheetDrag, isIgnoringSwipeClick } from "../swipe.js";
 import { cashSpendFields } from "../views/cash.js";
 import { openDeleteExpense } from "../views/expenses.js";
@@ -14,6 +15,7 @@ import {
   recurringSpan,
   segmented,
 } from "./fields.js";
+import { cardPresetsBlock, nubankSuggestionBanner, openNubankImport } from "./import-nubank.js";
 import { cardSpendFields, closeSheet } from "./openers.js";
 import { renderAccountSheet } from "./render-account.js";
 import { renderPaymentSheet } from "./render-payments.js";
@@ -56,9 +58,17 @@ export function sheet() {
   } else if (draft.mode === "card-spend") {
     panel.append(...cardSpendFields(draft).filter(Boolean));
   } else if (draft.mode === "card") {
+    const isNubank = isNubankName(draft.name);
     panel.append(
       el("h2", {}, draft.id ? "Editar cartão" : "Novo cartão"),
-      field("Apelido", "name", draft.name, "text", "Nubank, Neon ou outro"),
+      !draft.id ? cardPresetsBlock(draft.name, (name) => {
+        draft.name = name;
+        render();
+      }) : "",
+      field("Apelido", "name", draft.name, "text", "Nubank, Itaú, Inter..."),
+      isNubank ? nubankSuggestionBanner({
+        onImport: () => openNubankImport(draft.name.trim() || "Nubank"),
+      }) : "",
       field("Dia de fechamento", "closingDay", draft.closingDay || "", "numeric", "1"),
       field("Dia de vencimento", "dueDay", draft.dueDay || "", "numeric", "10"),
       el("p", { class: "muted" }, "O fechamento sugere em qual fatura o gasto entra. O vencimento é o dia de pagar a fatura."),

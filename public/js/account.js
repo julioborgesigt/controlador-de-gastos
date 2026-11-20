@@ -2,6 +2,7 @@ import { clearMonthCache, request } from "./api.js";
 import { askConfirm } from "./dialogs/confirm.js";
 import { applyTheme, el, messageOf, personGlyph } from "./dom.js";
 import { openPeriod, openReset } from "./setup.js";
+import { openNubankImport } from "./sheets/import-nubank.js";
 import {
   editable,
   render,
@@ -159,6 +160,7 @@ function accountMenu() {
     ]),
     state.spaces.length > 1 ? menuItem("Trocar acesso", () => { state.accountMenu = false; state.choosing = true; render(); }) : "",
     menuItem("Busca e visão anual", openOverview),
+    editable() ? menuItem("Importar fatura Nubank (CSV)", () => openNubankImport()) : "",
     menuItem("Exportar backup", () => {
       state.accountMenu = false;
       state.error = "";

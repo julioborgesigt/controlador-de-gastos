@@ -1,4 +1,5 @@
 import { parseMoney } from "../format.js";
+import { isNubankName } from "../shared/nubank-csv.js";
 import { logout } from "./account.js";
 import { clearMonthCache, rememberMonth, request } from "./api.js";
 import { offerDevice, rememberDevicePrompt } from "./auth.js";
@@ -11,6 +12,7 @@ import {
   on,
   onDesktop,
 } from "./dom.js";
+import { cardPresetsBlock, nubankSuggestionBanner, openNubankImport } from "./sheets/import-nubank.js";
 import { render, renderSafely, setWorking, state } from "./state.js";
 import { cardClosingDay, cardDueDay } from "./views/card-helpers.js";
 
@@ -127,12 +129,23 @@ export function periodGate() {
     }));
     if (draft.hasCards === "yes") {
       draft.cards.forEach((card, index) => {
-        body.push(setupInput(`card-name-${index}`, "Apelido", card.name, (value) => { card.name = value; }, "Nubank, Neon..."));
+        body.push(cardPresetsBlock(card.name, (name) => {
+          card.name = name;
+          render();
+        }));
+        body.push(setupInput(`card-name-${index}`, "Apelido", card.name, (value) => {
+          const wasNubank = isNubankName(card.name);
+          card.name = value;
+          if (wasNubank !== isNubankName(value)) render();
+        }, "Nubank, Itaú, Inter..."));
         body.push(el("div", { class: "pair" }, [
           setupInput(`card-close-${index}`, "Fechamento", card.closingDay, (value) => { card.closingDay = value; }, "1", "numeric"),
           setupInput(`card-due-${index}`, "Vencimento", card.dueDay, (value) => { card.dueDay = value; }, "10", "numeric"),
         ]));
       });
+      if (draft.cards.some((card) => isNubankName(card.name))) {
+        body.push(nubankSuggestionBanner({ compact: true }));
+      }
       body.push(el("div", { class: "actions" }, [
         draft.cards.length > 1 ? el("button", {
           class: "secondary",
@@ -268,10 +281,17 @@ function setupGuide() {
     ["Outros gastos", "Consulta dos imprevistos e planejados. O gasto novo entra por Cartões de crédito ou À vista."],
     ["Receita mensal", "A renda base e os extras do mês, como décimo terceiro ou um valor avulso."],
   ];
+  const nubankCard = (state.data?.cards || []).find((card) => isNubankName(card.name));
   return el("main", { class: "screen auth" }, [
     el("p", { class: "eyebrow" }, "Como usar"),
     el("h1", {}, "Cada aba tem um papel"),
     el("p", { class: "lede" }, "O período, os cartões e a aparência continuam disponíveis no perfil e na aba Cartões de crédito."),
+    nubankSuggestionBanner({
+      onImport: () => {
+        state.setupGuide = false;
+        openNubankImport(nubankCard?.name || "Nubank");
+      },
+    }),
     el("div", { class: "list" }, guides.map(([title, text]) => el("article", { class: "item" }, [
       el("div", { class: "item-copy" }, [
         el("strong", {}, title),

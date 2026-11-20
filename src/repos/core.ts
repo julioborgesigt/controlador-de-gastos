@@ -136,14 +136,15 @@ export function prepareInsertExpense(
     sortOrder: number;
     source?: "user" | "sheet";
     createdAt: string;
+    importKey?: string | null;
   },
 ): D1PreparedStatement {
   return db
     .prepare(
       `INSERT INTO expenses
         (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at,
-         series_id, origin_expense_id, partial_id, track, cost_kind, invoice_shift, invoice_month_id, reference_month_id, purchase_date, finalized_zero)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         series_id, origin_expense_id, partial_id, track, cost_kind, invoice_shift, invoice_month_id, reference_month_id, purchase_date, finalized_zero, import_key)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       input.id,
@@ -162,6 +163,7 @@ export function prepareInsertExpense(
       input.source ?? "user",
       input.createdAt,
       ...expenseMetaParams(input.section, input.note),
+      input.importKey ?? null,
     );
 }
 
