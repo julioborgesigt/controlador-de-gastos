@@ -15,7 +15,7 @@
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
-    <div id="app" aria-live="polite" aria-busy="true">
+    <div id="app" aria-busy="true">
       <main class="screen boot">
         <div class="boot-mark" style="--progress: 0.12">
           <svg class="boot-ring" viewBox="0 0 88 88" aria-hidden="true">
@@ -26,6 +26,7 @@
         </div>
       </main>
     </div>
+    <div id="live-region" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></div>
     <noscript>Ative o JavaScript para usar o controle de gastos neste celular.</noscript>
     <script src="/app.js" type="module"></script>
   </body>

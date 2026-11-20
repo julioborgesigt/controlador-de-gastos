@@ -30,8 +30,6 @@ import {
   noteWithChargeContext,
   noteWithFinalizedZero,
   noteWithPlanned,
-  originExpenseId,
-  partialIdFromNote,
   planCardPurchase,
   noteWithSeries,
   noteWithVariable,
@@ -50,8 +48,9 @@ import {
   applySeriesEdit,
   countUsers,
   createCard,
+  createCardSpendWithAnchor,
   deleteCard,
-  renameCard,
+  updateCard,
   createUser,
   deletePasskey,
   deleteShare,
@@ -61,14 +60,12 @@ import {
   findUserById,
   clearLivingCardCharges,
   getExpense,
-  listSectionExpenses,
   reclassifyExpense,
   getMonth,
   listCardPurchasesInMonth,
   getSetting,
   getTheme,
   setTheme,
-  setCardDueDay,
   addLivingCardPartial,
   insertCardPurchase,
   insertPartialPayment,
@@ -663,10 +660,12 @@ app.patch("/api/cards/:id", async (c) => {
   const closing = parseDueDay(body.closingDay);
   if (!closing.ok) return c.json({ error: "O fechamento é um dia de 1 a 31." }, 400);
   if (closing.dueDay === null) return c.json({ error: "Informe o dia de fechamento, de 1 a 31." }, 400);
-  const renamed = await renameCard(c.env.DB, writer.scope.ownerId, c.req.param("id"), parsed.name);
-  if (!renamed.ok) return c.json({ error: renamed.error }, renamed.error === "Cartão não encontrado." ? 404 : 409);
-  const dated = await setCardDueDay(c.env.DB, writer.scope.ownerId, c.req.param("id"), due.dueDay, closing.dueDay);
-  if (!dated.ok) return c.json({ error: dated.error }, 404);
+  const updated = await updateCard(c.env.DB, writer.scope.ownerId, c.req.param("id"), {
+    name: parsed.name,
+    dueDay: due.dueDay,
+    closingDay: closing.dueDay,
+  });
+  if (!updated.ok) return c.json({ error: updated.error }, updated.error === "Cartão não encontrado." ? 404 : 409);
   return c.json({ cards: await listCards(c.env.DB, writer.scope.ownerId) });
 });
 
@@ -753,37 +752,32 @@ app.post("/api/card-spend", async (c) => {
   }
   if (kind === "casa") {
     const livingMonthId = costMonthId || body.invoiceMonthId;
-    const inserted = await insertRepeatedExpenses(c.env.DB, {
+    const created = await createCardSpendWithAnchor(c.env.DB, {
       ownerId: writer.scope.ownerId,
-      monthIds: [livingMonthId],
-      name,
-      section: "fixed",
-      amountCents: scheduledCents,
-      payment: "pix",
-      onCard: false,
-      cardLabel: null,
-      paid: false,
-      note: "",
-      installment: null,
-      livingCard: false,
+      anchor: {
+        monthId: livingMonthId,
+        name,
+        section: "fixed",
+        amountCents: scheduledCents,
+        payment: "card",
+        onCard: true,
+        cardLabel: card.cardLabel,
+        paid: true,
+        note: "",
+      },
+      charge: {
+        startMonthId: body.invoiceMonthId,
+        name,
+        cardLabel: card.cardLabel || "",
+        purchaseDate,
+        referenceMonthId: livingMonthId,
+        totalCount: installment.totalCount,
+        paidCount: installment.paidCount,
+        amountCents: body.amountCents,
+        mode: installment.mode,
+      },
     });
-    if (!inserted.ok) return c.json({ error: inserted.error }, 400);
-    const anchor = inserted.rows[0];
-    if (!anchor) return c.json({ error: "Mês não encontrado." }, 404);
-    const paid = await payLivingSeriesOnCard(c.env.DB, {
-      ownerId: writer.scope.ownerId,
-      expenseId: anchor.id,
-      scope: "month",
-      cardLabel: card.cardLabel || "",
-      alias: name,
-      amountCents: body.amountCents,
-      totalCount: installment.totalCount,
-      paidCount: installment.paidCount,
-      startMonthId: body.invoiceMonthId,
-      mode: installment.mode,
-      purchaseDate,
-    });
-    if (!paid.ok) return c.json({ error: paid.error }, 400);
+    if (!created.ok) return c.json({ error: created.error }, 400);
     return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, livingMonthId), writer.scope), 201);
   }
   const occurrenceMonthId = costMonthId || body.invoiceMonthId;
@@ -793,38 +787,31 @@ app.post("/api/card-spend", async (c) => {
     referenceMonthId: occurrenceMonthId,
   });
   if (occurrenceMonthId !== body.invoiceMonthId) {
-    const listed = await insertRepeatedExpenses(c.env.DB, {
+    const created = await createCardSpendWithAnchor(c.env.DB, {
       ownerId: writer.scope.ownerId,
-      monthIds: [occurrenceMonthId],
-      name,
-      section: "extra",
-      amountCents: scheduledCents,
-      payment: "card",
-      onCard: false,
-      cardLabel: card.cardLabel,
-      paid: false,
-      note: [trackNote, `fatura:${body.invoiceMonthId}`, `ref:${occurrenceMonthId}`].join("\n"),
-      installment: null,
-      livingCard: false,
-    });
-    if (!listed.ok) return c.json({ error: listed.error }, 400);
-    const anchor = listed.rows[0];
-    if (!anchor) return c.json({ error: "Mês não encontrado." }, 404);
-    const created = await insertCardPurchase(c.env.DB, {
-      ownerId: writer.scope.ownerId,
-      startMonthId: body.invoiceMonthId,
-      name,
-      section: "card",
-      payment: "card",
-      cardLabel: card.cardLabel,
-      note: noteWithChargeContext(`${trackNote}\norigem:${anchor.id}`, {
+      anchor: {
+        monthId: occurrenceMonthId,
+        name,
+        section: "extra",
+        amountCents: scheduledCents,
+        payment: "card",
+        onCard: false,
+        cardLabel: card.cardLabel,
+        paid: false,
+        note: [trackNote, `fatura:${body.invoiceMonthId}`, `ref:${occurrenceMonthId}`].join("\n"),
+      },
+      charge: {
+        startMonthId: body.invoiceMonthId,
+        name,
+        cardLabel: card.cardLabel || "",
+        notePrefix: trackNote,
         purchaseDate,
         referenceMonthId: occurrenceMonthId,
-      }),
-      totalCount: installment.totalCount,
-      paidCount: installment.paidCount,
-      amountCents: body.amountCents,
-      mode: installment.mode,
+        totalCount: installment.totalCount,
+        paidCount: installment.paidCount,
+        amountCents: body.amountCents,
+        mode: installment.mode,
+      },
     });
     if (!created.ok) return c.json({ error: created.error }, 400);
     return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, occurrenceMonthId), writer.scope), 201);
@@ -1016,12 +1003,12 @@ app.patch("/api/expenses/:id", async (c) => {
     || invoiceShiftFromNote(nextNote) === "seguinte"
   );
   const nextOnCard = clearFixedCard ? false : parsed.value.onCard;
-  await c.env.DB.prepare(
-    `UPDATE expenses
-     SET name = ?, section = ?, amount_cents = ?, payment = ?, on_card = ?, card_label = ?, paid = ?, note = ?, installment = ?
-     WHERE owner_id = ? AND id = ?`,
-  )
-    .bind(
+  const statements: D1PreparedStatement[] = [
+    c.env.DB.prepare(
+      `UPDATE expenses
+       SET name = ?, section = ?, amount_cents = ?, payment = ?, on_card = ?, card_label = ?, paid = ?, note = ?, installment = ?
+       WHERE owner_id = ? AND id = ?`,
+    ).bind(
       parsed.value.name,
       parsed.value.section,
       parsed.value.amountCents,
@@ -1033,16 +1020,19 @@ app.patch("/api/expenses/:id", async (c) => {
       parsed.value.installment,
       writer.scope.ownerId,
       current.id,
-    )
-    .run();
+    ),
+  ];
   if (clearFixedCard) {
-    const cardLines = await listSectionExpenses(c.env.DB, writer.scope.ownerId, "card");
-    for (const line of cardLines) {
-      if (originExpenseId(line.note) === current.id && !partialIdFromNote(line.note)) {
-        await c.env.DB.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(writer.scope.ownerId, line.id).run();
-      }
-    }
+    statements.push(
+      c.env.DB.prepare(
+        `DELETE FROM expenses
+         WHERE owner_id = ? AND section = 'card'
+           AND ('\n' || COALESCE(note, '') || '\n') LIKE ?
+           AND ('\n' || COALESCE(note, '') || '\n') NOT LIKE '%\nparcial:%'`,
+      ).bind(writer.scope.ownerId, `%\norigem:${current.id}\n%`),
+    );
   }
+  await c.env.DB.batch(statements);
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
 });
 
@@ -1116,11 +1106,9 @@ app.post("/api/expenses/:id/card-payment", async (c) => {
       installmentCount: body.installmentCount,
       invoiceMonthId,
       name: current.name,
+      close: body.close === true,
     });
     if (!added.ok) return c.json({ error: added.error }, 400);
-    if (body.close === true) {
-      await c.env.DB.prepare("UPDATE expenses SET paid = 1 WHERE owner_id = ? AND id = ?").bind(writer.scope.ownerId, current.id).run();
-    }
     return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.monthId), writer.scope));
   }
   const paid = await payLivingSeriesOnCard(c.env.DB, {
@@ -1236,20 +1224,22 @@ app.post("/api/expenses/:id/settle", async (c) => {
   }
   const amountCents = body.useRegistered === true ? Math.max(0, expense.amountCents - already) : body.amountCents;
   if (!isCents(amountCents) || amountCents <= 0) return c.json({ error: "Informe o valor pago." }, 400);
+  const statements: D1PreparedStatement[] = [];
   if (hasPartials || body.useRegistered !== true) {
-    await insertPartialPayment(c.env.DB, {
-      ownerId: writer.scope.ownerId,
-      expenseId: expense.id,
-      amountCents,
-      payment: "pix",
-      cardLabel: null,
-      installment: null,
-    });
+    statements.push(
+      c.env.DB.prepare(
+        `INSERT INTO partial_payments
+          (id, owner_id, expense_id, amount_cents, payment, card_label, installment, created_at)
+         VALUES (?, ?, ?, ?, 'pix', NULL, NULL, ?)`,
+      ).bind(crypto.randomUUID(), writer.scope.ownerId, expense.id, amountCents, new Date().toISOString()),
+    );
   }
-  await c.env.DB
-    .prepare("UPDATE expenses SET paid = 1, amount_cents = ? WHERE owner_id = ? AND id = ?")
-    .bind(hasPartials ? expense.amountCents : amountCents, writer.scope.ownerId, expense.id)
-    .run();
+  statements.push(
+    c.env.DB
+      .prepare("UPDATE expenses SET paid = 1, amount_cents = ? WHERE owner_id = ? AND id = ?")
+      .bind(hasPartials ? expense.amountCents : amountCents, writer.scope.ownerId, expense.id),
+  );
+  await c.env.DB.batch(statements);
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, expense.monthId), writer.scope));
 });
 
@@ -1275,10 +1265,19 @@ app.all("*", async (c) => {
     headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   }
   headers.set("Content-Security-Policy", ASSET_CSP);
-  headers.set("Cache-Control", "no-store");
-  headers.set("CDN-Cache-Control", "no-store");
+  if (isRevalidatableAsset(c.req.path)) {
+    headers.set("Cache-Control", "public, max-age=0, must-revalidate");
+    headers.delete("CDN-Cache-Control");
+  } else {
+    headers.set("Cache-Control", "no-store");
+    headers.set("CDN-Cache-Control", "no-store");
+  }
   return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
 });
+
+function isRevalidatableAsset(pathname: string): boolean {
+  return /\.(?:js|css|svg|png|ico|webp|woff2?)$/i.test(pathname);
+}
 
 function assetRequest(request: Request): Request {
   try {
