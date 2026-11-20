@@ -131,6 +131,7 @@ const METADATA_COLUMNS: ReadonlyArray<[string, string]> = [
   ["reference_month_id", "ALTER TABLE expenses ADD COLUMN reference_month_id TEXT"],
   ["purchase_date", "ALTER TABLE expenses ADD COLUMN purchase_date TEXT"],
   ["finalized_zero", "ALTER TABLE expenses ADD COLUMN finalized_zero INTEGER NOT NULL DEFAULT 0"],
+  ["import_key", "ALTER TABLE expenses ADD COLUMN import_key TEXT"],
 ];
 
 const readyByDb = new WeakMap<D1Database, Promise<void>>();
@@ -154,7 +155,7 @@ async function initializeSchema(db: D1Database): Promise<void> {
     .map((sql) => db.prepare(sql));
   await db.batch(statements);
 
-  if ((await getSetting(db, "expense_meta_v1")) === "1") return;
+  if ((await getSetting(db, "expense_meta_v2")) === "1") return;
 
   const existing = await db.prepare("PRAGMA table_info(expenses)").all<{ name: string }>();
   const existingNames = new Set((existing.results ?? []).map((column) => column.name));
@@ -169,10 +170,14 @@ async function initializeSchema(db: D1Database): Promise<void> {
     db.prepare("CREATE INDEX IF NOT EXISTS idx_expenses_owner_partial ON expenses (owner_id, partial_id)"),
     db.prepare("CREATE INDEX IF NOT EXISTS idx_expenses_owner_series ON expenses (owner_id, series_id)"),
     db.prepare("CREATE INDEX IF NOT EXISTS idx_expenses_owner_ref_month ON expenses (owner_id, reference_month_id)"),
+    db.prepare("CREATE INDEX IF NOT EXISTS idx_expenses_owner_import_key ON expenses (owner_id, import_key)"),
   ]);
 
-  await backfillExpenseMetadata(db);
-  await setSetting(db, "expense_meta_v1", "1");
+  if ((await getSetting(db, "expense_meta_v1")) !== "1") {
+    await backfillExpenseMetadata(db);
+    await setSetting(db, "expense_meta_v1", "1");
+  }
+  await setSetting(db, "expense_meta_v2", "1");
 }
 
 export async function backfillExpenseMetadata(db: D1Database): Promise<number> {

@@ -11,3 +11,4 @@ export * from "./repos/reclassify.ts";
 export * from "./repos/payload.ts";
 export * from "./repos/living-card.ts";
 export * from "./repos/export.ts";
+export * from "./repos/import-nubank.ts";

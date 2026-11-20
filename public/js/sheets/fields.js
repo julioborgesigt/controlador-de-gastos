@@ -1,5 +1,6 @@
 import { centsToInput, money, parseMoney } from "../../format.js";
 import { quoteInstallments, solveInstallmentTriple } from "../../installment-link.js";
+import { isNubankName } from "../../shared/nubank-csv.js";
 import { request } from "../api.js";
 import { el, messageOf, on, shortMonth } from "../dom.js";
 import { render, renderSafely, setWorking, state } from "../state.js";
@@ -389,7 +390,12 @@ export function field(labelText, key, value, mode, placeholder = "") {
     inputmode: mode === "decimal" ? "decimal" : mode === "numeric" ? "numeric" : "text",
   });
   on(input, "input", (event) => {
+    const prevValue = state.sheet[key];
     state.sheet[key] = event.currentTarget.value;
+    if (state.sheet.mode === "card" && key === "name" && isNubankName(prevValue) !== isNubankName(state.sheet[key])) {
+      render();
+      return;
+    }
     if (state.sheet.mode === "card-pay" && state.sheet.billing === "installments" && (key === "chargedAmount" || key === "installmentCount" || key === "installmentAmount")) {
       linkCardPayAmounts(key);
       return;

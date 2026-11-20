@@ -9,6 +9,7 @@ import { registerCardRoutes } from "./routes/cards.ts";
 import { registerExpenseRoutes } from "./routes/expenses.ts";
 import { registerExpensePaymentRoutes } from "./routes/expense-payments.ts";
 import { registerExportRoutes } from "./routes/export.ts";
+import { registerImportRoutes } from "./routes/import.ts";
 import { registerAssetRoutes } from "./routes/assets.ts";
 
 const app = new Hono<AppEnv>();
@@ -37,7 +38,8 @@ app.use("/api/*", async (c, next) => {
       return c.json({ error: "Origem recusada." }, 403);
     }
     const length = Number(c.req.header("content-length") || 0);
-    if (length > 20_000) return c.json({ error: "Pedido grande demais." }, 413);
+    const maxBytes = c.req.path.startsWith("/api/import/") ? 512_000 : 20_000;
+    if (length > maxBytes) return c.json({ error: "Pedido grande demais." }, 413);
   }
   try {
     await ensureReady(c.env.DB);
@@ -56,6 +58,7 @@ registerCardRoutes(app);
 registerExpenseRoutes(app);
 registerExpensePaymentRoutes(app);
 registerExportRoutes(app);
+registerImportRoutes(app);
 registerAssetRoutes(app);
 
 export default {
