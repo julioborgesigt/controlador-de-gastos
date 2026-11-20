@@ -38,6 +38,33 @@ button { cursor: pointer; }
 
 button:disabled { opacity: 0.45; cursor: default; }
 
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--navy);
+  outline-offset: 2px;
+}
+
+.sheet:focus,
+.dialog:focus {
+  outline: none;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 #app { min-height: 100dvh; }
 
 .screen, .shell {
@@ -1389,14 +1416,6 @@ html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
   #app:has(.shell) {
     height: 100dvh;
     overflow: hidden;
-  }
-
-  button:focus-visible,
-  input:focus-visible,
-  select:focus-visible,
-  textarea:focus-visible {
-    outline: 2px solid var(--navy);
-    outline-offset: 2px;
   }
 
   label {

@@ -46,6 +46,7 @@ function applyTheme(theme) {
 applyTheme(localStorage.getItem("theme"));
 
 const root = document.querySelector("#app");
+const liveRegion = document.querySelector("#live-region");
 
 const state = {
   booting: true,
@@ -85,6 +86,9 @@ const state = {
 let overlayPushed = false;
 let suppressHistory = false;
 let allowLeave = false;
+let lastAnnouncement = "";
+let lastModalKey = "";
+let modalTriggerSnapshot = null;
 const monthStore = new Map();
 const monthLoads = new Map();
 
@@ -342,7 +346,152 @@ function currentMonthId() {
   return `${now.getFullYear()}-${month}`;
 }
 
+function announceLive(message) {
+  if (!liveRegion) return;
+  const text = String(message || "").trim();
+  if (!text) {
+    lastAnnouncement = "";
+    liveRegion.textContent = "";
+    return;
+  }
+  if (text === lastAnnouncement) return;
+  lastAnnouncement = text;
+  liveRegion.textContent = "";
+  queueMicrotask(() => {
+    if (liveRegion && lastAnnouncement === text) liveRegion.textContent = text;
+  });
+}
+
+function activeModalKey() {
+  if (state.confirm) return `confirm:${typeof state.confirm === "string" ? state.confirm : "custom"}`;
+  if (state.tabIntro) return `tabIntro:${state.tabIntro}`;
+  if (state.costDetail) return `costDetail:${state.costDetail.id || ""}`;
+  if (state.help) return `help:${state.help.title || ""}`;
+  if (state.expenseInfo) return `expenseInfo:${state.expenseInfo.id || ""}`;
+  if (state.sheet) return `sheet:${state.sheet.mode || ""}`;
+  return "";
+}
+
+function topmostModal() {
+  const modals = root.querySelectorAll(".dialog, .sheet");
+  return modals.length ? modals[modals.length - 1] : null;
+}
+
+function focusableIn(container) {
+  if (!container) return [];
+  const selector = 'button:not([disabled]), a[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  return [...container.querySelectorAll(selector)].filter(
+    (node) => node instanceof HTMLElement && (node.offsetParent !== null || node.getClientRects().length > 0),
+  );
+}
+
+function escapeAttr(value) {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(value);
+  return String(value).replace(/["\\]/g, "\\$&");
+}
+
+function captureFocusSnapshot() {
+  const active = document.activeElement;
+  if (!(active instanceof HTMLElement) || !root.contains(active)) return null;
+  let selectionStart = null;
+  let selectionEnd = null;
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) {
+    try {
+      selectionStart = active.selectionStart;
+      selectionEnd = active.selectionEnd;
+    } catch {
+      /* tipos como date/number não expõem seleção */
+    }
+  }
+  return {
+    inModal: Boolean(active.closest(".dialog, .sheet")),
+    id: active.id || "",
+    segment: active.getAttribute("data-segment") || "",
+    value: active.getAttribute("data-value") || "",
+    name: active.getAttribute("name") || "",
+    tag: active.tagName.toLowerCase(),
+    inputValue: active instanceof HTMLInputElement && (active.type === "radio" || active.type === "checkbox") ? active.value : "",
+    ariaLabel: active.getAttribute("aria-label") || "",
+    text: active.tagName === "BUTTON" ? active.textContent.trim() : "",
+    className: typeof active.className === "string" ? active.className.trim() : "",
+    selectionStart,
+    selectionEnd,
+  };
+}
+
+function resolveFocusSnapshot(snapshot, scope) {
+  if (!snapshot || !scope) return null;
+  if (snapshot.id) {
+    const byId = scope.querySelector(`#${escapeAttr(snapshot.id)}`);
+    if (byId instanceof HTMLElement) return byId;
+  }
+  if (snapshot.segment && snapshot.value) {
+    const bySeg = scope.querySelector(
+      `[data-segment="${escapeAttr(snapshot.segment)}"][data-value="${escapeAttr(snapshot.value)}"]`,
+    );
+    if (bySeg instanceof HTMLElement) return bySeg;
+  }
+  if (snapshot.name) {
+    const selector = snapshot.inputValue
+      ? `${snapshot.tag}[name="${escapeAttr(snapshot.name)}"][value="${escapeAttr(snapshot.inputValue)}"]`
+      : `${snapshot.tag}[name="${escapeAttr(snapshot.name)}"]`;
+    const byName = scope.querySelector(selector);
+    if (byName instanceof HTMLElement) return byName;
+  }
+  if (snapshot.ariaLabel) {
+    const byLabel = scope.querySelector(`${snapshot.tag}[aria-label="${escapeAttr(snapshot.ariaLabel)}"]`);
+    if (byLabel instanceof HTMLElement) return byLabel;
+  }
+  if (snapshot.tag === "button" && snapshot.text) {
+    const buttons = [...scope.querySelectorAll("button")];
+    const exact = buttons.find((btn) => btn.textContent.trim() === snapshot.text && btn.className.trim() === snapshot.className);
+    if (exact instanceof HTMLElement) return exact;
+    const byText = buttons.find((btn) => btn.textContent.trim() === snapshot.text);
+    if (byText instanceof HTMLElement) return byText;
+  }
+  return null;
+}
+
+function focusElement(target, snapshot = null) {
+  if (!(target instanceof HTMLElement) || target.hasAttribute("disabled")) return false;
+  target.focus({ preventScroll: true });
+  if (
+    snapshot
+    && snapshot.selectionStart !== null
+    && (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)
+  ) {
+    try {
+      target.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd ?? snapshot.selectionStart);
+    } catch {
+      /* ignora tipos sem setSelectionRange */
+    }
+  }
+  return true;
+}
+
+function applyFocusAfterRender(focusBefore, allowModal = true) {
+  const nextModalKey = allowModal ? activeModalKey() : "";
+  const modal = allowModal ? topmostModal() : null;
+  if (!lastModalKey && nextModalKey) {
+    if (focusBefore && !focusBefore.inModal) modalTriggerSnapshot = focusBefore;
+    if (modal instanceof HTMLElement) modal.focus({ preventScroll: true });
+  } else if (lastModalKey && !nextModalKey) {
+    const trigger = modalTriggerSnapshot;
+    modalTriggerSnapshot = null;
+    if (trigger) focusElement(resolveFocusSnapshot(trigger, root));
+  } else if (lastModalKey !== nextModalKey) {
+    if (modal instanceof HTMLElement) modal.focus({ preventScroll: true });
+  } else if (focusBefore) {
+    const scope = nextModalKey && modal ? modal : root;
+    const restored = resolveFocusSnapshot(focusBefore, scope);
+    if (restored) focusElement(restored, focusBefore);
+    else if (nextModalKey && modal instanceof HTMLElement) modal.focus({ preventScroll: true });
+  }
+  lastModalKey = nextModalKey;
+}
+
 function render() {
+  const focusBefore = captureFocusSnapshot();
   const lockedScroll = document.body.classList.contains("sheet-open")
     ? Number(document.body.dataset.scrollLock || 0)
     : window.scrollY;
@@ -352,15 +501,18 @@ function render() {
   const keepPlace = state.viewKey === viewKey;
   root.replaceChildren();
   root.removeAttribute("aria-busy");
+  announceLive(state.error || state.notice || "");
   if (state.booting) {
     root.append(bootMark());
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
+    applyFocusAfterRender(focusBefore, false);
     syncOverlayHistory();
     return;
   }
   if (state.authed && !state.data && !state.needsPeriod && !state.choosing) {
     root.append(bootMark(true));
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
+    applyFocusAfterRender(focusBefore, false);
     syncOverlayHistory();
     return;
   }
@@ -368,6 +520,7 @@ function render() {
     root.append(authScreen());
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
+    applyFocusAfterRender(focusBefore, false);
     syncOverlayHistory();
     return;
   }
@@ -375,6 +528,7 @@ function render() {
     root.append(periodGate());
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
+    applyFocusAfterRender(focusBefore, false);
     syncOverlayHistory();
     return;
   }
@@ -382,6 +536,7 @@ function render() {
     root.append(devicePromptScreen());
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
+    applyFocusAfterRender(focusBefore, false);
     syncOverlayHistory();
     return;
   }
@@ -389,6 +544,7 @@ function render() {
     root.append(accessScreen());
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
+    applyFocusAfterRender(focusBefore, false);
     syncOverlayHistory();
     return;
   }
@@ -408,6 +564,7 @@ function render() {
     const nextContent = document.querySelector(".content");
     if (nextContent) nextContent.scrollTop = contentScroll;
   }
+  applyFocusAfterRender(focusBefore, true);
   queueMicrotask(centerMonthChip);
   syncOverlayHistory();
 }
@@ -564,6 +721,29 @@ function blockBackgroundWheel(event) {
 
 function blockBackgroundKeys(event) {
   if (!document.body.classList.contains("sheet-open")) return;
+  if (event.key === "Tab") {
+    const modal = topmostModal();
+    if (!modal) return;
+    const items = focusableIn(modal);
+    if (!items.length) {
+      event.preventDefault();
+      if (modal instanceof HTMLElement) modal.focus({ preventScroll: true });
+      return;
+    }
+    const first = items[0];
+    const last = items[items.length - 1];
+    const active = document.activeElement;
+    if (event.shiftKey) {
+      if (active === first || active === modal || !modal.contains(active)) {
+        event.preventDefault();
+        last.focus();
+      }
+    } else if (active === last || !modal.contains(active)) {
+      event.preventDefault();
+      first.focus();
+    }
+    return;
+  }
   if (event.key === "Escape") {
     event.preventDefault();
     if (state.confirm) closeConfirm();
@@ -1046,7 +1226,7 @@ function tabIntroDialog() {
       if (event.target === overlay) closeTabIntro(false);
     },
   }, [
-    el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "tab-intro-title" }, [
+    el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "tab-intro-title", tabindex: "-1" }, [
       el("button", { class: "dialog-close", type: "button", "aria-label": "Fechar", onclick: () => closeTabIntro(false) }, "×"),
       el("h2", { id: "tab-intro-title" }, info.title),
       el("div", { class: "tab-info-list" }, [
@@ -1164,8 +1344,8 @@ function helpDialog() {
       if (event.target === overlay) close();
     },
   }, [
-    el("div", { class: "dialog", role: "dialog", "aria-modal": "true" }, [
-      el("h2", {}, help.title),
+    el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "help-title", tabindex: "-1" }, [
+      el("h2", { id: "help-title" }, help.title),
       ...help.lines.map((line) => el("p", {}, line)),
       el("div", { class: "actions" }, [
         el("button", { class: "primary", type: "button", onclick: close }, "Entendi"),
@@ -1589,7 +1769,7 @@ function confirmDialog() {
       if (event.target === overlay) closeConfirm();
     },
   }, [
-    el("div", { class: "dialog", role: "alertdialog", "aria-modal": "true", "aria-labelledby": "confirm-title" }, [
+    el("div", { class: "dialog", role: "alertdialog", "aria-modal": "true", "aria-labelledby": "confirm-title", tabindex: "-1" }, [
       el("h2", { id: "confirm-title" }, copy.title),
       el("p", {}, copy.body),
       el("div", { class: "actions" }, [
@@ -3995,7 +4175,7 @@ function costDetailDialog() {
       if (event.target === overlay) closeCostDetail();
     },
   }, [
-    el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-label": title }, [
+    el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-label": title, tabindex: "-1" }, [
       el("button", { class: "dialog-close", type: "button", "aria-label": "Fechar", onclick: closeCostDetail }, "×"),
       el("h2", {}, title),
       el("p", { class: "muted" }, lede),
@@ -4953,7 +5133,7 @@ function expenseInfoDialog() {
       if (event.target === overlay) closeExpenseInfo();
     },
   }, [
-    el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "expense-info-title" }, [
+    el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "expense-info-title", tabindex: "-1" }, [
       el("button", { class: "dialog-close", type: "button", "aria-label": "Fechar", onclick: closeExpenseInfo }, "×"),
       el("h2", { id: "expense-info-title" }, info.name),
       el("p", { class: "money inline" }, info.amount),
@@ -5122,7 +5302,7 @@ function attachSheetDrag(panel) {
 
 function sheet() {
   const draft = state.sheet;
-  const panel = el("form", { class: "sheet" }, [
+  const panel = el("form", { class: "sheet", role: "dialog", "aria-modal": "true", tabindex: "-1" }, [
     el("div", { class: "sheet-grab" }, [el("div", { class: "handle" })]),
   ]);
   panel.addEventListener("submit", saveSheet);
@@ -5657,6 +5837,7 @@ function segmented(key, options, current) {
   return el("div", { class: "choice" }, options.map(([value, label]) => el("button", {
     type: "button",
     class: current === value ? "on" : "",
+    "aria-pressed": current === value ? "true" : "false",
     "data-segment": key,
     "data-value": value,
     onclick: () => {
