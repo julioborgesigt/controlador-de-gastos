@@ -1,6 +1,7 @@
 import { Hono } from "hono";
 import { ensureReady } from "./db.ts";
-import { setApiSecurityHeaders } from "./http.ts";
+import { logError, requestIdOf, setApiSecurityHeaders, type AppEnv } from "./http.ts";
+import { registerHealthRoutes } from "./routes/health.ts";
 import { registerAuthRoutes } from "./routes/auth.ts";
 import { registerShareRoutes } from "./routes/shares.ts";
 import { registerMonthRoutes } from "./routes/months.ts";
@@ -9,23 +10,21 @@ import { registerExpenseRoutes } from "./routes/expenses.ts";
 import { registerExpensePaymentRoutes } from "./routes/expense-payments.ts";
 import { registerAssetRoutes } from "./routes/assets.ts";
 
-const app = new Hono<{ Bindings: Env }>();
+const app = new Hono<AppEnv>();
 
 app.onError((error, c) => {
-  console.error(JSON.stringify({
-    message: "unhandled_error",
-    path: c.req.path,
-    method: c.req.method,
-    error: error instanceof Error ? error.message : "unknown",
-  }));
+  const requestId = logError(c, "unhandled_error", error);
   setApiSecurityHeaders(c);
   if (c.req.path.startsWith("/api/")) {
-    return c.json({ error: "Não foi possível concluir a solicitação. Tente novamente." }, 500);
+    return c.json({ error: "Não foi possível concluir a solicitação. Tente novamente.", requestId }, 500);
   }
   return c.text("Não foi possível carregar a página.", 500);
 });
 
+registerHealthRoutes(app);
+
 app.use("/api/*", async (c, next) => {
+  requestIdOf(c);
   setApiSecurityHeaders(c);
   if (!["GET", "HEAD"].includes(c.req.method)) {
     const origin = c.req.header("origin");
@@ -42,8 +41,8 @@ app.use("/api/*", async (c, next) => {
   try {
     await ensureReady(c.env.DB);
   } catch (error) {
-    console.error(JSON.stringify({ message: "database_init_failed", error: error instanceof Error ? error.message : "unknown" }));
-    return c.json({ error: "Não foi possível abrir o banco de gastos." }, 500);
+    const requestId = logError(c, "database_init_failed", error);
+    return c.json({ error: "Não foi possível abrir o banco de gastos.", requestId }, 500);
   }
   await next();
   setApiSecurityHeaders(c);

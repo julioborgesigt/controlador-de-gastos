@@ -13,15 +13,49 @@ import {
 import type { Payment, Section } from "./domain.ts";
 import { accessTo, findUserById, getSetting, pruneExpiredAuthSettings, setSetting } from "./db.ts";
 
-export type App = Hono<{ Bindings: Env }>;
-export type AppContext = Context<{ Bindings: Env }>;
+export type AppEnv = {
+  Bindings: Env;
+  Variables: {
+    requestId: string;
+  };
+};
+export type App = Hono<AppEnv>;
+export type AppContext = Context<AppEnv>;
 
 export const COOKIE = "gastos_session";
 export const AUTH_ERROR = "Entre com CPF e senha.";
 export const PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=()";
 export const ASSET_CSP = "default-src 'self'; style-src 'self'; font-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 
+export function requestIdOf(c: AppContext): string {
+  const existing = c.get("requestId");
+  if (existing) return existing;
+  const derived = c.req.header("cf-ray")?.trim() || crypto.randomUUID();
+  c.set("requestId", derived);
+  return derived;
+}
+
+export function logError(
+  c: AppContext,
+  event: string,
+  error: unknown,
+  extra: Record<string, unknown> = {},
+): string {
+  const requestId = requestIdOf(c);
+  console.error(JSON.stringify({
+    level: "error",
+    event,
+    requestId,
+    method: c.req.method,
+    path: c.req.path,
+    error: error instanceof Error ? error.message : "unknown",
+    ...extra,
+  }));
+  return requestId;
+}
+
 export function setApiSecurityHeaders(c: AppContext): void {
+  c.header("X-Request-Id", requestIdOf(c));
   c.header("Cache-Control", "no-store");
   c.header("X-Content-Type-Options", "nosniff");
   c.header("Referrer-Policy", "no-referrer");
