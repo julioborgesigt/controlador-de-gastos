@@ -107,7 +107,11 @@ export async function startAppServer(): Promise<AppServer> {
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     db,
-    close: () => new Promise<void>((resolve, reject) => server.close((err) => (err ? reject(err) : resolve()))),
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        if (typeof server.closeAllConnections === "function") server.closeAllConnections();
+      }),
   };
 }
 
@@ -152,15 +156,63 @@ export type BrowserPage = {
   close: () => Promise<void>;
 };
 
-export async function launchBrowserPage(baseUrl: string, executablePath: string): Promise<BrowserPage> {
+export type BrowserInstance = {
+  newPage: (baseUrl: string) => Promise<BrowserPage>;
+  close: () => Promise<void>;
+};
+
+function killProcessGroup(proc: ChildProcess, signal: NodeJS.Signals) {
+  if (!proc.pid) return;
+  try {
+    process.kill(-proc.pid, signal);
+  } catch {
+    try {
+      proc.kill(signal);
+    } catch {
+      /* already exited */
+    }
+  }
+}
+
+async function terminateProcess(proc: ChildProcess, userDataDir: string): Promise<void> {
+  const exited = new Promise<void>((resolve) => {
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      resolve();
+      return;
+    }
+    proc.once("exit", () => resolve());
+  });
+  killProcessGroup(proc, "SIGTERM");
+  const timeout = setTimeout(() => {
+    if (proc.exitCode === null && proc.signalCode === null) killProcessGroup(proc, "SIGKILL");
+  }, 1500);
+  timeout.unref();
+  await exited;
+  clearTimeout(timeout);
+  proc.stdout?.destroy();
+  proc.stderr?.destroy();
+  fs.rmSync(userDataDir, { recursive: true, force: true });
+}
+
+export async function launchBrowser(executablePath: string): Promise<BrowserInstance> {
   const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "gastos-e2e-"));
   const proc: ChildProcess = spawn(
     executablePath,
     [
       "--headless=new",
       "--no-sandbox",
+      "--disable-setuid-sandbox",
       "--disable-gpu",
       "--disable-dev-shm-usage",
+      "--disable-crash-reporter",
+      "--disable-breakpad",
+      "--disable-background-networking",
+      "--disable-component-update",
+      "--disable-default-apps",
+      "--disable-extensions",
+      "--disable-sync",
+      "--disable-features=Translate,BackForwardCache,OptimizationHints",
+      "--mute-audio",
       "--no-first-run",
       "--no-default-browser-check",
       "--no-proxy-server",
@@ -169,36 +221,77 @@ export async function launchBrowserPage(baseUrl: string, executablePath: string)
       "--window-size=390,844",
       "about:blank",
     ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    { detached: true, stdio: ["ignore", "pipe", "pipe"] },
   );
 
-  const wsUrl = await new Promise<string>((resolve, reject) => {
-    let stderr = "";
-    const timer = setTimeout(() => reject(new Error(`Timeout iniciando Chromium: ${stderr}`)), 15_000);
-    proc.on("exit", (code) => {
-      clearTimeout(timer);
-      reject(new Error(`Chromium encerrou cedo (code ${code}): ${stderr}`));
-    });
-    proc.stderr?.on("data", (chunk: Buffer) => {
-      stderr += chunk.toString();
-      const match = /DevTools listening on (ws:\/\/[^\s]+)/.exec(stderr);
-      if (match?.[1]) {
-        clearTimeout(timer);
-        resolve(match[1]);
-      }
-    });
-  });
+  const cleanupOnExit = () => {
+    killProcessGroup(proc, "SIGKILL");
+    try {
+      fs.rmSync(userDataDir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  };
+  process.once("exit", cleanupOnExit);
 
-  const ws = new WebSocket(wsUrl);
-  await new Promise<void>((resolve, reject) => {
-    ws.addEventListener("open", () => resolve(), { once: true });
-    ws.addEventListener("error", () => reject(new Error("Falha ao conectar no DevTools WebSocket")), { once: true });
-  });
+  let ws: WebSocket | null = null;
+  let closed = false;
+
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    process.off("exit", cleanupOnExit);
+    try {
+      ws?.close();
+    } catch {
+      /* ignore */
+    }
+    await terminateProcess(proc, userDataDir);
+  };
+
+  let wsUrl: string;
+  try {
+    wsUrl = await new Promise<string>((resolve, reject) => {
+      let stderr = "";
+      const timer = setTimeout(() => {
+        reject(new Error(`Timeout iniciando Chromium (30s): ${stderr.slice(-500)}`));
+      }, 30_000);
+      timer.unref();
+      proc.once("exit", (code) => {
+        clearTimeout(timer);
+        reject(new Error(`Chromium encerrou cedo (code ${code}): ${stderr.slice(-500)}`));
+      });
+      proc.stderr?.on("data", (chunk: Buffer) => {
+        stderr += chunk.toString();
+        const match = /DevTools listening on (ws:\/\/[^\s]+)/.exec(stderr);
+        if (match?.[1]) {
+          clearTimeout(timer);
+          resolve(match[1]);
+        }
+      });
+    });
+
+    ws = new WebSocket(wsUrl);
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => reject(new Error("Timeout conectando ao DevTools WebSocket")), 10_000);
+      timer.unref();
+      ws!.addEventListener("open", () => {
+        clearTimeout(timer);
+        resolve();
+      }, { once: true });
+      ws!.addEventListener("error", () => {
+        clearTimeout(timer);
+        reject(new Error("Falha ao conectar no DevTools WebSocket"));
+      }, { once: true });
+    });
+  } catch (error) {
+    await close();
+    throw error;
+  }
 
   let nextId = 1;
   const pending = new Map<number, { resolve: (value: Record<string, unknown>) => void; reject: (err: Error) => void }>();
-  const errors: string[] = [];
-  let pageSessionId = "";
+  const sessionErrors = new Map<string, string[]>();
 
   ws.addEventListener("message", (event) => {
     const msg = JSON.parse(String(event.data)) as CdpResponse;
@@ -209,15 +302,17 @@ export async function launchBrowserPage(baseUrl: string, executablePath: string)
       else entry.resolve(msg.result || {});
       return;
     }
+    const targetErrors = msg.sessionId ? sessionErrors.get(msg.sessionId) : undefined;
+    if (!targetErrors) return;
     if (msg.method === "Runtime.exceptionThrown") {
       const details = (msg.params?.exceptionDetails || {}) as { text?: string; exception?: { description?: string } };
-      errors.push(`RuntimeException: ${details.exception?.description || details.text || "unknown"}`);
+      targetErrors.push(`RuntimeException: ${details.exception?.description || details.text || "unknown"}`);
     } else if (msg.method === "Console.messageAdded") {
       const message = (msg.params?.message || {}) as { level?: string; text?: string };
-      if (message.level === "error") errors.push(`ConsoleError: ${message.text || ""}`);
+      if (message.level === "error") targetErrors.push(`ConsoleError: ${message.text || ""}`);
     } else if (msg.method === "Log.entryAdded") {
       const entry = (msg.params?.entry || {}) as { level?: string; text?: string; source?: string };
-      if (entry.level === "error") errors.push(`LogError(${entry.source || "browser"}): ${entry.text || ""}`);
+      if (entry.level === "error") targetErrors.push(`LogError(${entry.source || "browser"}): ${entry.text || ""}`);
     }
   });
 
@@ -227,199 +322,201 @@ export async function launchBrowserPage(baseUrl: string, executablePath: string)
     if (sessionId) payload.sessionId = sessionId;
     return new Promise<Record<string, unknown>>((resolve, reject) => {
       pending.set(id, { resolve, reject });
-      ws.send(JSON.stringify(payload));
+      ws!.send(JSON.stringify(payload));
     });
   };
 
-  const created = await send("Target.createTarget", { url: "about:blank" });
-  const targetId = String(created.targetId || "");
-  const attached = await send("Target.attachToTarget", { targetId, flatten: true });
-  pageSessionId = String(attached.sessionId || "");
+  const newPage = async (baseUrl: string): Promise<BrowserPage> => {
+    const ctx = await send("Target.createBrowserContext", { disposeOnDetach: true });
+    const browserContextId = String(ctx.browserContextId || "");
+    const created = await send("Target.createTarget", { url: "about:blank", browserContextId });
+    const targetId = String(created.targetId || "");
+    const attached = await send("Target.attachToTarget", { targetId, flatten: true });
+    const pageSessionId = String(attached.sessionId || "");
+    const errors: string[] = [];
+    sessionErrors.set(pageSessionId, errors);
 
-  await send("Page.enable", {}, pageSessionId);
-  await send("Runtime.enable", {}, pageSessionId);
-  await send("Console.enable", {}, pageSessionId);
-  await send("Log.enable", {}, pageSessionId);
+    await send("Page.enable", {}, pageSessionId);
+    await send("Runtime.enable", {}, pageSessionId);
+    await send("Console.enable", {}, pageSessionId);
+    await send("Log.enable", {}, pageSessionId);
 
-  const setViewport = async (width: number, height: number, mobile = width < 768) => {
-    await send("Emulation.setDeviceMetricsOverride", {
-      width,
-      height,
-      deviceScaleFactor: mobile ? 2 : 1,
-      mobile,
-    }, pageSessionId);
-  };
-
-  await setViewport(390, 844, true);
-
-  const evaluate = async <T = unknown>(expression: string): Promise<T> => {
-    const res = await send("Runtime.evaluate", {
-      expression,
-      returnByValue: true,
-      awaitPromise: true,
-    }, pageSessionId);
-    if (res.exceptionDetails) {
-      const details = res.exceptionDetails as { text?: string; exception?: { description?: string } };
-      throw new Error(`Erro em evaluate: ${details.exception?.description || details.text || expression}`);
-    }
-    const result = (res.result || {}) as { value?: T };
-    return result.value as T;
-  };
-
-  const waitFor = async (predicateExpr: string, timeoutMs = 6000) => {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-      if (await evaluate<boolean>(`Boolean(${predicateExpr})`)) return;
-      await new Promise((r) => setTimeout(r, 35));
-    }
-    const bodyText = await evaluate<string>("document.body ? document.body.innerText.slice(0, 400) : ''").catch(() => "");
-    throw new Error(`Timeout aguardando (${predicateExpr}). Erros: ${JSON.stringify(errors)}. Tela: ${bodyText}`);
-  };
-
-  const waitForSelector = (selector: string, timeoutMs = 6000) =>
-    waitFor(`document.querySelector(${JSON.stringify(selector)})`, timeoutMs);
-
-  const waitForText = (text: string, timeoutMs = 6000) =>
-    waitFor(`(document.body?.innerText || "").includes(${JSON.stringify(text)})`, timeoutMs);
-
-  const goto = async (urlPath: string) => {
-    const targetUrl = urlPath.startsWith("http") ? urlPath : `${baseUrl}${urlPath}`;
-    await send("Page.navigate", { url: targetUrl }, pageSessionId);
-    await waitFor('document.readyState === "complete"');
-  };
-
-  const click = async (selector: string) => {
-    await waitForSelector(selector);
-    await evaluate(`(() => {
-      const el = document.querySelector(${JSON.stringify(selector)});
-      if (!el) throw new Error("Elemento não encontrado: " + ${JSON.stringify(selector)});
-      el.scrollIntoView({ block: "center" });
-      el.click();
-    })()`);
-  };
-
-  const clickButton = async (text: string, scopeSelector = "body") => {
-    await waitFor(`(() => {
-      const scope = document.querySelector(${JSON.stringify(scopeSelector)});
-      if (!scope) return false;
-      const buttons = [...scope.querySelectorAll("button")];
-      return buttons.some((b) => !b.disabled && b.textContent.trim().includes(${JSON.stringify(text)}));
-    })()`);
-    await evaluate(`(() => {
-      const scope = document.querySelector(${JSON.stringify(scopeSelector)});
-      const buttons = [...scope.querySelectorAll("button")].filter((b) => !b.disabled);
-      const exact = buttons.find((b) => b.textContent.trim() === ${JSON.stringify(text)});
-      const target = exact || buttons.find((b) => b.textContent.trim().includes(${JSON.stringify(text)}));
-      if (!target) throw new Error("Botão não encontrado: " + ${JSON.stringify(text)});
-      target.scrollIntoView({ block: "center" });
-      target.click();
-    })()`);
-  };
-
-  const fill = async (selector: string, value: string) => {
-    await waitForSelector(selector);
-    await evaluate(`(() => {
-      const el = document.querySelector(${JSON.stringify(selector)});
-      if (!el) throw new Error("Campo não encontrado: " + ${JSON.stringify(selector)});
-      el.focus();
-      const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
-      if (setter) setter.call(el, ${JSON.stringify(value)});
-      else el.value = ${JSON.stringify(value)};
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-    })()`);
-  };
-
-  const typeKeys = async (text: string) => {
-    for (const ch of text) {
-      await send("Input.dispatchKeyEvent", { type: "keyDown", text: ch, unmodifiedText: ch, key: ch }, pageSessionId);
-      await send("Input.dispatchKeyEvent", { type: "keyUp", key: ch }, pageSessionId);
-    }
-  };
-
-  const pressKey = async (key: string, code = key) => {
-    const keyCodes: Record<string, number> = { Escape: 27, Enter: 13, Tab: 9, Backspace: 8 };
-    const windowsVirtualKeyCode = keyCodes[key] || 0;
-    await send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode }, pageSessionId);
-    await send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode }, pageSessionId);
-  };
-
-  const selectOption = async (selector: string, value: string) => {
-    await waitForSelector(selector);
-    await evaluate(`(() => {
-      const el = document.querySelector(${JSON.stringify(selector)});
-      if (!el) throw new Error("Select não encontrado: " + ${JSON.stringify(selector)});
-      el.value = ${JSON.stringify(value)};
-      el.dispatchEvent(new Event("change", { bubbles: true }));
-    })()`);
-  };
-
-  const drag = async (selector: string, dx: number, dy = 0) => {
-    await waitForSelector(selector);
-    const box = await evaluate<{ x: number; y: number }>(`(() => {
-      const el = document.querySelector(${JSON.stringify(selector)});
-      el.scrollIntoView({ block: "center" });
-      const rect = el.getBoundingClientRect();
-      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-    })()`);
-    await send("Input.dispatchMouseEvent", { type: "mousePressed", x: box.x, y: box.y, button: "left", clickCount: 1 }, pageSessionId);
-    const steps = 6;
-    for (let i = 1; i <= steps; i += 1) {
-      await send("Input.dispatchMouseEvent", {
-        type: "mouseMoved",
-        x: box.x + (dx * i) / steps,
-        y: box.y + (dy * i) / steps,
-        button: "left",
-        buttons: 1,
+    const setViewport = async (width: number, height: number, mobile = width < 768) => {
+      await send("Emulation.setDeviceMetricsOverride", {
+        width,
+        height,
+        deviceScaleFactor: mobile ? 2 : 1,
+        mobile,
       }, pageSessionId);
-    }
-    await send("Input.dispatchMouseEvent", {
-      type: "mouseReleased",
-      x: box.x + dx,
-      y: box.y + dy,
-      button: "left",
-      clickCount: 1,
-    }, pageSessionId);
-  };
+    };
 
-  const close = async () => {
-    try {
-      ws.close();
-    } catch {
-      /* ignore */
-    }
-    const exited = new Promise<void>((resolve) => {
-      if (proc.exitCode !== null) {
-        resolve();
-        return;
+    await setViewport(390, 844, true);
+
+    const evaluate = async <T = unknown>(expression: string): Promise<T> => {
+      const res = await send("Runtime.evaluate", {
+        expression,
+        returnByValue: true,
+        awaitPromise: true,
+      }, pageSessionId);
+      if (res.exceptionDetails) {
+        const details = res.exceptionDetails as { text?: string; exception?: { description?: string } };
+        throw new Error(`Erro em evaluate: ${details.exception?.description || details.text || expression}`);
       }
-      proc.once("exit", () => resolve());
-    });
-    proc.kill("SIGTERM");
-    const timeout = setTimeout(() => {
-      if (proc.exitCode === null) proc.kill("SIGKILL");
-    }, 2000);
-    await exited;
-    clearTimeout(timeout);
-    fs.rmSync(userDataDir, { recursive: true, force: true });
+      const result = (res.result || {}) as { value?: T };
+      return result.value as T;
+    };
+
+    const waitFor = async (predicateExpr: string, timeoutMs = 8000) => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (await evaluate<boolean>(`Boolean(${predicateExpr})`)) return;
+        await new Promise((r) => setTimeout(r, 35));
+      }
+      const bodyText = await evaluate<string>("document.body ? document.body.innerText.slice(0, 400) : ''").catch(() => "");
+      throw new Error(`Timeout aguardando (${predicateExpr}). Erros: ${JSON.stringify(errors)}. Tela: ${bodyText}`);
+    };
+
+    const waitForSelector = (selector: string, timeoutMs = 8000) =>
+      waitFor(`document.querySelector(${JSON.stringify(selector)})`, timeoutMs);
+
+    const waitForText = (text: string, timeoutMs = 8000) =>
+      waitFor(`(document.body?.innerText || "").includes(${JSON.stringify(text)})`, timeoutMs);
+
+    const goto = async (urlPath: string) => {
+      const targetUrl = urlPath.startsWith("http") ? urlPath : `${baseUrl}${urlPath}`;
+      await send("Page.navigate", { url: targetUrl }, pageSessionId);
+      await waitFor('document.readyState === "complete"');
+    };
+
+    const click = async (selector: string) => {
+      await waitForSelector(selector);
+      await evaluate(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) throw new Error("Elemento não encontrado: " + ${JSON.stringify(selector)});
+        el.scrollIntoView({ block: "center" });
+        el.click();
+      })()`);
+    };
+
+    const clickButton = async (text: string, scopeSelector = "body") => {
+      await waitFor(`(() => {
+        const scope = document.querySelector(${JSON.stringify(scopeSelector)});
+        if (!scope) return false;
+        const buttons = [...scope.querySelectorAll("button")];
+        return buttons.some((b) => !b.disabled && b.textContent.trim().includes(${JSON.stringify(text)}));
+      })()`);
+      await evaluate(`(() => {
+        const scope = document.querySelector(${JSON.stringify(scopeSelector)});
+        const buttons = [...scope.querySelectorAll("button")].filter((b) => !b.disabled);
+        const exact = buttons.find((b) => b.textContent.trim() === ${JSON.stringify(text)});
+        const target = exact || buttons.find((b) => b.textContent.trim().includes(${JSON.stringify(text)}));
+        if (!target) throw new Error("Botão não encontrado: " + ${JSON.stringify(text)});
+        target.scrollIntoView({ block: "center" });
+        target.click();
+      })()`);
+    };
+
+    const fill = async (selector: string, value: string) => {
+      await waitForSelector(selector);
+      await evaluate(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) throw new Error("Campo não encontrado: " + ${JSON.stringify(selector)});
+        el.focus();
+        const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
+        if (setter) setter.call(el, ${JSON.stringify(value)});
+        else el.value = ${JSON.stringify(value)};
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      })()`);
+    };
+
+    const typeKeys = async (text: string) => {
+      for (const ch of text) {
+        await send("Input.dispatchKeyEvent", { type: "keyDown", text: ch, unmodifiedText: ch, key: ch }, pageSessionId);
+        await send("Input.dispatchKeyEvent", { type: "keyUp", key: ch }, pageSessionId);
+      }
+    };
+
+    const pressKey = async (key: string, code = key) => {
+      const keyCodes: Record<string, number> = { Escape: 27, Enter: 13, Tab: 9, Backspace: 8 };
+      const windowsVirtualKeyCode = keyCodes[key] || 0;
+      await send("Input.dispatchKeyEvent", { type: "keyDown", key, code, windowsVirtualKeyCode }, pageSessionId);
+      await send("Input.dispatchKeyEvent", { type: "keyUp", key, code, windowsVirtualKeyCode }, pageSessionId);
+    };
+
+    const selectOption = async (selector: string, value: string) => {
+      await waitForSelector(selector);
+      await evaluate(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        if (!el) throw new Error("Select não encontrado: " + ${JSON.stringify(selector)});
+        el.value = ${JSON.stringify(value)};
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      })()`);
+    };
+
+    const drag = async (selector: string, dx: number, dy = 0) => {
+      await waitForSelector(selector);
+      const box = await evaluate<{ x: number; y: number }>(`(() => {
+        const el = document.querySelector(${JSON.stringify(selector)});
+        el.scrollIntoView({ block: "center" });
+        const rect = el.getBoundingClientRect();
+        return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      })()`);
+      await send("Input.dispatchMouseEvent", { type: "mousePressed", x: box.x, y: box.y, button: "left", clickCount: 1 }, pageSessionId);
+      const steps = 6;
+      for (let i = 1; i <= steps; i += 1) {
+        await send("Input.dispatchMouseEvent", {
+          type: "mouseMoved",
+          x: box.x + (dx * i) / steps,
+          y: box.y + (dy * i) / steps,
+          button: "left",
+          buttons: 1,
+        }, pageSessionId);
+      }
+      await send("Input.dispatchMouseEvent", {
+        type: "mouseReleased",
+        x: box.x + dx,
+        y: box.y + dy,
+        button: "left",
+        clickCount: 1,
+      }, pageSessionId);
+    };
+
+    const closePage = async () => {
+      sessionErrors.delete(pageSessionId);
+      try {
+        await send("Target.closeTarget", { targetId });
+      } catch {
+        /* ignore */
+      }
+      if (browserContextId) {
+        try {
+          await send("Target.disposeBrowserContext", { browserContextId });
+        } catch {
+          /* ignore */
+        }
+      }
+    };
+
+    return {
+      errors,
+      goto,
+      setViewport,
+      evaluate,
+      waitFor,
+      waitForSelector,
+      waitForText,
+      click,
+      clickButton,
+      fill,
+      typeKeys,
+      pressKey,
+      selectOption,
+      drag,
+      close: closePage,
+    };
   };
 
-  return {
-    errors,
-    goto,
-    setViewport,
-    evaluate,
-    waitFor,
-    waitForSelector,
-    waitForText,
-    click,
-    clickButton,
-    fill,
-    typeKeys,
-    pressKey,
-    selectOption,
-    drag,
-    close,
-  };
+  return { newPage, close };
 }

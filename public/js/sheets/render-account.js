@@ -1,5 +1,6 @@
 import { passkeyWhen } from "../../format.js";
 import { removeShare, setSharePermission } from "../account.js";
+import { downloadExport } from "../api.js";
 import { registerPasskey, removePasskey } from "../auth.js";
 import { el } from "../dom.js";
 import { askReset, periodFields, periodSelect } from "../setup.js";
@@ -9,6 +10,23 @@ import { field, monthChecks, monthSelect, segmented } from "./fields.js";
 import { closeSheet } from "./openers.js";
 
 export function renderAccountSheet(panel, draft) {
+  if (draft.mode === "export") {
+    const scope = draft.scope === "month" ? "month" : "all";
+    panel.append(
+      el("h2", {}, "Exportar backup"),
+      el("p", { class: "muted" }, "Baixe seus lançamentos em planilha (CSV) para conferir no Excel/Sheets ou em backup completo (JSON)."),
+      el("div", { class: "field" }, [
+        el("label", {}, "O que exportar"),
+        segmented("scope", [["all", "Período inteiro"], ["month", "Somente este mês"]], scope),
+      ]),
+      el("div", { class: "stack-actions" }, [
+        el("button", { class: "primary", type: "button", onclick: () => downloadExport("csv", scope) }, "Baixar planilha (CSV)"),
+        el("button", { class: "secondary", type: "button", onclick: () => downloadExport("json", scope) }, "Baixar backup completo (JSON)"),
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Fechar"),
+      ]),
+    );
+    return true;
+  }
   if (draft.mode === "share") {
     panel.append(
       el("h2", {}, "Compartilhar dados"),

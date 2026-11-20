@@ -46,6 +46,7 @@ import { cardDetail, cardsHome, purchaseDetail } from "./js/views/cards.js";
 import { cashHome } from "./js/views/cash.js";
 import { sectionList } from "./js/views/expenses.js";
 import { incomeView } from "./js/views/income.js";
+import { overviewView } from "./js/views/overview.js";
 import { summary } from "./js/views/summary.js";
 
 let bootGeneration = 0;
@@ -66,6 +67,7 @@ export async function boot() {
   try {
     const session = await request("/api/session", { attempts: 2 });
     if (generation !== bootGeneration) return;
+    state.offline = false;
     setBootProgress(0.62);
     state.needsSetup = session.needsSetup;
     if (session.theme) applyTheme(session.theme);
@@ -88,12 +90,17 @@ export async function boot() {
   } catch (error) {
     if (generation !== bootGeneration) return;
     const lostSession = error.status === 401;
-    if (!lostSession) state.error = messageOf(error);
     if (lostSession || !state.data) {
+      if (!lostSession) state.error = messageOf(error);
+      state.offline = false;
       state.authed = false;
       state.data = null;
       state.needsPeriod = false;
       clearMonthCache();
+    } else {
+      state.authed = true;
+      state.offline = true;
+      state.error = "";
     }
   } finally {
     if (generation !== bootGeneration) return;
@@ -109,7 +116,7 @@ function renderApp() {
     : window.scrollY;
   const contentScroll = document.querySelector(".content")?.scrollTop || 0;
   const sheetScroll = document.querySelector(".sheet")?.scrollTop || 0;
-  const viewKey = `${state.authed}:${state.monthId}:${state.view}:${state.cardFocus || ""}`;
+  const viewKey = `${state.authed}:${state.monthId}:${state.view}:${state.cardFocus || ""}:${state.summaryFocus || ""}`;
   const keepPlace = state.viewKey === viewKey;
   root.removeAttribute("aria-busy");
   announceLive(state.error || state.notice || "");
@@ -197,6 +204,7 @@ function shell() {
     ]),
     el("div", { class: "months", "data-key": "months" }, (data.months || []).map(monthChip)),
     el("main", { class: "content", "data-key": "content" }, [
+      state.offline ? el("p", { class: "note", "data-key": "offline-note" }, "Sem conexão. Exibindo os últimos dados salvos neste aparelho (somente leitura).") : "",
       state.error && !state.sheet ? el("p", { class: "error", "data-key": "error" }, state.error) : "",
       state.notice && !state.sheet ? el("p", { class: "note", "data-key": "notice" }, state.notice) : "",
       data.access?.permission === "view"
@@ -213,6 +221,7 @@ function shell() {
       onclick: () => {
         state.view = id;
         state.cardFocus = null;
+        state.summaryFocus = null;
         state.showEmpty = false;
         state.error = "";
         state.notice = "";
@@ -238,7 +247,9 @@ function monthChip(month) {
 }
 
 function viewBody(data) {
-  if (state.view === "resumo") return summary(data);
+  if (state.view === "resumo") {
+    return state.summaryFocus === "overview" ? overviewView() : summary(data);
+  }
   if (state.view === "receita") return incomeView(data);
   if (state.view === "cartoes") {
     if (state.cardFocus === "purchases") return purchaseDetail(data);
@@ -249,9 +260,21 @@ function viewBody(data) {
   return sectionList(data, "extra");
 }
 
+function registerServiceWorker() {
+  if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch(() => {});
+  });
+}
+
+window.addEventListener("online", () => {
+  if (state.offline) void boot();
+});
+
 applyTheme(localStorage.getItem("theme"));
 setRenderer(renderApp);
 setBooter(boot);
 initHistoryListeners();
 initSwipeListeners();
+registerServiceWorker();
 boot();

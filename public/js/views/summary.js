@@ -15,6 +15,7 @@ import { askConfirm } from "../dialogs/confirm.js";
 import { titleWithHelp } from "../dialogs/info.js";
 import { el, monthName } from "../dom.js";
 import { editable, monthStore, render, state } from "../state.js";
+import { openOverview } from "./overview.js";
 
 function extraSplit(expenses) {
   return extrasBreakdown(expenses);
@@ -231,6 +232,14 @@ export function summary(data) {
     livingJump(totals, data.expenses),
     extraCategoryJump("planejado", "Planejados", extras.planned, "Nenhuma compra ou conta planejada neste mês"),
     extraCategoryJump("imprevisto", "Imprevistos", extras.unexpected, "Nenhum gasto imprevisto neste mês"),
+    el("p", { class: "eyebrow group" }, "Análise do período"),
+    el("button", { class: "jump", type: "button", onclick: () => openOverview() }, [
+      el("div", { class: "row-between" }, [
+        el("span", {}, "Busca e visão anual"),
+        el("strong", {}, "Abrir"),
+      ]),
+      el("small", {}, "Pesquisar gastos por nome, cartão ou tarja e ver a evolução mês a mês"),
+    ]),
     editable() && totals.launchedRemainingCents > 0
       ? el("button", { class: "primary", type: "button", onclick: () => askConfirm("settle") }, "Quitar o que falta")
       : editable() && month.settled

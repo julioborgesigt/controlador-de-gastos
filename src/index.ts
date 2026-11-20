@@ -8,6 +8,7 @@ import { registerMonthRoutes } from "./routes/months.ts";
 import { registerCardRoutes } from "./routes/cards.ts";
 import { registerExpenseRoutes } from "./routes/expenses.ts";
 import { registerExpensePaymentRoutes } from "./routes/expense-payments.ts";
+import { registerExportRoutes } from "./routes/export.ts";
 import { registerAssetRoutes } from "./routes/assets.ts";
 
 const app = new Hono<AppEnv>();
@@ -54,6 +55,7 @@ registerMonthRoutes(app);
 registerCardRoutes(app);
 registerExpenseRoutes(app);
 registerExpensePaymentRoutes(app);
+registerExportRoutes(app);
 registerAssetRoutes(app);
 
 export default {
