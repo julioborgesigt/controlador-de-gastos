@@ -374,3 +374,117 @@ test("fluxo financeiro completo: receita, cartões, gastos entre meses, parciais
   assert.equal(reset.status, 200);
   assert.equal((reset.json.expenses as unknown[]).length, 0);
 });
+
+test("metadados relacionais indexados: escrita, busca /purchases, exclusão por partial_id, finalized_zero e backfill legado", async () => {
+  const env = createTestEnv();
+  const user = createClient(env, "198.51.100.5");
+  await registerUser(user, "52998224725", "meta@example.com");
+  assert.equal((await user.request("POST", "/api/period", { startMonthId: "2026-11", endMonthId: "2027-02" })).status, 200);
+  assert.equal((await user.request("POST", "/api/cards", { name: "Itaú", dueDay: 12, closingDay: 5 })).status, 201);
+
+  // Compra entre meses deve popular reference_month_id, invoice_month_id, purchase_date, origin_expense_id, series_id e track
+  const spend = await user.request("POST", "/api/card-spend", {
+    name: "Pneu",
+    amountCents: 60000,
+    classification: "planejado",
+    cardLabel: "Itaú",
+    invoiceMonthId: "2026-12",
+    costMonthId: "2026-11",
+    purchaseDate: "2026-11-29",
+    installmentCount: 2,
+    amountMode: "total",
+  });
+  assert.equal(spend.status, 201);
+
+  const anchorRow = await env.DB.prepare(
+    "SELECT id, series_id, track, invoice_month_id, reference_month_id FROM expenses WHERE name = 'Pneu' AND section = 'extra'",
+  ).first<{ id: string; series_id: string | null; track: string | null; invoice_month_id: string | null; reference_month_id: string | null }>();
+  assert.ok(anchorRow?.series_id);
+  assert.equal(anchorRow?.track, "planejado");
+  assert.equal(anchorRow?.invoice_month_id, "2026-12");
+  assert.equal(anchorRow?.reference_month_id, "2026-11");
+
+  const cardLine = await env.DB.prepare(
+    "SELECT origin_expense_id, purchase_date, reference_month_id, track FROM expenses WHERE name = 'Pneu' AND section = 'card' AND month_id = '2026-12'",
+  ).first<{ origin_expense_id: string | null; purchase_date: string | null; reference_month_id: string | null; track: string | null }>();
+  assert.equal(cardLine?.origin_expense_id, anchorRow?.id);
+  assert.equal(cardLine?.purchase_date, "2026-11-29");
+  assert.equal(cardLine?.reference_month_id, "2026-11");
+  assert.equal(cardLine?.track, "planejado");
+
+  // GET /api/months/:id/purchases usa índice em reference_month_id
+  const purchases = await user.request("GET", "/api/months/2026-11/purchases");
+  assert.equal(purchases.status, 200);
+  assert.ok((purchases.json.items as Array<{ name: string }>).some((p) => p.name === "Pneu"));
+
+  // Custo de vida: parcial no cartão popula partial_id e origin_expense_id; exclusão do parcial remove via partial_id
+  const fixedRes = await user.request("POST", "/api/expenses", {
+    monthId: "2026-11",
+    name: "Água",
+    section: "fixed",
+    amountCents: 12000,
+    payment: "pix",
+  });
+  assert.equal(fixedRes.status, 201);
+  const agua = (fixedRes.json.expenses as Array<{ id: string; name: string }>).find((e) => e.name === "Água")!;
+
+  const partialRes = await user.request("POST", `/api/expenses/${agua.id}/partials`, {
+    payment: "card",
+    amountCents: 5000,
+    cardLabel: "Itaú",
+    installmentCount: 1,
+    invoiceMonthId: "2026-11",
+  });
+  assert.equal(partialRes.status, 201);
+  const partialCardLine = await env.DB.prepare(
+    "SELECT partial_id, origin_expense_id FROM expenses WHERE section = 'card' AND origin_expense_id = ?",
+  ).bind(agua.id).first<{ partial_id: string | null; origin_expense_id: string | null }>();
+  assert.ok(partialCardLine?.partial_id);
+  assert.equal(partialCardLine?.origin_expense_id, agua.id);
+
+  const delPartial = await user.request("DELETE", `/api/expenses/${agua.id}/partials/${partialCardLine!.partial_id}`);
+  assert.equal(delPartial.status, 200);
+  const afterDelPartial = await env.DB.prepare(
+    "SELECT id FROM expenses WHERE partial_id = ?",
+  ).bind(partialCardLine!.partial_id).first();
+  assert.equal(afterDelPartial, null);
+
+  // Finalizar sem gasto adicional marca finalized_zero = 1 e desfazer volta para 0
+  const zeroSettle = await user.request("POST", `/api/expenses/${agua.id}/settle`, { noAddition: true });
+  assert.equal(zeroSettle.status, 200);
+  const settledRow = await env.DB.prepare("SELECT finalized_zero FROM expenses WHERE id = ?").bind(agua.id).first<{ finalized_zero: number }>();
+  assert.equal(settledRow?.finalized_zero, 1);
+
+  const undoZero = await user.request("DELETE", `/api/expenses/${agua.id}/payments?scope=all`);
+  assert.equal(undoZero.status, 200);
+  const reopenedRow = await env.DB.prepare("SELECT finalized_zero FROM expenses WHERE id = ?").bind(agua.id).first<{ finalized_zero: number }>();
+  assert.equal(reopenedRow?.finalized_zero, 0);
+
+  // Backfill idempotente preenche colunas relacionais de linhas legadas que só tinham note
+  const { backfillExpenseMetadata } = await import("../src/db.ts");
+  await env.DB.prepare(
+    `INSERT INTO expenses
+      (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
+     VALUES ('legacy-1', 'owner-legacy', '2026-12', 'Legado', 'card', 9900, 'card', 0, 'Itaú', 0, 'serie:s-1\norigem:orig-1\nparcial:p-1\ncompra:2026-11-15\ntipo:planejado', NULL, 1, 'user', '2026-11-15T00:00:00.000Z')`,
+  ).run();
+  const updatedCount = await backfillExpenseMetadata(env.DB);
+  assert.ok(updatedCount >= 1);
+  const backfilled = await env.DB.prepare(
+    "SELECT series_id, origin_expense_id, partial_id, purchase_date, reference_month_id, track FROM expenses WHERE id = 'legacy-1'",
+  ).first<{
+    series_id: string | null;
+    origin_expense_id: string | null;
+    partial_id: string | null;
+    purchase_date: string | null;
+    reference_month_id: string | null;
+    track: string | null;
+  }>();
+  assert.deepEqual(backfilled, {
+    series_id: "s-1",
+    origin_expense_id: "orig-1",
+    partial_id: "p-1",
+    purchase_date: "2026-11-15",
+    reference_month_id: "2026-11",
+    track: "planejado",
+  });
+});

@@ -1,5 +1,5 @@
 import { cardKey, cardOpenExpenses, expenseCountForCard, planCardPayoff } from "../domain.ts";
-import { nextSorts, runStatements, type CardAccount } from "./core.ts";
+import { EXPENSE_META_SET_SQL, expenseMetaParams, nextSorts, prepareInsertExpense, runStatements, type CardAccount } from "./core.ts";
 import { listExpenses } from "./expenses-read.ts";
 
 export async function listCards(db: D1Database, ownerId: string): Promise<CardAccount[]> {
@@ -177,10 +177,12 @@ export async function payCardInvoice(
     }
   }
   const settled = payoffMarker(input.cardId, input.monthId);
-  const statements: D1PreparedStatement[] = open.map((expense) =>
-    db.prepare("UPDATE expenses SET paid = 1, note = ? WHERE owner_id = ? AND id = ?")
-      .bind(noteWithMarker(expense.note, settled), input.ownerId, expense.id),
-  );
+  const statements: D1PreparedStatement[] = open.map((expense) => {
+    const nextNote = noteWithMarker(expense.note, settled);
+    return db
+      .prepare(`UPDATE expenses SET paid = 1, note = ?, ${EXPENSE_META_SET_SQL} WHERE owner_id = ? AND id = ?`)
+      .bind(nextNote, ...expenseMetaParams(expense.section, nextNote), input.ownerId, expense.id);
+  });
   if (plan?.ok) {
     const createdAt = new Date().toISOString();
     const name = `Parcelamento ${input.cardName}`.slice(0, 120);
@@ -190,13 +192,22 @@ export async function payCardInvoice(
       const sort = (used.get(part.monthId) ?? 0) + 1;
       used.set(part.monthId, sort);
       statements.push(
-        db
-          .prepare(
-            `INSERT INTO expenses
-              (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-             VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, ?, ?, 'user', ?)`,
-          )
-          .bind(crypto.randomUUID(), input.ownerId, part.monthId, name, part.amountCents, input.cardName, marker, part.installment, sort, createdAt),
+        prepareInsertExpense(db, {
+          id: crypto.randomUUID(),
+          ownerId: input.ownerId,
+          monthId: part.monthId,
+          name,
+          section: "card",
+          amountCents: part.amountCents,
+          payment: "card",
+          onCard: false,
+          cardLabel: input.cardName,
+          paid: false,
+          note: marker,
+          installment: part.installment,
+          sortOrder: sort,
+          createdAt,
+        }),
       );
     }
   }
@@ -209,8 +220,8 @@ export async function undoCardInvoice(
   input: { ownerId: string; cardId: string; cardName: string; monthId: string },
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const rows = await db.prepare(
-    "SELECT id, month_id, note, name, card_label FROM expenses WHERE owner_id = ?",
-  ).bind(input.ownerId).all<{ id: string; month_id: string; note: string | null; name: string; card_label: string | null }>();
+    "SELECT id, month_id, section, note, name, card_label FROM expenses WHERE owner_id = ?",
+  ).bind(input.ownerId).all<{ id: string; month_id: string; section: string; note: string | null; name: string; card_label: string | null }>();
   const all = rows.results ?? [];
   const settled = payoffMarker(input.cardId, input.monthId);
   const planned = planMarker(input.cardId, input.monthId);
@@ -218,10 +229,12 @@ export async function undoCardInvoice(
   const installments = all.filter((row) => hasMarker(row.note, planned));
   if (tagged.length || installments.length) {
     await runStatements(db, [
-      ...tagged.map((row) =>
-        db.prepare("UPDATE expenses SET paid = 0, note = ? WHERE owner_id = ? AND id = ?")
-          .bind(noteWithoutMarker(row.note, settled), input.ownerId, row.id),
-      ),
+      ...tagged.map((row) => {
+        const nextNote = noteWithoutMarker(row.note, settled);
+        return db
+          .prepare(`UPDATE expenses SET paid = 0, note = ?, ${EXPENSE_META_SET_SQL} WHERE owner_id = ? AND id = ?`)
+          .bind(nextNote, ...expenseMetaParams(row.section, nextNote), input.ownerId, row.id);
+      }),
       ...installments.map((row) =>
         db.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(input.ownerId, row.id),
       ),

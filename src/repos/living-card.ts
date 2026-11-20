@@ -8,16 +8,15 @@ import {
   type Expense,
   type Payment,
 } from "../domain.ts";
-import { chunkIds, nextSorts, recurringOriginNote, runStatements, sqlMarks } from "./core.ts";
+import { chunkIds, nextSorts, prepareInsertExpense, recurringOriginNote, runStatements, sqlMarks } from "./core.ts";
 import { ensureMonths } from "./months.ts";
 import { getExpense, listFixedExpenses } from "./expenses-read.ts";
 import { insertCardPurchase } from "./expenses.ts";
 
 export async function clearRecurringCardLines(db: D1Database, ownerId: string, expenseId: string): Promise<void> {
-  const marker = recurringOriginNote(expenseId);
   await db
-    .prepare("DELETE FROM expenses WHERE owner_id = ? AND ('\n' || COALESCE(note, '') || '\n') LIKE ?")
-    .bind(ownerId, `%\n${marker}\n%`)
+    .prepare("DELETE FROM expenses WHERE owner_id = ? AND origin_expense_id = ?")
+    .bind(ownerId, expenseId)
     .run();
 }
 
@@ -138,22 +137,30 @@ async function chargeLivingRowsOnCard(
   const createdAt = new Date().toISOString();
   const statements: D1PreparedStatement[] = [];
   for (const charge of charges) {
-    const marker = recurringOriginNote(charge.id);
     statements.push(
-      db.prepare("DELETE FROM expenses WHERE owner_id = ? AND ('\n' || COALESCE(note, '') || '\n') LIKE ?").bind(input.ownerId, `%\n${marker}\n%`),
-    );
-    statements.push(
+      db.prepare("DELETE FROM expenses WHERE owner_id = ? AND origin_expense_id = ?").bind(input.ownerId, charge.id),
       db.prepare("UPDATE expenses SET payment = 'card', on_card = 1, card_label = ?, paid = 1 WHERE owner_id = ? AND id = ?")
         .bind(input.cardLabel, input.ownerId, charge.id),
     );
     const sort = (used.get(charge.monthId) ?? 0) + 1;
     used.set(charge.monthId, sort);
     statements.push(
-      db.prepare(
-        `INSERT INTO expenses
-          (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-         VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, NULL, ?, 'user', ?)`,
-      ).bind(crypto.randomUUID(), input.ownerId, charge.monthId, charge.name, charge.amountCents, input.cardLabel, charge.note, sort, createdAt),
+      prepareInsertExpense(db, {
+        id: crypto.randomUUID(),
+        ownerId: input.ownerId,
+        monthId: charge.monthId,
+        name: charge.name,
+        section: "card",
+        amountCents: charge.amountCents,
+        payment: "card",
+        onCard: false,
+        cardLabel: input.cardLabel,
+        paid: false,
+        note: charge.note,
+        installment: null,
+        sortOrder: sort,
+        createdAt,
+      }),
     );
   }
   await runStatements(db, statements);
@@ -269,27 +276,22 @@ export async function createCardSpendWithAnchor(
   const anchorSort = (used.get(input.anchor.monthId) ?? 0) + 1;
   used.set(input.anchor.monthId, anchorSort);
   const statements: D1PreparedStatement[] = [
-    db
-      .prepare(
-        `INSERT INTO expenses
-          (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 'user', ?)`,
-      )
-      .bind(
-        anchorId,
-        input.ownerId,
-        input.anchor.monthId,
-        input.anchor.name,
-        input.anchor.section,
-        input.anchor.amountCents,
-        input.anchor.payment,
-        input.anchor.onCard ? 1 : 0,
-        input.anchor.cardLabel,
-        input.anchor.paid ? 1 : 0,
-        anchorNote,
-        anchorSort,
-        createdAt,
-      ),
+    prepareInsertExpense(db, {
+      id: anchorId,
+      ownerId: input.ownerId,
+      monthId: input.anchor.monthId,
+      name: input.anchor.name,
+      section: input.anchor.section,
+      amountCents: input.anchor.amountCents,
+      payment: input.anchor.payment,
+      onCard: input.anchor.onCard,
+      cardLabel: input.anchor.cardLabel,
+      paid: input.anchor.paid,
+      note: anchorNote,
+      installment: null,
+      sortOrder: anchorSort,
+      createdAt,
+    }),
   ];
   const baseChargeNote = [input.charge.notePrefix, recurringOriginNote(anchorId)].filter(Boolean).join("\n");
   const chargeNote = noteWithSeries(
@@ -303,24 +305,22 @@ export async function createCardSpendWithAnchor(
     const sort = (used.get(part.monthId) ?? 0) + 1;
     used.set(part.monthId, sort);
     statements.push(
-      db
-        .prepare(
-          `INSERT INTO expenses
-            (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-           VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, ?, ?, 'user', ?)`,
-        )
-        .bind(
-          crypto.randomUUID(),
-          input.ownerId,
-          part.monthId,
-          input.charge.name,
-          part.amountCents,
-          input.charge.cardLabel,
-          chargeNote,
-          part.installment,
-          sort,
-          createdAt,
-        ),
+      prepareInsertExpense(db, {
+        id: crypto.randomUUID(),
+        ownerId: input.ownerId,
+        monthId: part.monthId,
+        name: input.charge.name,
+        section: "card",
+        amountCents: part.amountCents,
+        payment: "card",
+        onCard: false,
+        cardLabel: input.charge.cardLabel,
+        paid: false,
+        note: chargeNote,
+        installment: part.installment,
+        sortOrder: sort,
+        createdAt,
+      }),
     );
   }
   await runStatements(db, statements);
@@ -336,22 +336,19 @@ export async function clearLivingCardCharges(
   const all = await listFixedExpenses(db, ownerId);
   const ids = livingCardUndoTargets(all, expenseId, scope);
   if (!ids.length) return { ok: false, error: "Este gasto não está no cartão." };
-  const statements: D1PreparedStatement[] = ids.map((id) =>
-    db
-      .prepare("DELETE FROM expenses WHERE owner_id = ? AND ('\n' || COALESCE(note, '') || '\n') LIKE ?")
-      .bind(ownerId, `%\n${recurringOriginNote(id)}\n%`),
-  );
-  for (const part of chunkIds(ids)) {
-    statements.push(
+  const statements: D1PreparedStatement[] = [
+    ...chunkIds(ids).map((part) =>
+      db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND origin_expense_id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
+    ),
+    ...chunkIds(ids).map((part) =>
       db
         .prepare(
           `UPDATE expenses SET payment = 'pix', on_card = 0, card_label = NULL, paid = 0
            WHERE owner_id = ? AND id IN (${sqlMarks(part)})`,
         )
         .bind(ownerId, ...part),
-    );
-  }
+    ),
+  ];
   await runStatements(db, statements);
   return { ok: true, count: ids.length };
 }
-

@@ -5,9 +5,11 @@ import {
   resolveCardLabel,
 } from "../domain.ts";
 import {
+  EXPENSE_META_SET_SQL,
   addLivingCardPartial,
   clearLivingCardCharges,
   deletePartialPayment,
+  expenseMetaParams,
   getExpense,
   getMonth,
   insertPartialPayment,
@@ -171,7 +173,10 @@ export function registerExpensePaymentRoutes(app: App): void {
       const finalizedNote = hasPartials
         ? (noteWithFinalizedZero(expense.note, false) || null)
         : noteWithFinalizedZero(expense.note, true);
-      await c.env.DB.prepare("UPDATE expenses SET paid = 1, note = ? WHERE owner_id = ? AND id = ?").bind(finalizedNote, writer.scope.ownerId, expense.id).run();
+      await c.env.DB
+        .prepare(`UPDATE expenses SET paid = 1, note = ?, ${EXPENSE_META_SET_SQL} WHERE owner_id = ? AND id = ?`)
+        .bind(finalizedNote, ...expenseMetaParams(expense.section, finalizedNote), writer.scope.ownerId, expense.id)
+        .run();
       return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, expense.monthId), writer.scope));
     }
     const amountCents = body.useRegistered === true ? Math.max(0, expense.amountCents - already) : body.amountCents;

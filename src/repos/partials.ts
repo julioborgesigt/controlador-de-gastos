@@ -4,14 +4,13 @@ import {
   noteWithChargeContext,
   noteWithFinalizedZero,
   noteWithSeries,
-  partialIdFromNote,
   planCardPurchase,
   seriesIdFromNote,
   type Expense,
   type PartialPayment,
   type Payment,
 } from "../domain.ts";
-import { chunkIds, nextSorts, runStatements, sqlMarks } from "./core.ts";
+import { EXPENSE_META_SET_SQL, chunkIds, expenseMetaParams, nextSorts, prepareInsertExpense, runStatements, sqlMarks } from "./core.ts";
 import { listMonths } from "./months.ts";
 import { getExpense } from "./expenses-read.ts";
 
@@ -147,24 +146,22 @@ export async function addLivingCardPartial(
     const sort = (used.get(part.monthId) ?? 0) + 1;
     used.set(part.monthId, sort);
     statements.push(
-      db
-        .prepare(
-          `INSERT INTO expenses
-            (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-           VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, ?, ?, 'user', ?)`,
-        )
-        .bind(
-          crypto.randomUUID(),
-          input.ownerId,
-          part.monthId,
-          input.name,
-          part.amountCents,
-          input.cardLabel,
-          note,
-          part.installment,
-          sort,
-          createdAt,
-        ),
+      prepareInsertExpense(db, {
+        id: crypto.randomUUID(),
+        ownerId: input.ownerId,
+        monthId: part.monthId,
+        name: input.name,
+        section: "card",
+        amountCents: part.amountCents,
+        payment: "card",
+        onCard: false,
+        cardLabel: input.cardLabel,
+        paid: false,
+        note,
+        installment: part.installment,
+        sortOrder: sort,
+        createdAt,
+      }),
     );
   }
   await runStatements(db, statements);
@@ -178,9 +175,7 @@ export async function deletePartialPayment(db: D1Database, ownerId: string, expe
     .first<{ id: string }>();
   if (!row) return false;
   await db.batch([
-    db
-      .prepare("DELETE FROM expenses WHERE owner_id = ? AND ('\n' || COALESCE(note, '') || '\n') LIKE ?")
-      .bind(ownerId, `%\nparcial:${partialId}\n%`),
+    db.prepare("DELETE FROM expenses WHERE owner_id = ? AND partial_id = ?").bind(ownerId, partialId),
     db.prepare("DELETE FROM partial_payments WHERE owner_id = ? AND id = ?").bind(ownerId, partialId),
     db
       .prepare("UPDATE expenses SET paid = 0 WHERE owner_id = ? AND id = ? AND section = 'fixed'")
@@ -209,70 +204,36 @@ export async function undoExpensePayments(
   if (!partialIds.length) {
     if (!expense.paid) return { ok: false, error: "Não há pagamento para desfazer." };
     const nextNote = noteWithFinalizedZero(expense.note, false) || null;
-    await db.prepare("UPDATE expenses SET paid = 0, note = ? WHERE owner_id = ? AND id = ?").bind(nextNote, ownerId, expenseId).run();
+    await db
+      .prepare(`UPDATE expenses SET paid = 0, note = ?, ${EXPENSE_META_SET_SQL} WHERE owner_id = ? AND id = ?`)
+      .bind(nextNote, ...expenseMetaParams(expense.section, nextNote), ownerId, expenseId)
+      .run();
     return { ok: true, count: 1 };
   }
   const targets = scope === "all" ? partialIds : partialIds.slice(0, 1);
-  const statements: D1PreparedStatement[] = targets.map((partialId) =>
-    db
-      .prepare("DELETE FROM expenses WHERE owner_id = ? AND ('\n' || COALESCE(note, '') || '\n') LIKE ?")
-      .bind(ownerId, `%\nparcial:${partialId}\n%`),
-  );
-  for (const part of chunkIds(targets)) {
-    statements.push(
+  const statements: D1PreparedStatement[] = [
+    ...chunkIds(targets).map((part) =>
+      db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND partial_id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
+    ),
+    ...chunkIds(targets).map((part) =>
       db.prepare(`DELETE FROM partial_payments WHERE owner_id = ? AND id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
-    );
-  }
-  statements.push(
+    ),
     db
       .prepare("UPDATE expenses SET paid = 0 WHERE owner_id = ? AND id = ? AND section = 'fixed'")
       .bind(ownerId, expenseId),
-  );
+  ];
   await runStatements(db, statements);
   return { ok: true, count: targets.length };
 }
 
 export async function deletePartialsForExpenses(db: D1Database, ownerId: string, expenseIds: readonly string[]): Promise<void> {
   if (!expenseIds.length) return;
-  const statements: D1PreparedStatement[] = expenseIds.map((id) =>
-    db
-      .prepare("DELETE FROM expenses WHERE owner_id = ? AND ('\n' || COALESCE(note, '') || '\n') LIKE ?")
-      .bind(ownerId, `%\norigem:${id}\n%`),
-  );
-  for (const part of chunkIds(expenseIds)) {
-    statements.push(
-      db.prepare(`DELETE FROM partial_payments WHERE owner_id = ? AND expense_id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
-    );
-  }
-  await runStatements(db, statements);
-}
-
-export async function clearOrphanCardPartials(db: D1Database, ownerId: string): Promise<void> {
-  const [partials, notes] = await Promise.all([
-    db
-      .prepare("SELECT id, expense_id FROM partial_payments WHERE owner_id = ? AND payment = 'card'")
-      .bind(ownerId)
-      .all<{ id: string; expense_id: string }>(),
-    db
-      .prepare("SELECT note FROM expenses WHERE owner_id = ? AND note LIKE '%parcial:%'")
-      .bind(ownerId)
-      .all<{ note: string | null }>(),
-  ]);
-  const rows = partials.results ?? [];
-  if (!rows.length) return;
-  const live = new Set((notes.results ?? []).map((row) => partialIdFromNote(row.note)).filter(Boolean));
-  const orphans = rows.filter((partial) => !live.has(partial.id));
-  if (!orphans.length) return;
-  const orphanIds = orphans.map((row) => row.id);
-  const expenseIds = [...new Set(orphans.map((row) => row.expense_id))];
   const statements: D1PreparedStatement[] = [
-    ...chunkIds(orphanIds).map((part) =>
-      db.prepare(`DELETE FROM partial_payments WHERE owner_id = ? AND id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
+    ...chunkIds(expenseIds).map((part) =>
+      db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND origin_expense_id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
     ),
     ...chunkIds(expenseIds).map((part) =>
-      db
-        .prepare(`UPDATE expenses SET paid = 0 WHERE owner_id = ? AND section = 'fixed' AND id IN (${sqlMarks(part)})`)
-        .bind(ownerId, ...part),
+      db.prepare(`DELETE FROM partial_payments WHERE owner_id = ? AND expense_id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
     ),
   ];
   await runStatements(db, statements);

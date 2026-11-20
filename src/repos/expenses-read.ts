@@ -1,4 +1,4 @@
-import { chargedInvoiceMonth, purchaseMonthFromNote, type Expense, type Section } from "../domain.ts";
+import { chargedInvoiceMonth, type Expense, type Section } from "../domain.ts";
 import { mapExpense, type ExpenseRow } from "./core.ts";
 
 export async function listCardPurchasesInMonth(db: D1Database, ownerId: string, monthId: string): Promise<Expense[]> {
@@ -6,11 +6,11 @@ export async function listCardPurchasesInMonth(db: D1Database, ownerId: string, 
   const result = await db
     .prepare(
       `SELECT * FROM expenses
-       WHERE owner_id = ? AND (note LIKE ? OR note LIKE ?)
+       WHERE owner_id = ? AND reference_month_id = ?
          AND (section = 'card' OR (section = 'extra' AND payment = 'card'))
        ORDER BY month_id, name`,
     )
-    .bind(ownerId, `%compra:${monthId}-%`, `%ref:${monthId}%`)
+    .bind(ownerId, monthId)
     .all<ExpenseRow>();
   return (result.results ?? [])
     .map(mapExpense)
@@ -19,9 +19,7 @@ export async function listCardPurchasesInMonth(db: D1Database, ownerId: string, 
       if (note.includes("parcelamento:") || note.includes("quitado-cartao:")) return false;
       const invoiceMonth = chargedInvoiceMonth(note);
       if (expense.section === "extra" && invoiceMonth && invoiceMonth !== expense.monthId) return false;
-      const purchaseMonth = purchaseMonthFromNote(note);
-      if (purchaseMonth) return purchaseMonth === monthId;
-      return note.split("\n").some((line) => line.trim() === `ref:${monthId}`);
+      return true;
     });
 }
 
