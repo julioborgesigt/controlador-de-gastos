@@ -187,6 +187,18 @@ export function el(tag, attrs = {}, children = []) {
   for (const [key, value] of Object.entries(attrs)) {
     if (value === null || value === undefined || value === false) continue;
     if (key === "class") node.className = value;
+    else if (key === "style") {
+      if (typeof value === "object") {
+        for (const [prop, propVal] of Object.entries(value)) {
+          if (propVal !== null && propVal !== undefined) node.style.setProperty(prop, String(propVal));
+        }
+      } else if (typeof value === "string") {
+        for (const decl of value.split(";")) {
+          const idx = decl.indexOf(":");
+          if (idx > 0) node.style.setProperty(decl.slice(0, idx).trim(), decl.slice(idx + 1).trim());
+        }
+      }
+    }
     else if (key === "onclick" || (key.startsWith("on") && typeof value === "function")) on(node, key.slice(2), value);
     else if (key === "for") node.htmlFor = value;
     else if (key === "value") node.value = value;

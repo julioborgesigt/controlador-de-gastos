@@ -127,7 +127,7 @@ export function summary(data) {
       el("p", { class: "muted hero-kicker" }, "Falta pagar neste mês (fatura + Pix)"),
       el("p", { class: "money" }, money(fin.payments.remainingCents)),
       el("div", { class: "hero-bar", "aria-hidden": "true" }, [
-        el("span", { style: `width:${paidPct}%` }),
+        el("span", { style: { width: `${paidPct}%` } }),
       ]),
       el("div", { class: "hero-stats" }, [
         el("div", { class: "hero-stat" }, [
