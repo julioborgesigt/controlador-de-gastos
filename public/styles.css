@@ -215,7 +215,7 @@ input:focus, select:focus, textarea:focus { border-color: var(--ink); }
   background: var(--paper);
 }
 
-.top-row, .row-between, .item, .nav, .metric, .choice, .switch {
+.top-row, .row-between, .item, .nav, .metric, .choice {
   display: flex;
   align-items: center;
 }
@@ -604,59 +604,17 @@ button.metric { cursor: pointer; }
   gap: 4px;
 }
 
-.check, .item-main {
+.item-main {
   border: 0;
   background: transparent;
   text-align: left;
-}
-
-.check {
-  width: 46px;
-  height: 46px;
-  border-radius: 14px;
-  flex: none;
-  font-size: 18px;
-}
-
-.check.on { background: var(--teal-soft); color: var(--teal); }
-
-.check.off {
-  background: white;
-  color: var(--muted);
-  border: 1.5px solid var(--line);
-}
-
-.check.spacer {
-  background: transparent;
-  border: 0;
-}
-
-.item-copy { flex: 1; min-width: 0; }
-
-.item-main {
   width: 100%;
   padding: 6px 8px;
   border-radius: 12px;
   transition: background-color 140ms ease;
 }
 
-.toggle {
-  margin: 0 0 6px 8px;
-  border: 1px solid var(--line);
-  background: white;
-  border-radius: 10px;
-  min-height: 36px;
-  padding: 0 12px;
-  font-size: 13px;
-  font-weight: 600;
-  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
-}
-
-.toggle.on {
-  background: var(--terra-soft);
-  color: var(--terra);
-  border-color: transparent;
-}
+.item-copy { flex: 1; min-width: 0; }
 
 .item-end {
   display: flex;
@@ -900,10 +858,7 @@ html[data-theme="dark"] textarea,
 html[data-theme="dark"] .secondary,
 html[data-theme="dark"] .nav,
 html[data-theme="dark"] .choice button,
-html[data-theme="dark"] .switch,
 html[data-theme="dark"] .month-picks button,
-html[data-theme="dark"] .toggle,
-html[data-theme="dark"] .check.off,
 html[data-theme="dark"] .linkish.back,
 html[data-theme="dark"] .menu,
 html[data-theme="dark"] .cost-split button,
@@ -960,7 +915,6 @@ html[data-theme="dark"] .danger {
 html[data-theme="dark"] .primary,
 html[data-theme="dark"] .choice button.on,
 html[data-theme="dark"] .choice .static,
-html[data-theme="dark"] .switch.on,
 html[data-theme="dark"] .month-picks button.on,
 html[data-theme="dark"] .chip.active,
 html[data-theme="dark"] .mark,
@@ -1070,7 +1024,7 @@ select:disabled { opacity: 0.72; }
 
 .choice { gap: 8px; flex-wrap: wrap; }
 
-.choice button, .switch {
+.choice button {
   flex: 1 1 148px;
   min-height: 48px;
   border-radius: 10px;
@@ -1080,7 +1034,7 @@ select:disabled { opacity: 0.72; }
   transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
 }
 
-.choice button.on, .switch.on, .choice .static, .month-picks button.on { background: var(--ink); color: white; border-color: var(--ink); }
+.choice button.on, .choice .static, .month-picks button.on { background: var(--ink); color: white; border-color: var(--ink); }
 
 .month-picks { display: flex; flex-wrap: wrap; gap: 8px; }
 
@@ -1103,8 +1057,6 @@ select:disabled { opacity: 0.72; }
   display: grid;
   place-items: center;
 }
-
-.switch { width: 100%; justify-content: space-between; padding: 0 14px; }
 
 .actions {
   display: flex;
@@ -1189,8 +1141,6 @@ select:disabled { opacity: 0.72; }
 .item-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; padding: 0 8px 4px; }
 
 .item-actions .linkish { min-height: 34px; font-size: 14px; padding: 0 2px; }
-
-.ghost-list { margin-top: 8px; }
 
 body.is-working { cursor: progress; }
 
@@ -1500,7 +1450,6 @@ html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
   .danger,
   .choice button,
   .choice .static,
-  .switch,
   .linkish.back,
   .menu-item,
   .swipe-act {
@@ -1521,19 +1470,11 @@ html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
   }
 
   .choice button,
-  .choice .static,
-  .switch {
+  .choice .static {
     padding: 8px 12px;
   }
 
-  .switch {
-    width: 100%;
-    justify-content: space-between;
-    padding: 0 14px;
-  }
-
   .chip,
-  .toggle,
   .month-picks button {
     display: inline-flex;
     align-items: center;
@@ -1713,7 +1654,6 @@ html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
 
   .choice button:hover:not(.on):not(:disabled),
   .month-picks button:hover:not(.on),
-  .toggle:hover:not(.on),
   .chip:hover:not(.active) {
     background: color-mix(in srgb, var(--ink) 6%, var(--card));
     color: var(--ink);
@@ -2137,7 +2077,6 @@ html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
   html[data-theme="dark"] .nav button:hover:not(.active),
   html[data-theme="dark"] .choice button:hover:not(.on):not(:disabled),
   html[data-theme="dark"] .month-picks button:hover:not(.on),
-  html[data-theme="dark"] .toggle:hover:not(.on),
   html[data-theme="dark"] .chip:hover:not(.active) {
     background: #2a313b;
     color: var(--ink);

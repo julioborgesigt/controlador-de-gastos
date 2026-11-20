@@ -4,8 +4,8 @@
   "description": "Controle mensal de fatura, gastos fixos e extras no Pix ou no cartão.",
   "start_url": "/",
   "display": "standalone",
-  "background_color": "#f3eee6",
-  "theme_color": "#241c16",
+  "background_color": "#f5f6f8",
+  "theme_color": "#171a1f",
   "lang": "pt-BR",
   "icons": [
     {

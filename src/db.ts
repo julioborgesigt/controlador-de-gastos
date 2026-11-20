@@ -1,7 +1,7 @@
 import seed from "./seed-data.json";
 import type { Expense, PartialPayment, Payment, Section } from "./domain.ts";
 import { formatCpf } from "./auth.ts";
-import { cardDeletionEffects, carryForward, cardKey, cardOpenExpenses, chargedInvoiceMonth, coercePayment, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, invoiceShiftFromNote, isPlannedCost, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteForTrack, noteWithChargeContext, noteWithFinalizedZero, noteWithInvoiceShift, noteWithOrigin, noteWithSeries, noteWithVariable, noteWithVisibleText, isVariableCost, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, previousMonthId, purchaseMonthFromNote, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope, type ExpenseTrack } from "./domain.ts";
+import { cardDeletionEffects, cardKey, cardOpenExpenses, chargedInvoiceMonth, coercePayment, computeTotals, editTargets, expenseCountForCard, expenseDeleteTargets, invoiceShiftFromNote, isPlannedCost, listMonthRange, livingCardSendTargets, livingCardUndoTargets, monthCanSettle, monthLabel, monthSortOrder, noteForTrack, noteWithChargeContext, noteWithFinalizedZero, noteWithInvoiceShift, noteWithOrigin, noteWithSeries, noteWithVariable, noteWithVisibleText, isVariableCost, originExpenseId, partialIdFromNote, planCardPayoff, planCardPurchase, purchaseMonthFromNote, resetTargets, sameAccount, seriesIdFromNote, visibleExpenseNote, type EditScope, type ExpenseTrack } from "./domain.ts";
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS months (
@@ -499,6 +499,48 @@ export async function setSetting(db: D1Database, key: string, value: string): Pr
     .prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
     .bind(key, value)
     .run();
+}
+
+export async function pruneExpiredAuthSettings(db: D1Database, now = Date.now()): Promise<void> {
+  const result = await db
+    .prepare("SELECT key, value FROM settings WHERE key LIKE 'login_failures:%' OR key LIKE 'rate_limit:%'")
+    .all<{ key: string; value: string }>();
+  const staleKeys: string[] = [];
+  const staleCutoff = now - 60 * 60 * 1000;
+  for (const row of result.results ?? []) {
+    try {
+      const parsed = JSON.parse(row.value) as {
+        count?: number;
+        lockedUntil?: string | null;
+        updatedAt?: string;
+        resetAt?: string;
+      };
+      if (row.key.startsWith("rate_limit:")) {
+        const resetAt = parsed.resetAt ? Date.parse(parsed.resetAt) : Number.NaN;
+        if (Number.isNaN(resetAt) || resetAt <= now) staleKeys.push(row.key);
+        continue;
+      }
+      const lockedUntil = parsed.lockedUntil ? Date.parse(parsed.lockedUntil) : Number.NaN;
+      const activeLock = !Number.isNaN(lockedUntil) && lockedUntil > now;
+      if (activeLock) continue;
+      if ((parsed.count ?? 0) === 0) {
+        staleKeys.push(row.key);
+        continue;
+      }
+      const updatedAt = parsed.updatedAt ? Date.parse(parsed.updatedAt) : Number.NaN;
+      const expiredLock = !Number.isNaN(lockedUntil) && lockedUntil <= now;
+      if (expiredLock || (!Number.isNaN(updatedAt) && updatedAt <= staleCutoff)) {
+        staleKeys.push(row.key);
+      }
+    } catch {
+      staleKeys.push(row.key);
+    }
+  }
+  if (!staleKeys.length) return;
+  await runStatements(
+    db,
+    staleKeys.map((key) => db.prepare("DELETE FROM settings WHERE key = ?").bind(key)),
+  );
 }
 
 export async function listMonths(db: D1Database, ownerId: string): Promise<Array<{ id: string; label: string; settled: boolean; sortOrder: number; incomeCents: number; incomeLocked: boolean }>> {
@@ -1259,60 +1301,6 @@ export async function monthPayload(db: D1Database, ownerId: string, monthId: str
     totals,
     theme: await getTheme(db, ownerId),
   };
-}
-
-export async function syncSettled(db: D1Database, ownerId: string, monthId: string): Promise<void> {
-  await monthPayload(db, ownerId, monthId);
-}
-
-export async function copyFromPreviousMonth(db: D1Database, ownerId: string, monthId: string): Promise<number> {
-  const sourceMonth = previousMonthId(monthId);
-  if (!sourceMonth) return 0;
-  const source = await listExpenses(db, ownerId, sourceMonth);
-  const destination = await listExpenses(db, ownerId, monthId);
-  const taken = new Set(destination.map((expense) => accountKey(expense)));
-  const nextSort = destination.reduce((max, expense) => Math.max(max, expense.sortOrder), 0);
-  const createdAt = new Date().toISOString();
-  const inserts: D1PreparedStatement[] = [];
-  for (const expense of source) {
-    const carried = carryForward(expense);
-    if (!carried) continue;
-    const key = accountKey(expense);
-    if (taken.has(key)) continue;
-    taken.add(key);
-    inserts.push(
-      db
-        .prepare(
-          `INSERT INTO expenses
-            (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 'user', ?)`,
-        )
-        .bind(
-          crypto.randomUUID(),
-          ownerId,
-          monthId,
-          carried.name,
-          carried.section,
-          carried.amountCents,
-          carried.payment,
-          carried.onCard ? 1 : 0,
-          carried.cardLabel,
-          carried.note,
-          carried.installment,
-          nextSort + inserts.length + 1,
-          createdAt,
-        ),
-    );
-  }
-  if (inserts.length) await db.batch(inserts);
-  return inserts.length;
-}
-
-function accountKey(expense: { id: string; section: string; name: string; note?: string | null; createdAt?: string | null }): string {
-  const series = seriesIdFromNote(expense.note);
-  if (series) return `serie:${series}`;
-  if (expense.createdAt) return `criado:${expense.createdAt}|${expense.section}|${expense.name.trim().toLocaleLowerCase("pt-BR")}`;
-  return `id:${expense.id}`;
 }
 
 function payoffMarker(cardId: string, monthId: string): string {

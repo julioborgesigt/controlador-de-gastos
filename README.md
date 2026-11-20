@@ -1,28 +1,31 @@
 # Controle de gastos
 
-Um único app de celular para o orçamento de novembro de 2026 a outubro de 2027. Os números da planilha já vêm carregados. O que você lançar fica no banco da Cloudflare. A entrada é por CPF e senha; na criação da conta também pedimos o e-mail, guardado para códigos e avisos futuros. Neste celular dá para cadastrar a digital do Android e entrar sem digitar a senha. Cada conta começa zerada e vê só os próprios gastos. Dá para compartilhar o orçamento com outro CPF, só para ver ou também para editar. Quem recebe escolhe, no login ou em Acesso, se abre os próprios dados ou os compartilhados.
+Aplicação web mobile-first (com suporte a desktop) para controle de orçamento mensal em Cloudflare Workers + D1. A entrada é feita com CPF e senha (com suporte a biometria/Passkey via WebAuthn no aparelho), modo claro/escuro e compartilhamento multi-tenant com permissão de visualização ou edição.
 
-- A casa continua no total de gastos fixos mesmo quando o gasto foi para o cartão. O app avisa que aquele valor já está na fatura e não soma de novo.
-- Dá para nomear um gasto extra e dizer se foi Pix, débito, dinheiro ou cartão.
-- Na aba Cartões dá para cadastrar um cartão e lançar **+ Gasto Cartão**. Esse gasto só entra no cartão escolhido, sem Pix, débito ou dinheiro. O detalhe de cada cartão deixa editar ou excluir cada item.
-- Uma compra parcelada, no formato `3/10`, pode ser trazida para o mês seguinte. A parcela avança sozinha e para quando chega na última.
-- O botão **Trazer lançamentos do mês anterior** repete os gastos fixos que você criou e as parcelas que ainda não acabaram. As linhas da planilha não são copiadas, porque cada mês já tem o seu valor.
-- Ao lançar um gasto no cartão, informe quantas parcelas são, quantas já foram pagas e se o valor é da parcela ou da compra inteira. As parcelas que faltam entram neste mês e nos seguintes.
-- Em **Receita** dá para definir uma receita base, replicar nos meses e ajustar um mês específico. Imposto de renda, décimo terceiro, férias e outros extras entram só no mês previsto.
+## Funcionalidades principais
 
-## Publicar
+- **Resumo mensal**: painel consolidado com pagamentos do mês (fatura + Pix previsto), lançamentos para próximas faturas, despesa prevista do mês atual e do próximo mês, além dos totais por categoria e atalho para quitar/reabrir o mês.
+- **Cartões de crédito**: cadastro e edição de cartões (dia de fechamento e vencimento), lançamento de gastos no crédito (à vista ou parcelados, com sugestão automática da fatura), raio-X da composição da fatura, quitação no Pix ou parcelamento da fatura.
+- **À vista**: registro de pagamentos no Pix vinculados a um Custo de vida ou criando um gasto Planejado/Imprevisto, com histórico detalhado do mês.
+- **Custo de vida**: orçamento das contas recorrentes (fixas ou variáveis, no Pix ou crédito, inclusive com opção de entrar na fatura do mês seguinte), suporte a pagamentos parciais e finalização mensal individual.
+- **Outros gastos**: acompanhamento de gastos **Planejados** e **Imprevistos** destacando os valores do mês em visualização e exibindo o total lançado de forma acessória.
+- **Receita mensal**: definição de receita base (com replicação nos meses livres ou em todos os meses), ajuste individual por mês e receitas extras (IR, 13º, férias e outros).
+- **Período gerenciado**: configurável por conta (até 48 meses) e ajustável a qualquer momento no menu do perfil.
 
-O GitHub publica a branch `main` no Worker `controlador-de-gastos` quando estes segredos existem no repositório:
-
-- `CLOUDFLARE_ACCOUNT_ID`
-- `CLOUDFLARE_API_TOKEN`
-
-O token precisa da permissão **Edit Cloudflare Workers** e de **Account → D1 → Edit**. Na primeira publicação a Cloudflare cria o banco. O endereço fica `https://controlador-de-gastos.<seu-subdominio>.workers.dev`.
-
-Para ver neste computador:
+## Desenvolvimento local
 
 ```bash
 npm install
 npm test
+npm run check
 npm run dev
 ```
+
+## Publicação (Cloudflare Workers + D1)
+
+A branch `main` é publicada automaticamente pelo workflow `.github/workflows/deploy.yml` quando estes segredos estão configurados no repositório:
+
+- `CLOUDFLARE_ACCOUNT_ID`
+- `CLOUDFLARE_API_TOKEN` (com permissões **Edit Cloudflare Workers** e **Account → D1 → Edit**)
+
+Pull Requests abertos contra `main` passam automaticamente pela verificação em `.github/workflows/ci.yml` (`npm test` e `npm run check`).

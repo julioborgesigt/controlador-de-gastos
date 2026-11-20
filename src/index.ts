@@ -5,6 +5,7 @@ import {
   hashSecret,
   lockedMessage,
   nextFailure,
+  nextRateWindow,
   parseCpf,
   parseEmail,
   parsePassword,
@@ -14,6 +15,8 @@ import {
   sessionCookieOptions,
   sessionExpiry,
   sha256,
+  type FailureState,
+  type RateWindow,
 } from "./auth.ts";
 import type { AuthenticationResponseJSON, RegistrationResponseJSON } from "@simplewebauthn/server";
 import { loginOptions, loginWithPasskey, registerPasskey, registrationOptions } from "./passkeys.ts";
@@ -45,7 +48,6 @@ import {
   accessTo,
   applyBaseIncome,
   applySeriesEdit,
-  copyFromPreviousMonth,
   countUsers,
   createCard,
   deleteCard,
@@ -57,9 +59,7 @@ import {
   ensureReady,
   findUserByCpf,
   findUserById,
-  clearRecurringCardCharge,
   clearLivingCardCharges,
-  clearRecurringCardLines,
   getExpense,
   listSectionExpenses,
   reclassifyExpense,
@@ -74,13 +74,13 @@ import {
   insertPartialPayment,
   deleteMatchingExpenses,
   deletePartialPayment,
-  deletePartialsForExpenses,
   undoExpensePayments,
   payLivingSeriesOnCard,
   payCardInvoice,
   undoCardInvoice,
   listCards,
   listMonths,
+  pruneExpiredAuthSettings,
   resetOwnerData,
   setManagedPeriod,
   listOutgoingShares,
@@ -97,10 +97,38 @@ import {
 
 const COOKIE = "gastos_session";
 const AUTH_ERROR = "Entre com CPF e senha.";
+const PERMISSIONS_POLICY = "camera=(), microphone=(), geolocation=()";
+const ASSET_CSP = "default-src 'self'; style-src 'self'; font-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'";
 
 const app = new Hono<{ Bindings: Env }>();
 
+function setApiSecurityHeaders(c: AppContext): void {
+  c.header("Cache-Control", "no-store");
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("Referrer-Policy", "no-referrer");
+  c.header("X-Frame-Options", "DENY");
+  c.header("Permissions-Policy", PERMISSIONS_POLICY);
+  if (isHttpsRequest(c.req.url)) {
+    c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+}
+
+app.onError((error, c) => {
+  console.error(JSON.stringify({
+    message: "unhandled_error",
+    path: c.req.path,
+    method: c.req.method,
+    error: error instanceof Error ? error.message : "unknown",
+  }));
+  setApiSecurityHeaders(c);
+  if (c.req.path.startsWith("/api/")) {
+    return c.json({ error: "Não foi possível concluir a solicitação. Tente novamente." }, 500);
+  }
+  return c.text("Não foi possível carregar a página.", 500);
+});
+
 app.use("/api/*", async (c, next) => {
+  setApiSecurityHeaders(c);
   if (!["GET", "HEAD"].includes(c.req.method)) {
     const origin = c.req.header("origin");
     if (origin && origin !== new URL(c.req.url).origin) {
@@ -120,8 +148,7 @@ app.use("/api/*", async (c, next) => {
     return c.json({ error: "Não foi possível abrir o banco de gastos." }, 500);
   }
   await next();
-  c.header("Cache-Control", "no-store");
-  c.header("X-Content-Type-Options", "nosniff");
+  setApiSecurityHeaders(c);
 });
 
 app.get("/api/health", (c) => c.json({ ok: true }));
@@ -212,6 +239,10 @@ app.post("/api/logout", async (c) => {
 app.post("/api/password", async (c) => {
   const user = await currentAccount(c);
   if (!user) return c.json({ error: AUTH_ERROR }, 401);
+  const passwordKey = `password:${user.id}`;
+  const passwordFailures = await failureState(c.env.DB, passwordKey);
+  const passwordLocked = lockedMessage(passwordFailures);
+  if (passwordLocked) return c.json({ error: passwordLocked }, 429);
   const body = await readJson(c);
   const next = parsePassword(body.nextPassword);
   if (!next.ok) return c.json({ error: next.error }, 400);
@@ -220,7 +251,13 @@ app.post("/api/password", async (c) => {
   }
   if (typeof body.currentPassword !== "string") return c.json({ error: "Senha atual incorreta." }, 401);
   const actual = await hashSecret(body.currentPassword, fromHex(user.passwordSalt));
-  if (!safeEqual(actual, user.passwordHash)) return c.json({ error: "Senha atual incorreta." }, 401);
+  if (!safeEqual(actual, user.passwordHash)) {
+    const updated = nextFailure(passwordFailures);
+    await setSetting(c.env.DB, failureKey(passwordKey), JSON.stringify(updated));
+    const lockMsg = lockedMessage(updated);
+    return c.json({ error: lockMsg ?? "Senha atual incorreta." }, lockMsg ? 429 : 401);
+  }
+  await setSetting(c.env.DB, failureKey(passwordKey), JSON.stringify(clearFailures()));
   const salt = randomBytes(16);
   await updatePassword(c.env.DB, user.id, await hashSecret(next.password, salt), toHex(salt));
   const passkeysRemoved = (await deleteUserPasskeys(c.env.DB, user.id)) > 0;
@@ -254,6 +291,8 @@ app.post("/api/passkeys/register", async (c) => {
 });
 
 app.post("/api/passkeys/login/options", async (c) => {
+  const limited = await consumeRateLimit(c.env.DB, `passkey_login_opts:${clientIp(c)}`, 20, 5 * 60 * 1000);
+  if (limited) return c.json({ error: limited }, 429);
   return c.json(await loginOptions(c.env.DB, c.req.url));
 });
 
@@ -529,16 +568,6 @@ app.delete("/api/income/extras/:id", async (c) => {
   return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, current.month_id), writer.scope));
 });
 
-app.post("/api/months/:id/copy", async (c) => {
-  const writer = await requireWriter(c);
-  if (!writer.ok) return c.json({ error: writer.error }, writer.status);
-  const monthId = c.req.param("id");
-  if (!(await getMonth(c.env.DB, writer.scope.ownerId, monthId))) return c.json({ error: "Mês não encontrado." }, 404);
-  const copied = await copyFromPreviousMonth(c.env.DB, writer.scope.ownerId, monthId);
-  const payload = await monthPayload(c.env.DB, writer.scope.ownerId, monthId);
-  return c.json({ copied, ...withAccess(payload, writer.scope) });
-});
-
 app.post("/api/months/:id/settle", async (c) => {
   const writer = await requireWriter(c);
   if (!writer.ok) return c.json({ error: writer.error }, writer.status);
@@ -628,14 +657,14 @@ app.patch("/api/cards/:id", async (c) => {
   const body = await readJson(c);
   const parsed = parseCardName(body.name);
   if (!parsed.ok) return c.json({ error: parsed.error }, 400);
-  const renamed = await renameCard(c.env.DB, writer.scope.ownerId, c.req.param("id"), parsed.name);
-  if (!renamed.ok) return c.json({ error: renamed.error }, renamed.error === "Cartão não encontrado." ? 404 : 409);
   const due = parseDueDay(body.dueDay);
   if (!due.ok) return c.json({ error: due.error }, 400);
   if (due.dueDay === null) return c.json({ error: "Informe o dia de vencimento, de 1 a 31." }, 400);
   const closing = parseDueDay(body.closingDay);
   if (!closing.ok) return c.json({ error: "O fechamento é um dia de 1 a 31." }, 400);
   if (closing.dueDay === null) return c.json({ error: "Informe o dia de fechamento, de 1 a 31." }, 400);
+  const renamed = await renameCard(c.env.DB, writer.scope.ownerId, c.req.param("id"), parsed.name);
+  if (!renamed.ok) return c.json({ error: renamed.error }, renamed.error === "Cartão não encontrado." ? 404 : 409);
   const dated = await setCardDueDay(c.env.DB, writer.scope.ownerId, c.req.param("id"), due.dueDay, closing.dueDay);
   if (!dated.ok) return c.json({ error: dated.error }, 404);
   return c.json({ cards: await listCards(c.env.DB, writer.scope.ownerId) });
@@ -1241,10 +1270,11 @@ app.all("*", async (c) => {
   headers.set("X-Content-Type-Options", "nosniff");
   headers.set("Referrer-Policy", "no-referrer");
   headers.set("X-Frame-Options", "DENY");
-  headers.set(
-    "Content-Security-Policy",
-    "default-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
-  );
+  headers.set("Permissions-Policy", PERMISSIONS_POLICY);
+  if (isHttpsRequest(c.req.url)) {
+    headers.set("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+  }
+  headers.set("Content-Security-Policy", ASSET_CSP);
   headers.set("Cache-Control", "no-store");
   headers.set("CDN-Cache-Control", "no-store");
   return new Response(asset.body, { status: asset.status, statusText: asset.statusText, headers });
@@ -1510,7 +1540,13 @@ function isMonthId(value: unknown): value is string {
   return typeof value === "string" && /^\d{4}-\d{2}$/.test(value);
 }
 
-type FailureState = { count: number; lockedUntil: string | null };
+function isHttpsRequest(requestUrl: string): boolean {
+  try {
+    return new URL(requestUrl).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
 
 function clientIp(c: AppContext): string {
   return (
@@ -1534,6 +1570,28 @@ async function failureState(db: D1Database, cpf: string): Promise<FailureState> 
   } catch {
     return clearFailures();
   }
+}
+
+async function consumeRateLimit(db: D1Database, key: string, maxRequests: number, windowMs: number): Promise<string | null> {
+  const fullKey = `rate_limit:${key}`;
+  const raw = await getSetting(db, fullKey);
+  let current: RateWindow | null = null;
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as Partial<RateWindow>;
+      if (typeof parsed.count === "number" && typeof parsed.resetAt === "string") {
+        current = { count: parsed.count, resetAt: parsed.resetAt };
+      }
+    } catch {
+      current = null;
+    }
+  }
+  const decision = nextRateWindow(current, maxRequests, windowMs);
+  if (!decision.allowed) {
+    return `Muitas tentativas seguidas. Tente novamente em ${decision.retryMinutes} min.`;
+  }
+  await setSetting(db, fullKey, JSON.stringify(decision.state));
+  return null;
 }
 
 async function isAuthenticated(db: D1Database, token: string | undefined): Promise<boolean> {
@@ -1568,10 +1626,6 @@ async function currentAccount(c: AppContext) {
 
 type AppContext = Context<{ Bindings: Env }>;
 
-async function requireAuth(c: AppContext): Promise<boolean> {
-  return isAuthenticated(c.env.DB, getCookie(c, COOKIE));
-}
-
 async function startSession(c: AppContext, userId: string): Promise<void> {
   const token = randomToken();
   const now = new Date().toISOString();
@@ -1584,6 +1638,7 @@ async function startSession(c: AppContext, userId: string): Promise<void> {
       userId,
     ),
   ]);
+  await pruneExpiredAuthSettings(c.env.DB).catch(() => {});
   setCookie(c, COOKIE, token, sessionCookieOptions(c.req.url));
 }
 

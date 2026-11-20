@@ -77,6 +77,7 @@ const state = {
   devicePrompt: false,
   periodDraft: null,
   confirmReset: null,
+  confirmTarget: null,
   resetReadyAt: 0,
   resetTimer: 0,
 };
@@ -262,7 +263,7 @@ async function loadMonth(monthId) {
   if (data.theme) applyTheme(data.theme);
   state.monthId = data.month.id;
   try { sessionStorage.setItem("monthId", data.month.id); } catch { /* o mês segue só nesta aba */ }
-  rememberMonth(data);
+  rememberMonth(data, { keepOthers: true, preload: false });
   await preloadAround(data);
 }
 
@@ -303,18 +304,19 @@ async function preloadAround(data) {
   if (ids.length) renderSafely();
 }
 
-function rememberMonth(data) {
+function rememberMonth(data, { keepOthers = false, preload = true } = {}) {
   state.nextInvoicesFor = "";
   state.nextInvoices = null;
   state.purchasesMonthId = "";
   state.purchases = null;
+  if (!keepOthers) monthStore.clear();
   storeMonth(data);
   try {
     sessionStorage.setItem("monthCache:v1", JSON.stringify({ data }));
   } catch {
     sessionStorage.removeItem("monthCache:v1");
   }
-  void preloadAround(data);
+  if (preload) void preloadAround(data);
 }
 
 function readMonthCache(monthId) {
@@ -565,8 +567,12 @@ function blockBackgroundKeys(event) {
   if (event.key === "Escape") {
     event.preventDefault();
     if (state.confirm) closeConfirm();
+    else if (state.tabIntro) closeTabIntro(false);
     else if (state.costDetail) closeCostDetail();
-    else if (state.expenseInfo) closeExpenseInfo();
+    else if (state.help) {
+      state.help = null;
+      render();
+    } else if (state.expenseInfo) closeExpenseInfo();
     else if (state.sheet) closeSheet();
     return;
   }
@@ -738,8 +744,13 @@ async function registerPasskey() {
   }
 }
 
-async function removePasskey(id) {
-  if (!window.confirm("Remover a digital deste celular?")) return;
+function removePasskey(id) {
+  state.confirmTarget = id;
+  askConfirm("remove-passkey");
+}
+
+async function executeRemovePasskey(id) {
+  if (!id) return;
   state.error = "";
   setWorking(true, "Removendo...");
   try {
@@ -914,26 +925,6 @@ async function openShares() {
   }
 }
 
-async function saveShare(event) {
-  event.preventDefault();
-  const draft = state.sheet;
-  state.error = "";
-  setWorking(true, "Salvando...");
-  try {
-    const data = await request("/api/shares", { method: "POST", body: { cpf: draft.cpf, permission: draft.permission } });
-    state.shares = data.shares || [];
-    state.sheet.cpf = "";
-    state.notice = "Compartilhamento salvo.";
-    const spaces = await request("/api/spaces");
-    state.spaces = spaces.spaces || state.spaces;
-  } catch (error) {
-    state.error = messageOf(error);
-  } finally {
-    setWorking(false);
-    renderSafely();
-  }
-}
-
 async function setSharePermission(share, permission) {
   state.error = "";
   setWorking(true, "Salvando...");
@@ -948,8 +939,13 @@ async function setSharePermission(share, permission) {
   }
 }
 
-async function removeShare(share) {
-  if (!window.confirm(`Parar de compartilhar com ${share.cpf}?`)) return;
+function removeShare(share) {
+  state.confirmTarget = share;
+  askConfirm("remove-share");
+}
+
+async function executeRemoveShare(share) {
+  if (!share?.id) return;
   state.error = "";
   setWorking(true, "Removendo...");
   try {
@@ -963,10 +959,6 @@ async function removeShare(share) {
     setWorking(false);
     renderSafely();
   }
-}
-
-function screen(child) {
-  return el("main", { class: "screen" }, [child]);
 }
 
 function setBootProgress(value) {
@@ -1102,14 +1094,14 @@ async function changeMonth(monthId) {
     state.monthId = cached.month.id;
     if (cached.theme) applyTheme(cached.theme);
     try { sessionStorage.setItem("monthId", cached.month.id); } catch { /* o mês segue só nesta aba */ }
-    rememberMonth(cached);
+    rememberMonth(cached, { keepOthers: true });
     render();
     fetchMonth(monthId).then((data) => {
       if (state.monthId !== monthId) return;
       state.data = data;
       state.monthId = data.month.id;
       if (data.theme) applyTheme(data.theme);
-      rememberMonth(data);
+      rememberMonth(data, { keepOthers: true });
       renderSafely();
     }).catch(() => {});
     return;
@@ -1348,7 +1340,7 @@ function summary(data) {
           class: "metric metric-forecast",
           type: "button",
           "aria-label": `Abrir ${monthName(nextId)}`,
-          onclick: () => pickMonth(nextId),
+          onclick: () => changeMonth(nextId),
         }, [
           el("small", {}, `Despesa prevista · ${shortMonthLabel(nextId)}`),
           el("strong", {}, fin.forecast.next.ready ? money(fin.forecast.next.expenseCents) : "…"),
@@ -1540,6 +1532,32 @@ function confirmCopy() {
       cancel: "Cancelar",
     };
   }
+  if (state.confirm === "remove-passkey") {
+    return {
+      title: "Remover digital",
+      body: "Remover a digital deste celular? Você poderá cadastrar de novo depois.",
+      action: "Remover",
+      cancel: "Cancelar",
+    };
+  }
+  if (state.confirm === "remove-share") {
+    const cpf = state.confirmTarget?.cpf || "esta pessoa";
+    return {
+      title: "Parar de compartilhar",
+      body: `Parar de compartilhar seus gastos com ${cpf}?`,
+      action: "Remover",
+      cancel: "Cancelar",
+    };
+  }
+  if (state.confirm === "delete-expense-simple") {
+    const name = state.confirmTarget?.name || "este gasto";
+    return {
+      title: "Excluir gasto",
+      body: `Excluir “${name}” deste mês?`,
+      action: "Excluir",
+      cancel: "Cancelar",
+    };
+  }
   if (state.confirm === "reopen") {
     return {
       title: "Reabrir mês",
@@ -1559,7 +1577,11 @@ function confirmCopy() {
 function confirmDialog() {
   const copy = confirmCopy();
   const wait = state.confirm === "reset" ? resetSecondsLeft() : 0;
-  const destructive = state.confirm === "reset" || state.confirm === "delete-card";
+  const destructive = state.confirm === "reset"
+    || state.confirm === "delete-card"
+    || state.confirm === "remove-passkey"
+    || state.confirm === "remove-share"
+    || state.confirm === "delete-expense-simple";
   const overlay = el("div", {
     class: "overlay center",
     role: "presentation",
@@ -1587,6 +1609,7 @@ function confirmDialog() {
 function closeConfirm() {
   clearTimeout(state.resetTimer);
   state.confirm = null;
+  state.confirmTarget = null;
   render();
 }
 
@@ -2110,9 +2133,11 @@ async function executeReset() {
 
 async function runConfirm() {
   const kind = state.confirm;
+  const target = state.confirmTarget;
   if (kind === "reset" && resetSecondsLeft() > 0) return;
   clearTimeout(state.resetTimer);
   state.confirm = null;
+  state.confirmTarget = null;
   if (kind === "leave") {
     leavePage();
     return;
@@ -2127,6 +2152,18 @@ async function runConfirm() {
   }
   if (kind === "delete-card") {
     await removeCard(state.confirmCard);
+    return;
+  }
+  if (kind === "remove-passkey") {
+    await executeRemovePasskey(target);
+    return;
+  }
+  if (kind === "remove-share") {
+    await executeRemoveShare(target);
+    return;
+  }
+  if (kind === "delete-expense-simple") {
+    await deleteExpenseNow(target, "month");
     return;
   }
   if (kind === "past-due") {
@@ -2197,7 +2234,6 @@ function historyWhen(iso) {
   const date = new Date(iso);
   if (Number.isNaN(date.getTime())) return "";
   return new Intl.DateTimeFormat("pt-BR", {
-    timeZone: "America/Sao_Paulo",
     day: "2-digit",
     month: "2-digit",
     hour: "2-digit",
@@ -3711,6 +3747,7 @@ async function saveBase(scope) {
   setWorking(true, "Salvando...");
   try {
     state.data = await request("/api/income/base", { method: "POST", body: { amountCents, scope, monthId: state.monthId } });
+    rememberMonth(state.data);
     state.baseIncome = "";
     state.notice = scope === "all"
       ? "Receita base aplicada em todos os meses."
@@ -3744,6 +3781,7 @@ async function removeIncomeExtra(extra) {
   setWorking(true, "Excluindo...");
   try {
     state.data = await request(`/api/income/extras/${extra.id}`, { method: "DELETE" });
+    rememberMonth(state.data);
   } catch (error) {
     state.error = messageOf(error);
   } finally {
@@ -3817,16 +3855,6 @@ function livingJump(totals, expenses) {
     place,
     crossLine,
   ]);
-}
-
-function blurb(section, totals) {
-  if (section === "card" && totals.fixedOnCardCents) {
-    return `${money(totals.fixedOnCardCents)} de custo de vida já foram lançados no cartão e não somam de novo.`;
-  }
-  if (section === "card") return "Linhas previstas da planilha mais os gastos lançados no cartão.";
-  if (section === "fixed" && totals.fixedAllSettled) return "Todas as despesas deste mês foram finalizadas.";
-  if (section === "fixed") return "O previsto só entra na fatura ou sai da receita quando você lançar o pagamento.";
-  return "Imprevistos deste mês, fora da projeção.";
 }
 
 function costCard(key, label, cents, wide = false, sub = "") {
@@ -4193,7 +4221,6 @@ function livingPay(draft) {
 
 function recurringSpan(draft) {
   const span = draft.span || "all";
-  const fixedCard = draft.payment === "card" && draft.costKind !== "variavel";
   const copy = span === "period"
     ? "A conta prevista entra em cada mês do intervalo."
     : span === "month"
@@ -4713,10 +4740,6 @@ function closeExpenseInfo() {
   render();
 }
 
-function paidPartialCents(expense) {
-  return (expense.partials || []).reduce((sum, item) => sum + item.amountCents, 0);
-}
-
 function openCloseLiving(expense) {
   const balance = livingBalance(expense);
   state.expenseInfo = null;
@@ -4982,17 +5005,6 @@ function openEdit(expense, options = {}) {
   render();
 }
 
-function invoiceBuckets(expense) {
-  const next = nextMonthId(expense.monthId);
-  let current = 0;
-  let following = 0;
-  for (const charge of expense.charges || []) {
-    if (charge.monthId === expense.monthId) current += charge.amountCents;
-    else if (charge.monthId === next) following += charge.amountCents;
-  }
-  return { current, following, nextMonthId: next };
-}
-
 function linkedLivingCost(expense) {
   return expense.section === "fixed" && expense.onCard && linkedInvoice(expense);
 }
@@ -5008,47 +5020,6 @@ function openUndoCard(expense) {
     id: expense.id,
     name: expense.name,
     scope: "month",
-  };
-  state.error = "";
-  render();
-}
-
-function openCardPay(expense) {
-  state.expenseInfo = null;
-  const cards = state.data?.cards ?? [];
-  if (!cards.length) {
-    state.error = "Adicione um cartão antes de lançar o pagamento.";
-    openCreateCard();
-    return;
-  }
-  const selected = cards.some((card) => card.name === expense.cardLabel) ? expense.cardLabel : (cards.length === 1 ? cards[0].name : "");
-  const already = paidPartialCents(expense);
-  const rest = Math.max(0, expense.amountCents - already);
-  const baseMonth = expense.monthId || state.monthId;
-  const timing = invoiceShift(expense.note);
-  const nextId = nextMonthId(baseMonth);
-  const hasNext = (state.data?.months || []).some((month) => month.id === nextId);
-  state.sheet = {
-    mode: "card-pay",
-    id: expense.id,
-    described: already > 0 ? rest : expense.amountCents,
-    planned: expense.amountCents,
-    already,
-    closeAfter: "open",
-    alias: expense.name,
-    cardLabel: selected,
-    amountChoice: already > 0 ? (rest > 0 ? "same" : "none") : "same",
-    chargedAmount: "",
-    billing: "once",
-    installmentCount: "2",
-    installmentAmount: "",
-    amountEdits: [],
-    invoiceMonthId: timing === "seguinte" && hasNext ? nextId : baseMonth,
-    costMonthId: baseMonth,
-    invoiceTiming: timing,
-    cardScope: "month",
-    variable: isVariableNote(expense.note),
-    linked: linkedInvoice(expense) || expense.onCard,
   };
   state.error = "";
   render();
@@ -5959,6 +5930,7 @@ async function saveSheet(event) {
         });
         state.notice = count > 1 ? `Receita extra lançada em ${count} meses.` : "";
       }
+      rememberMonth(state.data);
     } else if (draft.mode === "period") {
       await savePeriod(draft, false);
       return;
@@ -5974,10 +5946,11 @@ async function saveSheet(event) {
         state.notice = "Senha trocada. As digitais cadastradas foram removidas. Cadastre de novo neste celular se quiser entrar com a digital.";
       }
     } else if (draft.mode === "card-payoff") {
-      const downCents = parseMoney(draft.down || "") ?? 0;
+      const hasDown = String(draft.down || "").trim() !== "";
+      const downCents = hasDown ? parseMoney(draft.down) : 0;
       const count = Number(draft.count);
       const installmentCents = parseMoney(draft.per || "");
-      if (draft.down && downCents === null) throw new Error("Informe a entrada. Exemplo: 200,00. Deixe em branco se não houver.");
+      if (hasDown && (downCents === null || downCents < 0)) throw new Error("Informe a entrada. Exemplo: 200,00. Deixe em branco se não houver.");
       if (!Number.isInteger(count) || count < 2 || count > 48) throw new Error("Informe de 2 a 48 parcelas.");
       if (installmentCents === null || installmentCents <= 0) throw new Error("Informe o valor da parcela.");
       if (!draft.startMonthId) throw new Error("Escolha o mês em que o parcelamento começa.");
@@ -5988,7 +5961,7 @@ async function saveSheet(event) {
         body: {
           mode: "installments",
           monthId: state.monthId,
-          downCents: draft.down ? downCents : 0,
+          downCents,
           count,
           installmentCents,
           startMonthId: draft.startMonthId,
@@ -6101,6 +6074,7 @@ async function saveSheet(event) {
         }
       }
       state.data.cards = data.cards;
+      rememberMonth(state.data);
     } else if (draft.fromCard && draft.mode === "edit") {
       if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
       const amountCents = parseMoney(draft.amount || "");
@@ -6138,15 +6112,8 @@ async function saveSheet(event) {
       if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
       if (amountCents === null) throw new Error("Informe o valor. Exemplo: 75,90");
       const variableCard = draft.mode === "create" && draft.section === "fixed" && !draft.cardExpense && draft.payment === "card" && draft.costKind === "variavel";
-      const livingOnCard = false;
       if (variableCard && !String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão.");
       if (variableCard && amountCents <= 0) throw new Error("Informe o valor previsto.");
-      if (livingOnCard) {
-        draft.onCard = false;
-        draft.paid = false;
-        if (!String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão.");
-        if (amountCents <= 0) throw new Error("Informe um valor maior que zero para lançar no cartão.");
-      }
       const editingLiving = draft.mode === "edit" && draft.section === "fixed" && !draft.cardExpense;
       const seriesEdit = (editingLiving || (draft.mode === "edit" && draft.section === "card"))
         && (draft.editScope === "forward" || draft.editScope === "all");
@@ -6163,7 +6130,7 @@ async function saveSheet(event) {
         || (draft.section === "fixed" && draft.onCard)
         || (draft.cardExpense && draft.mode === "create");
       if (needsCard && !String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão deste gasto.");
-      const onCardPurchase = draft.mode === "create" && !livingOnCard && !variableCard && draft.section !== "fixed" && (draft.section === "card" || draft.payment === "card");
+      const onCardPurchase = draft.mode === "create" && !variableCard && draft.section !== "fixed" && (draft.section === "card" || draft.payment === "card");
       const totalCount = Number(draft.installmentCount);
       const paidCount = Number(draft.installmentsPaid);
       if (onCardPurchase && (!Number.isInteger(totalCount) || !Number.isInteger(paidCount))) {
@@ -6173,9 +6140,7 @@ async function saveSheet(event) {
         ? recurringMonthIds(draft)
         : null;
       if (recurringMonths && !recurringMonths.length) {
-        throw new Error(livingOnCard
-          ? "A primeira fatura precisa estar dentro dos meses da conta."
-          : "Escolha um período em que o fim não seja antes do início.");
+        throw new Error("Escolha um período em que o fim não seja antes do início.");
       }
       if (draft.mode === "edit" && draft.section === "card") {
         if (!Number.isInteger(totalCount) || totalCount < 1 || totalCount > 48 || !Number.isInteger(paidCount) || paidCount < 0 || paidCount >= totalCount) {
@@ -6194,9 +6159,7 @@ async function saveSheet(event) {
       const startMonthId = surpriseCard ? (draft.invoiceMonthId || "") : state.monthId;
       if (surpriseCard && !startMonthId) throw new Error("Escolha a fatura em que o valor entra.");
       const invoiceLabel = (state.data?.months || []).find((month) => month.id === startMonthId)?.label || "";
-      const dueMonth = livingOnCard
-        ? (recurringMonths?.[0] || state.monthId)
-        : relaunch ? draft.monthId : surpriseCard ? startMonthId : onCardPurchase ? state.monthId : "";
+      const dueMonth = relaunch ? draft.monthId : surpriseCard ? startMonthId : onCardPurchase ? state.monthId : "";
       const dueCard = dueMonth ? draft.cardLabel : "";
       if (dueCard && !acceptPastDue(pastDueWarning(dueCard, dueMonth))) return;
       setWorking(true, "Salvando...");
@@ -6208,14 +6171,13 @@ async function saveSheet(event) {
         name: draft.name,
         amountCents,
         section: draft.section,
-        payment: (draft.section === "fixed" && draft.onCard) || livingOnCard || wantsCard ? "card" : draft.payment,
+        payment: (draft.section === "fixed" && draft.onCard) || wantsCard ? "card" : draft.payment,
         onCard: draft.section === "fixed" && draft.onCard && !relaunch,
         cardLabel: draft.cardLabel,
         note: composeNote(draft.originId, draft.note, draft.partialId, draft.seriesId, isVariable, draft.section === "extra" && draft.expenseKind === "planejado", nextInvoiceFlag),
         installment: onCardPurchase ? null : draft.installment,
         paid: draft.paid,
         installmentPlan: onCardPurchase ? { totalCount, paidCount, amountMode: draft.amountMode || "installment" } : undefined,
-        cardLaunch: livingOnCard ? (draft.span === "month" ? "month" : "following") : undefined,
         costKind: variableCard ? "variavel" : undefined,
         kind: draft.section === "extra" ? (draft.expenseKind === "planejado" ? "planejado" : "imprevisto") : undefined,
       };
@@ -6238,14 +6200,6 @@ async function saveSheet(event) {
           state.notice = nextInvoiceFlag
             ? "Valor previsto para a fatura do mês seguinte. Nada entrou na fatura agora."
             : "Valor previsto. Nada entrou na fatura. Lance o total ou um parcial quando quiser. A despesa só encerra quando você pedir.";
-        } else if (livingOnCard) {
-          state.notice = draft.span === "month"
-            ? "Lancei este custo no cartão só deste mês."
-            : draft.span === "following"
-            ? "Lancei este custo no cartão deste mês e dos seguintes."
-            : draft.span === "period"
-            ? "Lancei este custo no cartão do período escolhido."
-            : "Lancei este custo no cartão de todos os meses.";
         } else if (recurringMonths) {
           const span = recurringMonths.length > 1 ? ` em ${recurringMonths.length} meses` : "";
           state.notice = draft.payment === "card"
@@ -6319,6 +6273,7 @@ async function patchExpense(expense, patch) {
         ...patch,
       },
     });
+    rememberMonth(state.data);
   } catch (error) {
     state.error = messageOf(error);
   } finally {
@@ -6331,8 +6286,8 @@ function openDeleteExpense(expense) {
   if (!expense?.id) return;
   const cardSurprise = expense.section === "extra" && expense.payment === "card";
   if (expense.section !== "fixed" && expense.section !== "card" && !cardSurprise) {
-    if (!window.confirm(`Excluir “${expense.name}” deste mês?`)) return;
-    deleteExpenseNow(expense, "month");
+    state.confirmTarget = expense;
+    askConfirm("delete-expense-simple");
     return;
   }
   state.expenseInfo = null;
@@ -6368,15 +6323,12 @@ async function deleteExpenseNow(expense, scope = "month") {
   }
 }
 
-async function removeExpense() {
-  openDeleteExpense(state.sheet);
-}
-
 async function settle(mode) {
   state.error = "";
   setWorking(true, "Atualizando...");
   try {
     state.data = await request(`/api/months/${state.monthId}/settle`, { method: "POST", body: { mode } });
+    rememberMonth(state.data);
   } catch (error) {
     state.error = messageOf(error);
   } finally {

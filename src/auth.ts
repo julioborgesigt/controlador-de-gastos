@@ -102,7 +102,7 @@ export function sessionExpiry(): string {
   return new Date(Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000).toISOString();
 }
 
-type FailureState = { count: number; lockedUntil: string | null };
+export type FailureState = { count: number; lockedUntil: string | null; updatedAt?: string };
 
 export function lockedMessage(state: FailureState, now = Date.now()): string | null {
   if (!state.lockedUntil) return null;
@@ -118,14 +118,45 @@ export function nextFailure(state: FailureState, now = Date.now()): FailureState
   const expiredLock = !Number.isNaN(until) && until <= now;
   const baseCount = expiredLock ? 0 : state.count;
   const count = activeLock ? state.count : baseCount + 1;
+  const updatedAt = new Date(now).toISOString();
   if (count >= MAX_FAILURES) {
-    return { count, lockedUntil: new Date(now + LOCK_MS).toISOString() };
+    return { count, lockedUntil: new Date(now + LOCK_MS).toISOString(), updatedAt };
   }
-  return { count, lockedUntil: null };
+  return { count, lockedUntil: null, updatedAt };
 }
 
 export function clearFailures(): FailureState {
   return { count: 0, lockedUntil: null };
+}
+
+export type RateWindow = { count: number; resetAt: string };
+
+export function nextRateWindow(
+  current: RateWindow | null,
+  maxRequests: number,
+  windowMs: number,
+  now = Date.now(),
+): { allowed: boolean; state: RateWindow; retryMinutes: number } {
+  const resetAtMs = current ? Date.parse(current.resetAt) : Number.NaN;
+  if (!current || Number.isNaN(resetAtMs) || resetAtMs <= now) {
+    return {
+      allowed: true,
+      state: { count: 1, resetAt: new Date(now + windowMs).toISOString() },
+      retryMinutes: 0,
+    };
+  }
+  if (current.count >= maxRequests) {
+    return {
+      allowed: false,
+      state: current,
+      retryMinutes: Math.max(1, Math.ceil((resetAtMs - now) / 60000)),
+    };
+  }
+  return {
+    allowed: true,
+    state: { count: current.count + 1, resetAt: current.resetAt },
+    retryMinutes: 0,
+  };
 }
 
 function toHex(bytes: Uint8Array): string {
