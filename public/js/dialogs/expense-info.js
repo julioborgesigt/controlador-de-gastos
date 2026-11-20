@@ -347,9 +347,10 @@ export function expenseInfoDialog() {
   ].filter(Boolean);
   const overlay = el("div", {
     class: "overlay center",
+    "data-key": "expense-info",
     role: "presentation",
     onclick: (event) => {
-      if (event.target === overlay) closeExpenseInfo();
+      if (event.target === event.currentTarget) closeExpenseInfo();
     },
   }, [
     el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "expense-info-title", tabindex: "-1" }, [

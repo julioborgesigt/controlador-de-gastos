@@ -15,9 +15,10 @@ export function tabIntroDialog() {
   if (!info) return el("div");
   const overlay = el("div", {
     class: "overlay center",
+    "data-key": "tab-intro",
     role: "presentation",
     onclick: (event) => {
-      if (event.target === overlay) closeTabIntro(false);
+      if (event.target === event.currentTarget) closeTabIntro(false);
     },
   }, [
     el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "tab-intro-title", tabindex: "-1" }, [
@@ -72,9 +73,10 @@ export function helpDialog() {
   };
   const overlay = el("div", {
     class: "overlay center",
+    "data-key": "help",
     role: "presentation",
     onclick: (event) => {
-      if (event.target === overlay) close();
+      if (event.target === event.currentTarget) close();
     },
   }, [
     el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-labelledby": "help-title", tabindex: "-1" }, [
@@ -146,9 +148,10 @@ export function costDetailDialog() {
   const total = rows.reduce((sum, row) => sum + row.amount, 0);
   const overlay = el("div", {
     class: "overlay center",
+    "data-key": "cost-detail",
     role: "presentation",
     onclick: (event) => {
-      if (event.target === overlay) closeCostDetail();
+      if (event.target === event.currentTarget) closeCostDetail();
     },
   }, [
     el("div", { class: "dialog", role: "dialog", "aria-modal": "true", "aria-label": title, tabindex: "-1" }, [

@@ -8,7 +8,7 @@ import {
   storeMonth,
 } from "./api.js";
 import { askConfirm } from "./dialogs/confirm.js";
-import { el, messageOf } from "./dom.js";
+import { el, messageOf, on } from "./dom.js";
 import { defaultPeriodDraft } from "./setup.js";
 import { render, renderSafely, setWorking, state } from "./state.js";
 
@@ -43,7 +43,7 @@ export function authScreen() {
       }, registering ? "Já tenho conta" : "Criar conta"),
     ]),
   ]);
-  form.addEventListener("submit", submitAuth);
+  on(form, "submit", submitAuth);
   return el("main", { class: "screen auth" }, [form]);
 }
 
@@ -56,10 +56,11 @@ function authInput(id, label, value, options) {
     placeholder: options.placeholder || "",
     value,
   });
-  input.addEventListener("input", () => {
-    const next = options.mask === "cpf" ? formatCpf(input.value) : input.value;
+  on(input, "input", (event) => {
+    const fieldEl = event.currentTarget;
+    const next = options.mask === "cpf" ? formatCpf(fieldEl.value) : fieldEl.value;
     state.auth[options.key] = next;
-    if (next !== input.value) input.value = next;
+    if (next !== fieldEl.value) fieldEl.value = next;
   });
   return el("div", { class: "field" }, [el("label", { for: id }, label), input]);
 }

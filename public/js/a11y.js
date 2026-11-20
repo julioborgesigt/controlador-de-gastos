@@ -163,9 +163,12 @@ export function applyFocusAfterRender(focusBefore, allowModal = true) {
     if (modal instanceof HTMLElement) modal.focus({ preventScroll: true });
   } else if (focusBefore) {
     const scope = nextModalKey && modal ? modal : root;
-    const restored = resolveFocusSnapshot(focusBefore, scope);
-    if (restored) focusElement(restored, focusBefore);
-    else if (nextModalKey && modal instanceof HTMLElement) modal.focus({ preventScroll: true });
+    const currentActive = document.activeElement;
+    if (!(currentActive instanceof HTMLElement && scope.contains(currentActive))) {
+      const restored = resolveFocusSnapshot(focusBefore, scope);
+      if (restored) focusElement(restored, focusBefore);
+      else if (nextModalKey && modal instanceof HTMLElement) modal.focus({ preventScroll: true });
+    }
   }
   lastModalKey = nextModalKey;
 }

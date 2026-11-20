@@ -143,14 +143,55 @@ export function backArrow() {
   return svg;
 }
 
+const EVENT_HANDLERS = new WeakMap();
+const EVENT_DISPATCHERS = new WeakMap();
+
+export function on(node, type, handler) {
+  let handlers = EVENT_HANDLERS.get(node);
+  if (!handlers) {
+    handlers = Object.create(null);
+    EVENT_HANDLERS.set(node, handlers);
+  }
+  handlers[type] = handler;
+  let bound = EVENT_DISPATCHERS.get(node);
+  if (!bound) {
+    bound = new Set();
+    EVENT_DISPATCHERS.set(node, bound);
+  }
+  if (!bound.has(type)) {
+    bound.add(type);
+    node.addEventListener(type, (event) => {
+      const current = EVENT_HANDLERS.get(node)?.[type];
+      if (typeof current === "function") current(event);
+    });
+  }
+}
+
+export function syncEvents(target, source) {
+  const prev = EVENT_HANDLERS.get(target);
+  const next = EVENT_HANDLERS.get(source);
+  if (prev) {
+    for (const type of Object.keys(prev)) {
+      if (!next || !(type in next)) prev[type] = null;
+    }
+  }
+  if (next) {
+    for (const [type, handler] of Object.entries(next)) {
+      if (typeof handler === "function") on(target, type, handler);
+    }
+  }
+}
+
 export function el(tag, attrs = {}, children = []) {
   const node = document.createElement(tag);
   for (const [key, value] of Object.entries(attrs)) {
     if (value === null || value === undefined || value === false) continue;
     if (key === "class") node.className = value;
-    else if (key === "onclick" || (key.startsWith("on") && typeof value === "function")) node.addEventListener(key.slice(2), value);
+    else if (key === "onclick" || (key.startsWith("on") && typeof value === "function")) on(node, key.slice(2), value);
     else if (key === "for") node.htmlFor = value;
     else if (key === "value") node.value = value;
+    else if (key === "checked") node.checked = Boolean(value);
+    else if (key === "selected") node.selected = Boolean(value);
     else node.setAttribute(key, value === true ? "" : String(value));
   }
   const list = Array.isArray(children) ? children : [children];

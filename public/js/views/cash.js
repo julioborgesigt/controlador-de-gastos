@@ -1,7 +1,7 @@
 import { isPlannedNote, money } from "../../format.js";
 import { ensureLinkChoices } from "../api.js";
 import { titleWithHelp } from "../dialogs/info.js";
-import { el, historyWhen, monthName } from "../dom.js";
+import { el, historyWhen, monthName, on } from "../dom.js";
 import { field, segmented } from "../sheets/fields.js";
 import { closeSheet, livingLinkSelect, livingLinkStatus, paintLivingLinks } from "../sheets/openers.js";
 import { editable, render, state } from "../state.js";
@@ -96,15 +96,16 @@ export function cashSpendFields(draft) {
   const months = state.data?.months || [];
   const monthSelect = el("select", { id: "invoiceMonthId" }, months.map((month) => el("option", { value: month.id }, month.label)));
   if (draft.invoiceMonthId) monthSelect.value = draft.invoiceMonthId;
-  monthSelect.addEventListener("change", () => {
-    if (draft.invoiceMonthId !== monthSelect.value) {
+  on(monthSelect, "change", (event) => {
+    const nextValue = event.currentTarget.value;
+    if (draft.invoiceMonthId !== nextValue) {
       draft.linkExpenseId = "";
       draft.linkChoices = null;
       draft.linkKey = "";
       draft.linkLoading = "";
       draft.linkError = "";
     }
-    draft.invoiceMonthId = monthSelect.value;
+    draft.invoiceMonthId = nextValue;
     ensureLinkChoices(draft);
     if (!paintLivingLinks(draft)) render();
   });

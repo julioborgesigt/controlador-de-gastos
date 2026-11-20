@@ -1,4 +1,4 @@
-import { desktopMedia, el, onDesktop } from "./dom.js";
+import { desktopMedia, el, on, onDesktop } from "./dom.js";
 import { closeSheet } from "./sheets/openers.js";
 import { render, state } from "./state.js";
 
@@ -79,7 +79,7 @@ export function swipeRow(front, { pay, leads, actions, card }) {
     trail,
   ]);
   front.classList.add("swipe-front");
-  const shell = el("div", { class: card ? "swipe card-swipe" : "swipe" }, [back, front]);
+  const shell = el("div", { class: card ? "swipe card-swipe" : "swipe", "data-patch-replace": "1" }, [back, front]);
   let startX = 0;
   let startY = 0;
   let base = 0;
@@ -186,31 +186,36 @@ export function attachSheetDrag(panel) {
   let startY = 0;
   let lastY = 0;
   let dragging = false;
-  grab.addEventListener("pointerdown", (event) => {
+  on(grab, "pointerdown", (event) => {
     if (event.button !== 0) return;
+    const liveGrab = event.currentTarget;
+    const livePanel = liveGrab?.closest?.(".sheet") || panel;
     startY = event.clientY;
     lastY = startY;
     dragging = true;
-    panel.classList.add("dragging");
-    try { grab.setPointerCapture(event.pointerId); } catch { /* o arraste segue sem captura */ }
+    livePanel.classList.add("dragging");
+    try { liveGrab.setPointerCapture(event.pointerId); } catch { /* o arraste segue sem captura */ }
   });
-  grab.addEventListener("pointermove", (event) => {
+  on(grab, "pointermove", (event) => {
     if (!dragging) return;
+    const livePanel = event.currentTarget?.closest?.(".sheet") || panel;
     lastY = event.clientY;
     const dy = Math.max(0, event.clientY - startY);
-    panel.style.transform = dy ? `translateY(${dy}px)` : "";
+    livePanel.style.transform = dy ? `translateY(${dy}px)` : "";
   });
   const end = (event) => {
     if (!dragging) return;
+    const liveGrab = event.currentTarget;
+    const livePanel = liveGrab?.closest?.(".sheet") || panel;
     dragging = false;
-    panel.classList.remove("dragging");
-    try { grab.releasePointerCapture(event.pointerId); } catch { /* a captura já terminou */ }
+    livePanel.classList.remove("dragging");
+    try { liveGrab.releasePointerCapture(event.pointerId); } catch { /* a captura já terminou */ }
     const dy = lastY - startY;
     if (dy > 110) closeSheet();
-    else panel.style.transform = "";
+    else livePanel.style.transform = "";
   };
-  grab.addEventListener("pointerup", end);
-  grab.addEventListener("pointercancel", end);
+  on(grab, "pointerup", end);
+  on(grab, "pointercancel", end);
 }
 
 export function initSwipeListeners() {
