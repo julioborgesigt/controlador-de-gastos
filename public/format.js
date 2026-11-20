@@ -1,3 +1,38 @@
+import {
+  chargedInvoiceMonth,
+  formatCardChargeTitle,
+  invoiceShift,
+  isImprevistoNote,
+  isPlannedNote,
+  isVariableNote,
+  isZeroFinalizedNote,
+  originIdFrom,
+  partialIdFrom,
+  referenceMonthFrom,
+  seriesIdFrom,
+  visibleNote,
+} from "./shared/note-markers.js";
+import {
+  nextMonthId as sharedNextMonthId,
+  previousMonthId as sharedPreviousMonthId,
+  shortMonthLabel,
+} from "./shared/months.js";
+
+export {
+  chargedInvoiceMonth,
+  invoiceShift,
+  isImprevistoNote,
+  isPlannedNote,
+  isVariableNote,
+  isZeroFinalizedNote,
+  originIdFrom,
+  partialIdFrom,
+  referenceMonthFrom,
+  seriesIdFrom,
+  shortMonthLabel,
+  visibleNote,
+};
+
 export function formatCpf(value) {
   const digits = String(value || "").replace(/\D/g, "").slice(0, 11);
   if (digits.length <= 3) return digits;
@@ -24,63 +59,11 @@ export function bufferToBase64Url(buffer) {
   const bytes = new Uint8Array(buffer);
   let binary = "";
   for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
-}
-
-export function originIdFrom(note) {
-  const line = String(note || "").split("\n").find((item) => item.startsWith("origem:"));
-  return line ? line.slice("origem:".length) : "";
-}
-
-export function partialIdFrom(note) {
-  const line = String(note || "").split("\n").find((item) => item.startsWith("parcial:"));
-  return line ? line.slice("parcial:".length) : "";
-}
-
-export function seriesIdFrom(note) {
-  const line = String(note || "").split("\n").find((item) => item.startsWith("serie:"));
-  return line ? line.slice("serie:".length) : "";
-}
-
-export function isVariableNote(note) {
-  return String(note || "").split("\n").some((item) => item.trim() === "tipo:variavel");
-}
-
-export function isZeroFinalizedNote(note) {
-  return String(note || "").split("\n").some((item) => item.trim() === "finalizado:0");
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 export function cardChargeTitle(expense) {
-  const name = String(expense.name || "").trim();
-  const note = String(expense.note || "");
-  const purchase = note.split("\n").map((item) => item.trim()).find((item) => item.startsWith("compra:"));
-  const date = purchase ? purchase.slice("compra:".length).trim() : "";
-  if (/^\d{4}-\d{2}-\d{2}$/.test(date)) return `${date.slice(8, 10)}/${date.slice(5, 7)} ${name}`;
-  const reference = note.split("\n").map((item) => item.trim()).find((item) => item.startsWith("ref:"));
-  const monthId = reference ? reference.slice("ref:".length).trim() : expense.monthId;
-  const names = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
-  const label = /^\d{4}-\d{2}$/.test(String(monthId || "")) ? names[Number(String(monthId).slice(5, 7)) - 1] : "";
-  return label ? `${name} ${label}` : name;
-}
-
-export function visibleNote(note) {
-  return String(note || "")
-    .split("\n")
-    .map((item) => item.trim())
-    .filter((item) =>
-      item
-      && !item.startsWith("origem:")
-      && !item.startsWith("parcial:")
-      && !item.startsWith("serie:")
-      && !item.startsWith("tipo:")
-      && !item.startsWith("fatura:")
-      && !item.startsWith("compra:")
-      && !item.startsWith("ref:")
-      && !item.startsWith("quitado-cartao:")
-      && !item.startsWith("parcelamento:")
-      && !item.startsWith("finalizado:"),
-    )
-    .join("\n");
+  return formatCardChargeTitle(expense?.name, expense?.note, expense?.monthId || "");
 }
 
 export function composeNote(originId, note, partialId, seriesId, variable, planned, nextInvoice) {
@@ -97,14 +80,7 @@ export function composeNote(originId, note, partialId, seriesId, variable, plann
 }
 
 export function nextMonthId(monthId) {
-  const match = /^(\d{4})-(\d{2})$/.exec(String(monthId || ""));
-  if (!match) return "";
-  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]), 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-export function invoiceShift(note) {
-  return String(note || "").split("\n").some((item) => item.trim() === "fatura:seguinte") ? "seguinte" : "mes";
+  return sharedNextMonthId(monthId) || "";
 }
 
 export function paymentLabel(payment) {
@@ -135,43 +111,11 @@ export function parseMoney(value) {
   return negative ? -cents : cents;
 }
 
-export function shortMonthLabel(monthId) {
-  const match = /^(\d{4})-(\d{2})$/.exec(String(monthId || "").trim());
-  if (!match) return String(monthId || "");
-  const names = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
-  const monthIndex = Number(match[2]) - 1;
-  const label = names[monthIndex];
-  if (!label) return String(monthId || "");
-  return `${label}/${match[1].slice(2)}`;
-}
-
 export function formatMonthList(monthIds) {
   const labels = [...new Set(monthIds || [])].map((id) => shortMonthLabel(id)).filter(Boolean);
   if (!labels.length) return "";
   if (labels.length === 1) return labels[0];
   return `${labels[0]} e outros meses`;
-}
-
-export function referenceMonthFrom(note) {
-  const lines = String(note || "").split("\n").map((item) => item.trim());
-  const refLine = lines.find((item) => /^ref:\d{4}-\d{2}$/.test(item));
-  if (refLine) return refLine.slice("ref:".length);
-  const purchaseLine = lines.find((item) => /^compra:\d{4}-\d{2}-\d{2}$/.test(item));
-  if (purchaseLine) return purchaseLine.slice("compra:".length, "compra:".length + 7);
-  return "";
-}
-
-export function isPlannedNote(note) {
-  return String(note || "").split("\n").some((item) => item.trim() === "tipo:planejado");
-}
-
-export function isImprevistoNote(note) {
-  return String(note || "").split("\n").some((item) => item.trim() === "tipo:imprevisto");
-}
-
-export function chargedInvoiceMonth(note) {
-  const line = String(note || "").split("\n").map((item) => item.trim()).find((item) => /^fatura:\d{4}-\d{2}$/.test(item));
-  return line ? line.slice("fatura:".length) : "";
 }
 
 export function extraOnOwnInvoice(expense) {
@@ -327,10 +271,7 @@ export function invoiceBreakdown(expenses) {
 }
 
 export function previousMonthId(monthId) {
-  const match = /^(\d{4})-(\d{2})$/.exec(String(monthId || ""));
-  if (!match) return "";
-  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 2, 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+  return sharedPreviousMonthId(monthId) || "";
 }
 
 export function monthFinancialSummary(data, nextData = null, prevData = null, purchasesPayload = null) {

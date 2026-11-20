@@ -2,11 +2,18 @@ import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import ts from "typescript";
 
-const publicDir = "public";
-const files = readdirSync(publicDir)
-  .filter((name) => name.endsWith(".js"))
-  .sort()
-  .map((name) => join(publicDir, name));
+function collectJsFiles(dir) {
+  const entries = readdirSync(dir, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+  const out = [];
+  for (const entry of entries) {
+    const full = join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...collectJsFiles(full));
+    else if (entry.name.endsWith(".js")) out.push(full);
+  }
+  return out;
+}
+
+const files = collectJsFiles("public");
 
 const program = ts.createProgram(files, {
   allowJs: true,
@@ -24,9 +31,11 @@ const trackedCodes = new Set([
   2300, // Duplicate identifier
   2304, // Cannot find name
   2305, // Module has no exported member
+  2307, // Cannot find module
   2448, // Block-scoped variable used before its declaration (TDZ)
   2451, // Cannot redeclare block-scoped variable
   2454, // Variable is used before being assigned
+  2459, // Module declares symbol locally, but it is not exported
   2552, // Cannot find name (did you mean...)
   2554, // Expected N arguments, but got M
   2614, // Module has no exported member (default)

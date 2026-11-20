@@ -1,3 +1,36 @@
+import {
+  NOTE_MARKERS,
+  chargedInvoiceMonth,
+  formatCardChargeTitle,
+  invoiceShift,
+  isPlannedNote,
+  isVariableNote,
+  isZeroFinalizedNote,
+  originIdFrom,
+  partialIdFrom,
+  purchaseMonthFromNote,
+  seriesIdFrom,
+  visibleNote,
+} from "../public/shared/note-markers.js";
+import { addMonths, monthLabel, nextMonthId, previousMonthId } from "../public/shared/months.js";
+
+export {
+  addMonths,
+  chargedInvoiceMonth,
+  monthLabel,
+  nextMonthId,
+  previousMonthId,
+  purchaseMonthFromNote,
+  invoiceShift as invoiceShiftFromNote,
+  isPlannedNote as isPlannedCost,
+  isVariableNote as isVariableCost,
+  isZeroFinalizedNote as isFinalizedWithoutSpend,
+  originIdFrom as originExpenseId,
+  partialIdFrom as partialIdFromNote,
+  seriesIdFrom as seriesIdFromNote,
+  visibleNote as visibleExpenseNote,
+};
+
 export type Section = "card" | "fixed" | "extra";
 export type Payment = "pix" | "card";
 
@@ -74,11 +107,6 @@ export function isFixedOnCard(expense: Pick<Expense, "section" | "onCard">): boo
   return expense.section === "fixed" && expense.onCard;
 }
 
-export function chargedInvoiceMonth(note: string | null | undefined): string {
-  const line = String(note || "").split("\n").map((item) => item.trim()).find((item) => /^fatura:\d{4}-\d{2}$/.test(item));
-  return line ? line.slice("fatura:".length) : "";
-}
-
 export function extraChargesOwnMonth(expense: { section: Section; payment: Payment; monthId?: string; note?: string | null }): boolean {
   if (expense.section !== "extra" || expense.payment !== "card") return false;
   const invoice = chargedInvoiceMonth(expense.note);
@@ -124,7 +152,7 @@ export function computeTotals(expenses: readonly Expense[], incomeCents: number)
       fixedOpen += 1;
       continue;
     }
-    if (expense.section === "fixed" && !isFixedOnCard(expense) && (partials.length || (expense.paid && isFinalizedWithoutSpend(expense.note)))) {
+    if (expense.section === "fixed" && !isFixedOnCard(expense) && (partials.length || (expense.paid && isZeroFinalizedNote(expense.note)))) {
       const split = partialSplit(partials);
       const shown = expense.paid ? split.total : Math.max(expense.amountCents, split.total);
       fixedForecastCents += expense.amountCents;
@@ -188,7 +216,7 @@ function pixAlreadyPaid(expense: Expense): number {
   const fromPartials = partials
     .filter((item) => item.payment === "pix")
     .reduce((sum, item) => sum + item.amountCents, 0);
-  if (partials.length || isFinalizedWithoutSpend(expense.note)) return fromPartials;
+  if (partials.length || isZeroFinalizedNote(expense.note)) return fromPartials;
   if (expense.paid && expense.payment === "pix") return expense.amountCents;
   return 0;
 }
@@ -258,11 +286,6 @@ export function sameLivingName(left: string, right: string): boolean {
   return a.length > 0 && a === b;
 }
 
-export function seriesIdFromNote(note: string | null | undefined): string {
-  const line = String(note || "").split("\n").find((item) => item.startsWith("serie:"));
-  return line ? line.slice("serie:".length).trim() : "";
-}
-
 export function noteWithSeries(note: string | null | undefined, seriesId: string): string {
   const id = seriesId.trim();
   const lines = String(note || "").split("\n").map((item) => item.trim()).filter((item) => item && !item.startsWith("serie:"));
@@ -276,8 +299,8 @@ export function sameAccount(
 ): boolean {
   if (item.id === current.id) return true;
   if (current.section && item.section && current.section !== item.section) return false;
-  const left = seriesIdFromNote(current.note);
-  const right = seriesIdFromNote(item.note);
+  const left = seriesIdFrom(current.note);
+  const right = seriesIdFrom(item.note);
   if (left || right) return left !== "" && left === right;
   const sameBatch = Boolean(current.createdAt && item.createdAt && current.createdAt === item.createdAt);
   const unnamedLegacy = !current.createdAt && !item.createdAt;
@@ -374,15 +397,6 @@ export function editTargets<T extends ExpenseDeleteRef>(
     .sort((left, right) => left.monthId.localeCompare(right.monthId) || left.id.localeCompare(right.id));
 }
 
-const NOTE_MARKERS = ["serie:", "origem:", "parcial:", "tipo:", "fatura:", "compra:", "ref:", "quitado-cartao:", "parcelamento:", "finalizado:"];
-
-const REFERENCE_MONTHS = ["janeiro", "fevereiro", "março", "abril", "maio", "junho", "julho", "agosto", "setembro", "outubro", "novembro", "dezembro"];
-
-function noteMarker(note: string | null | undefined, prefix: string): string {
-  const line = String(note || "").split("\n").map((item) => item.trim()).find((item) => item.startsWith(prefix));
-  return line ? line.slice(prefix.length).trim() : "";
-}
-
 export function noteWithChargeContext(
   note: string | null | undefined,
   input: { purchaseDate?: string | null; referenceMonthId?: string | null },
@@ -396,31 +410,8 @@ export function noteWithChargeContext(
   return lines.join("\n");
 }
 
-export function purchaseMonthFromNote(note: string | null | undefined): string {
-  const purchase = noteMarker(note, "compra:");
-  return /^\d{4}-\d{2}-\d{2}$/.test(purchase) ? purchase.slice(0, 7) : "";
-}
-
 export function cardChargeTitle(name: string, note: string | null | undefined, monthId = ""): string {
-  const clean = name.trim();
-  const purchase = noteMarker(note, "compra:");
-  if (/^\d{4}-\d{2}-\d{2}$/.test(purchase)) return `${purchase.slice(8, 10)}/${purchase.slice(5, 7)} ${clean}`;
-  const ref = noteMarker(note, "ref:") || monthId;
-  const label = REFERENCE_MONTHS[Number(ref.slice(5, 7)) - 1];
-  if (/^\d{4}-\d{2}$/.test(ref) && label) return `${clean} ${label}`;
-  return clean;
-}
-
-export function isVariableCost(note: string | null | undefined): boolean {
-  return String(note || "").split("\n").some((line) => line.trim() === "tipo:variavel");
-}
-
-export function isPlannedCost(note: string | null | undefined): boolean {
-  return String(note || "").split("\n").some((line) => line.trim() === "tipo:planejado");
-}
-
-export function isFinalizedWithoutSpend(note: string | null | undefined): boolean {
-  return String(note || "").split("\n").some((line) => line.trim() === "finalizado:0");
+  return formatCardChargeTitle(name, note, monthId);
 }
 
 export function noteWithFinalizedZero(note: string | null | undefined, finalized: boolean): string {
@@ -434,9 +425,9 @@ export type ExpenseTrack = "imprevisto" | "planejado" | "casa";
 export function expenseTrack(expense: Pick<Expense, "section" | "note">): ExpenseTrack | "" {
   const note = String(expense.note || "");
   if (note.includes("parcelamento:") || note.includes("quitado-cartao:")) return "";
-  if (expense.section === "extra") return isPlannedCost(note) ? "planejado" : "imprevisto";
+  if (expense.section === "extra") return isPlannedNote(note) ? "planejado" : "imprevisto";
   if (expense.section === "fixed") return "casa";
-  if (expense.section === "card" && originExpenseId(note)) return "casa";
+  if (expense.section === "card" && originIdFrom(note)) return "casa";
   return "";
 }
 
@@ -475,31 +466,13 @@ export function noteWithInvoiceShift(note: string | null | undefined, shift: "me
   return ["fatura:seguinte", ...lines].join("\n");
 }
 
-export function visibleExpenseNote(note: string | null | undefined): string {
-  return String(note || "")
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line && !NOTE_MARKERS.some((marker) => line.startsWith(marker)))
-    .join("\n");
-}
-
 export function noteWithVisibleText(existing: string | null | undefined, visible: string): string {
   const markers = String(existing || "")
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => NOTE_MARKERS.some((marker) => line.startsWith(marker)));
-  const text = visibleExpenseNote(visible);
+  const text = visibleNote(visible);
   return [...markers, text].filter(Boolean).join("\n");
-}
-
-export function originExpenseId(note: string | null | undefined): string {
-  const line = String(note || "").split("\n").find((item) => item.startsWith("origem:"));
-  return line ? line.slice("origem:".length).trim() : "";
-}
-
-export function partialIdFromNote(note: string | null | undefined): string {
-  const line = String(note || "").split("\n").find((item) => item.startsWith("parcial:"));
-  return line ? line.slice("parcial:".length).trim() : "";
 }
 
 export function livingCardChargeKind(input: {
@@ -516,13 +489,13 @@ export function cardDeletionEffects(
   deletedNotes: readonly (string | null | undefined)[],
   remainingNotes: readonly (string | null | undefined)[],
 ): { resetOriginIds: string[]; dropPartialIds: string[] } {
-  const remainingOrigins = new Set(remainingNotes.map((note) => originExpenseId(note)).filter(Boolean));
-  const remainingPartials = new Set(remainingNotes.map((note) => partialIdFromNote(note)).filter(Boolean));
+  const remainingOrigins = new Set(remainingNotes.map((note) => originIdFrom(note)).filter(Boolean));
+  const remainingPartials = new Set(remainingNotes.map((note) => partialIdFrom(note)).filter(Boolean));
   const resetOriginIds: string[] = [];
   const dropPartialIds: string[] = [];
   for (const note of deletedNotes) {
-    const origin = originExpenseId(note);
-    const partial = partialIdFromNote(note);
+    const origin = originIdFrom(note);
+    const partial = partialIdFrom(note);
     if (origin && !partial && !remainingOrigins.has(origin) && !resetOriginIds.includes(origin)) {
       resetOriginIds.push(origin);
     }
@@ -543,52 +516,6 @@ export function parseInstallment(value: unknown): { ok: true; value: string | nu
     return { ok: false, error: "Use a parcela no formato 3/10." };
   }
   return { ok: true, value: `${Number(match[1])}/${Number(match[2])}` };
-}
-
-export function previousMonthId(monthId: string): string | null {
-  const match = /^(\d{4})-(\d{2})$/.exec(monthId);
-  if (!match) return null;
-  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 2, 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-export function nextMonthId(monthId: string): string | null {
-  const match = /^(\d{4})-(\d{2})$/.exec(monthId);
-  if (!match) return null;
-  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]), 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-export function invoiceShiftFromNote(note: string | null | undefined): "mes" | "seguinte" {
-  return String(note || "").split("\n").some((line) => line.trim() === "fatura:seguinte") ? "seguinte" : "mes";
-}
-
-const MONTH_LABELS = [
-  "Janeiro",
-  "Fevereiro",
-  "Março",
-  "Abril",
-  "Maio",
-  "Junho",
-  "Julho",
-  "Agosto",
-  "Setembro",
-  "Outubro",
-  "Novembro",
-  "Dezembro",
-];
-
-export function addMonths(monthId: string, offset: number): string {
-  const match = /^(\d{4})-(\d{2})$/.exec(monthId);
-  if (!match) return monthId;
-  const date = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1 + offset, 1));
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
-}
-
-export function monthLabel(monthId: string): string {
-  const match = /^(\d{4})-(\d{2})$/.exec(monthId);
-  if (!match) return monthId;
-  return `${MONTH_LABELS[Number(match[2]) - 1]} ${match[1]}`;
 }
 
 export function monthSortOrder(monthId: string): number {
