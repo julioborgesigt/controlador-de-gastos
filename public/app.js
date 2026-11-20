@@ -262,8 +262,15 @@ function viewBody(data) {
 
 function registerServiceWorker() {
   if (typeof navigator === "undefined" || !("serviceWorker" in navigator)) return;
+  const hadController = Boolean(navigator.serviceWorker.controller);
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener?.("controllerchange", () => {
+    if (!hadController || reloaded) return;
+    reloaded = true;
+    window.location.reload();
+  });
   window.addEventListener("load", () => {
-    navigator.serviceWorker.register("/sw.js").catch(() => {});
+    navigator.serviceWorker.register("/sw.js", { updateViaCache: "none" }).catch(() => {});
   });
 }
 
