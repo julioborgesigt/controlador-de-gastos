@@ -116,7 +116,7 @@ textarea:focus-visible,
   stroke-linecap: round;
   --ring: 238.76;
   stroke-dasharray: var(--ring);
-  stroke-dashoffset: calc(var(--ring) * (1 - var(--progress, 0)));
+  stroke-dashoffset: calc(var(--ring) * (1 - var(--progress, 0.2)));
   transition: stroke-dashoffset 320ms ease;
 }
 

@@ -231,7 +231,7 @@ export function initSwipeListeners() {
   });
   document.addEventListener("pointerdown", (event) => {
     if (!openSwipe) return;
-    const shellEl = openSwipe.closest(".swipe-row");
+    const shellEl = openSwipe.closest(".swipe");
     if (shellEl && shellEl.contains(event.target)) return;
     closeSwipe(openSwipe);
   });

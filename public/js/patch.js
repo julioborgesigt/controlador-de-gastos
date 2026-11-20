@@ -17,19 +17,40 @@ function shouldReplace(existing, next) {
   return false;
 }
 
+function syncStyle(target, source) {
+  if (!target.style || !source.style || typeof source.style.length !== "number") return;
+  const nextProps = new Set();
+  for (let i = 0; i < source.style.length; i += 1) {
+    const prop = source.style[i];
+    nextProps.add(prop);
+    const val = source.style.getPropertyValue(prop);
+    const prio = source.style.getPropertyPriority(prop);
+    if (target.style.getPropertyValue(prop) !== val || target.style.getPropertyPriority(prop) !== prio) {
+      target.style.setProperty(prop, val, prio);
+    }
+  }
+  for (let i = target.style.length - 1; i >= 0; i -= 1) {
+    const prop = target.style[i];
+    if (!nextProps.has(prop)) target.style.removeProperty(prop);
+  }
+}
+
 function syncAttributes(target, source) {
   const nextNames = new Set();
   for (const attr of [...source.attributes]) {
+    if (attr.name === "style") continue;
     nextNames.add(attr.name);
     if (target.getAttribute(attr.name) !== attr.value) {
       target.setAttribute(attr.name, attr.value);
     }
   }
   for (const attr of [...target.attributes]) {
+    if (attr.name === "style") continue;
     if (!nextNames.has(attr.name)) {
       target.removeAttribute(attr.name);
     }
   }
+  syncStyle(target, source);
 }
 
 function syncFormProperties(target, source) {

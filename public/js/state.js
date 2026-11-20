@@ -179,7 +179,7 @@ function bootRing() {
 
 export function bootMark(retry = false) {
   return el("main", { class: "screen boot" }, [
-    retry ? el("div", { class: "mark" }, "R$") : el("div", { class: "boot-mark", style: `--progress:${state.bootProgress}` }, [
+    retry ? el("div", { class: "mark" }, "R$") : el("div", { class: "boot-mark", style: { "--progress": String(state.bootProgress) } }, [
       bootRing(),
       el("div", { class: "mark" }, "R$"),
     ]),
