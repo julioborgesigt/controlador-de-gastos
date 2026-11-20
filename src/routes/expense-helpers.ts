@@ -9,7 +9,7 @@ import {
   type Payment,
   type Section,
 } from "../domain.ts";
-import { listCards } from "../db.ts";
+import { listCards, prepareInsertExpense } from "../db.ts";
 import { isCents, isMonthId, isPayment, isSection, type JsonBody } from "../http.ts";
 
 export type ExpenseDraft = {
@@ -136,48 +136,41 @@ export async function insertRepeatedExpenses(
     const fixedId = crypto.randomUUID();
     rows.push({ id: fixedId, monthId });
     statements.push(
-      db
-        .prepare(
-          `INSERT INTO expenses
-            (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'user', ?)`,
-        )
-        .bind(
-          fixedId,
-          input.ownerId,
-          monthId,
-          input.name,
-          input.section,
-          input.amountCents,
-          input.payment,
-          input.onCard ? 1 : 0,
-          input.cardLabel,
-          input.paid ? 1 : 0,
-          note,
-          input.installment,
-          nextSort,
-          createdAt,
-        ),
+      prepareInsertExpense(db, {
+        id: fixedId,
+        ownerId: input.ownerId,
+        monthId,
+        name: input.name,
+        section: input.section,
+        amountCents: input.amountCents,
+        payment: input.payment,
+        onCard: input.onCard,
+        cardLabel: input.cardLabel,
+        paid: input.paid,
+        note,
+        installment: input.installment,
+        sortOrder: nextSort,
+        createdAt,
+      }),
     );
     if (input.livingCard) {
       statements.push(
-        db
-          .prepare(
-            `INSERT INTO expenses
-              (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-             VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, NULL, ?, 'user', ?)`,
-          )
-          .bind(
-            crypto.randomUUID(),
-            input.ownerId,
-            monthId,
-            input.name,
-            input.amountCents,
-            input.cardLabel,
-            `origem:${fixedId}`,
-            nextSort + 1,
-            createdAt,
-          ),
+        prepareInsertExpense(db, {
+          id: crypto.randomUUID(),
+          ownerId: input.ownerId,
+          monthId,
+          name: input.name,
+          section: "card",
+          amountCents: input.amountCents,
+          payment: "card",
+          onCard: false,
+          cardLabel: input.cardLabel,
+          paid: false,
+          note: `origem:${fixedId}`,
+          installment: null,
+          sortOrder: nextSort + 1,
+          createdAt,
+        }),
       );
     }
   }

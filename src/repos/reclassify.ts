@@ -9,7 +9,7 @@ import {
   type Payment,
   type Section,
 } from "../domain.ts";
-import { nextSorts, runStatements } from "./core.ts";
+import { EXPENSE_META_SET_SQL, expenseMetaParams, nextSorts, prepareInsertExpense, runStatements } from "./core.ts";
 import { getExpense, listSectionExpenses } from "./expenses-read.ts";
 
 export async function reclassifyExpense(
@@ -54,7 +54,8 @@ export async function reclassifyExpense(
     statements.push(
       db.prepare(
         `UPDATE expenses
-         SET name = ?, section = ?, amount_cents = ?, payment = ?, on_card = ?, card_label = ?, paid = ?, note = ?, installment = ?
+         SET name = ?, section = ?, amount_cents = ?, payment = ?, on_card = ?, card_label = ?, paid = ?, note = ?, installment = ?,
+             ${EXPENSE_META_SET_SQL}
          WHERE owner_id = ? AND id = ?`,
       ).bind(
         fields.name,
@@ -66,6 +67,7 @@ export async function reclassifyExpense(
         fields.paid ? 1 : 0,
         fields.note,
         fields.installment,
+        ...expenseMetaParams(fields.section, fields.note),
         input.ownerId,
         id,
       ),
@@ -88,22 +90,22 @@ export async function reclassifyExpense(
       const used = await nextSorts(db, input.ownerId, [current.monthId]);
       const sort = (used.get(current.monthId) ?? 0) + 1;
       statements.push(
-        db.prepare(
-          `INSERT INTO expenses
-            (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-           VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, ?, ?, 'user', ?)`,
-        ).bind(
-          crypto.randomUUID(),
-          input.ownerId,
-          current.monthId,
+        prepareInsertExpense(db, {
+          id: crypto.randomUUID(),
+          ownerId: input.ownerId,
+          monthId: current.monthId,
           name,
-          input.amountCents,
-          input.cardLabel,
-          noteWithOrigin(seriesIdFromNote(current.note) ? `serie:${seriesIdFromNote(current.note)}` : "", current.id),
-          current.installment,
-          sort,
-          new Date().toISOString(),
-        ),
+          section: "card",
+          amountCents: input.amountCents,
+          payment: "card",
+          onCard: false,
+          cardLabel: input.cardLabel,
+          paid: false,
+          note: noteWithOrigin(seriesIdFromNote(current.note) ? `serie:${seriesIdFromNote(current.note)}` : "", current.id),
+          installment: current.installment,
+          sortOrder: sort,
+          createdAt: new Date().toISOString(),
+        }),
       );
     } else {
       updateExpense(current.id, {
@@ -154,21 +156,22 @@ export async function reclassifyExpense(
         const used = await nextSorts(db, input.ownerId, [current.monthId]);
         const sort = (used.get(current.monthId) ?? 0) + 1;
         statements.push(
-          db.prepare(
-            `INSERT INTO expenses
-              (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-             VALUES (?, ?, ?, ?, 'card', ?, 'card', 0, ?, 0, ?, NULL, ?, 'user', ?)`,
-          ).bind(
-            crypto.randomUUID(),
-            input.ownerId,
-            current.monthId,
+          prepareInsertExpense(db, {
+            id: crypto.randomUUID(),
+            ownerId: input.ownerId,
+            monthId: current.monthId,
             name,
-            input.amountCents,
-            input.cardLabel,
-            noteWithOrigin("", current.id),
-            sort,
-            new Date().toISOString(),
-          ),
+            section: "card",
+            amountCents: input.amountCents,
+            payment: "card",
+            onCard: false,
+            cardLabel: input.cardLabel,
+            paid: false,
+            note: noteWithOrigin("", current.id),
+            installment: null,
+            sortOrder: sort,
+            createdAt: new Date().toISOString(),
+          }),
         );
       }
     } else {
@@ -200,21 +203,22 @@ export async function reclassifyExpense(
       const used = await nextSorts(db, input.ownerId, [current.monthId]);
       const sort = (used.get(current.monthId) ?? 0) + 1;
       statements.push(
-        db.prepare(
-          `INSERT INTO expenses
-            (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-           VALUES (?, ?, ?, ?, 'fixed', ?, 'card', 1, ?, 1, ?, NULL, ?, 'user', ?)`,
-        ).bind(
-          fixedId,
-          input.ownerId,
-          current.monthId,
+        prepareInsertExpense(db, {
+          id: fixedId,
+          ownerId: input.ownerId,
+          monthId: current.monthId,
           name,
-          input.amountCents,
-          input.cardLabel,
-          standalone(current.note),
-          sort,
-          new Date().toISOString(),
-        ),
+          section: "fixed",
+          amountCents: input.amountCents,
+          payment: "card",
+          onCard: true,
+          cardLabel: input.cardLabel,
+          paid: true,
+          note: standalone(current.note),
+          installment: null,
+          sortOrder: sort,
+          createdAt: new Date().toISOString(),
+        }),
       );
       updateExpense(current.id, {
         name,

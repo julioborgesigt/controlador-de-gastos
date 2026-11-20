@@ -9,7 +9,6 @@ import {
   noteWithVariable,
   noteWithVisibleText,
   originExpenseId,
-  partialIdFromNote,
   planCardPurchase,
   resetTargets,
   sameAccount,
@@ -19,7 +18,7 @@ import {
   type Payment,
   type Section,
 } from "../domain.ts";
-import { baseIncomeKey, chunkIds, getSetting, nextSorts, runStatements, sqlMarks, themeKey } from "./core.ts";
+import { EXPENSE_META_SET_SQL, baseIncomeKey, chunkIds, expenseMetaParams, getSetting, nextSorts, prepareInsertExpense, runStatements, sqlMarks, themeKey } from "./core.ts";
 import { ensureMonths, listMonths } from "./months.ts";
 import { getExpense, listFixedExpenses, listSectionExpenses } from "./expenses-read.ts";
 import { deletePartialsForExpenses } from "./partials.ts";
@@ -53,10 +52,10 @@ export async function deleteMatchingExpenses(
   if (extraIds.length) {
     await runStatements(
       db,
-      extraIds.map((id) =>
+      chunkIds(extraIds).map((part) =>
         db
-          .prepare("DELETE FROM expenses WHERE owner_id = ? AND section = 'card' AND ('\n' || COALESCE(note, '') || '\n') LIKE ?")
-          .bind(ownerId, `%\norigem:${id}\n%`),
+          .prepare(`DELETE FROM expenses WHERE owner_id = ? AND section = 'card' AND origin_expense_id IN (${sqlMarks(part)})`)
+          .bind(ownerId, ...part),
       ),
     );
   }
@@ -99,17 +98,11 @@ export async function deleteMatchingExpenses(
     }
     const activePartials = partialRows.filter((row) => !ids.includes(row.expense_id));
     if (activePartials.length) {
-      for (const row of activePartials) {
-        cleanupStatements.push(
-          db
-            .prepare("DELETE FROM expenses WHERE owner_id = ? AND ('\n' || COALESCE(note, '') || '\n') LIKE ?")
-            .bind(ownerId, `%\nparcial:${row.id}\n%`),
-        );
-      }
       const dropIds = activePartials.map((row) => row.id);
       const affectedExpenseIds = [...new Set(activePartials.map((row) => row.expense_id))];
       for (const part of chunkIds(dropIds)) {
         cleanupStatements.push(
+          db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND partial_id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
           db.prepare(`DELETE FROM partial_payments WHERE owner_id = ? AND id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
         );
       }
@@ -159,7 +152,6 @@ export async function applySeriesEdit(
   const visible = visibleExpenseNote(input.note);
   const variable = current.section === "fixed" && input.payment === "card" && isVariableCost(input.note);
   const shift = current.section === "fixed" && input.payment === "card" ? invoiceShiftFromNote(input.note) : "mes";
-  const cardLines = await listSectionExpenses(db, input.ownerId, "card");
   const statements: D1PreparedStatement[] = [];
   for (const row of targets) {
     let note = noteWithVisibleText(row.note, visible);
@@ -169,13 +161,14 @@ export async function applySeriesEdit(
     if (current.section === "card") {
       statements.push(
         db.prepare(
-          "UPDATE expenses SET name = ?, amount_cents = ?, card_label = ?, note = ?, installment = ? WHERE owner_id = ? AND id = ?",
+          `UPDATE expenses SET name = ?, amount_cents = ?, card_label = ?, note = ?, installment = ?, ${EXPENSE_META_SET_SQL} WHERE owner_id = ? AND id = ?`,
         ).bind(
           input.name,
           input.amountCents,
           input.cardLabel,
           note,
           row.id === current.id ? input.installment : row.installment,
+          ...expenseMetaParams("card", note),
           input.ownerId,
           row.id,
         ),
@@ -185,47 +178,49 @@ export async function applySeriesEdit(
     if (input.payment !== "card") {
       statements.push(
         db.prepare(
-          "UPDATE expenses SET name = ?, amount_cents = ?, payment = ?, on_card = 0, card_label = NULL, paid = ?, note = ? WHERE owner_id = ? AND id = ?",
+          `UPDATE expenses SET name = ?, amount_cents = ?, payment = ?, on_card = 0, card_label = NULL, paid = ?, note = ?, ${EXPENSE_META_SET_SQL} WHERE owner_id = ? AND id = ?`,
         ).bind(
           input.name,
           input.amountCents,
           input.payment,
           row.onCard ? 0 : row.paid ? 1 : 0,
           note,
+          ...expenseMetaParams("fixed", note),
           input.ownerId,
           row.id,
         ),
       );
       if (row.onCard) {
-        for (const line of cardLines) {
-          if (originExpenseId(line.note) === row.id) {
-            statements.push(db.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(input.ownerId, line.id));
-          }
-        }
+        statements.push(
+          db.prepare("DELETE FROM expenses WHERE owner_id = ? AND section = 'card' AND origin_expense_id = ?").bind(input.ownerId, row.id),
+        );
       }
       continue;
     }
     const clearCard = row.onCard && (variable || shift === "seguinte");
     statements.push(
       db.prepare(
-        "UPDATE expenses SET name = ?, amount_cents = ?, payment = 'card', on_card = ?, card_label = ?, note = ? WHERE owner_id = ? AND id = ?",
-      ).bind(input.name, input.amountCents, clearCard ? 0 : row.onCard ? 1 : 0, input.cardLabel, note, input.ownerId, row.id),
+        `UPDATE expenses SET name = ?, amount_cents = ?, payment = 'card', on_card = ?, card_label = ?, note = ?, ${EXPENSE_META_SET_SQL} WHERE owner_id = ? AND id = ?`,
+      ).bind(
+        input.name,
+        input.amountCents,
+        clearCard ? 0 : row.onCard ? 1 : 0,
+        input.cardLabel,
+        note,
+        ...expenseMetaParams("fixed", note),
+        input.ownerId,
+        row.id,
+      ),
     );
     if (clearCard) {
-      for (const line of cardLines) {
-        if (originExpenseId(line.note) === row.id && !partialIdFromNote(line.note)) {
-          statements.push(db.prepare("DELETE FROM expenses WHERE owner_id = ? AND id = ?").bind(input.ownerId, line.id));
-        }
-      }
+      statements.push(
+        db.prepare("DELETE FROM expenses WHERE owner_id = ? AND section = 'card' AND origin_expense_id = ? AND partial_id IS NULL").bind(input.ownerId, row.id),
+      );
     } else if (row.onCard) {
-      for (const line of cardLines) {
-        if (originExpenseId(line.note) === row.id && !partialIdFromNote(line.note)) {
-          statements.push(
-            db.prepare("UPDATE expenses SET name = ?, amount_cents = ?, card_label = ? WHERE owner_id = ? AND id = ?")
-              .bind(input.name, input.amountCents, input.cardLabel, input.ownerId, line.id),
-          );
-        }
-      }
+      statements.push(
+        db.prepare("UPDATE expenses SET name = ?, amount_cents = ?, card_label = ? WHERE owner_id = ? AND section = 'card' AND origin_expense_id = ? AND partial_id IS NULL")
+          .bind(input.name, input.amountCents, input.cardLabel, input.ownerId, row.id),
+      );
     }
   }
   await runStatements(db, statements);
@@ -255,30 +250,28 @@ export async function insertCardPurchase(
   const monthIds = plan.plan.schedule.map((part) => part.monthId);
   await ensureMonths(db, input.ownerId, monthIds);
   const used = await nextSorts(db, input.ownerId, monthIds);
+  const section: Section = input.section === "fixed" ? "card" : input.section;
   const inserts: D1PreparedStatement[] = [];
   for (const part of plan.plan.schedule) {
     const sort = (used.get(part.monthId) ?? 0) + 1;
     used.set(part.monthId, sort);
     inserts.push(
-      db
-        .prepare(
-          `INSERT INTO expenses
-            (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, 'card', 0, ?, 0, ?, ?, ?, 'user', ?)`,
-        )
-        .bind(
-          crypto.randomUUID(),
-          input.ownerId,
-          part.monthId,
-          input.name,
-          input.section === "fixed" ? "card" : input.section,
-          part.amountCents,
-          input.cardLabel,
-          note,
-          part.installment,
-          sort,
-          createdAt,
-        ),
+      prepareInsertExpense(db, {
+        id: crypto.randomUUID(),
+        ownerId: input.ownerId,
+        monthId: part.monthId,
+        name: input.name,
+        section,
+        amountCents: part.amountCents,
+        payment: "card",
+        onCard: false,
+        cardLabel: input.cardLabel,
+        paid: false,
+        note,
+        installment: part.installment,
+        sortOrder: sort,
+        createdAt,
+      }),
     );
   }
   await runStatements(db, inserts);

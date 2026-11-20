@@ -34,6 +34,7 @@ import {
   maybeOpenTabIntro,
   render,
   root,
+  setBooter,
   setBootProgress,
   setRenderer,
   state,
@@ -246,6 +247,7 @@ function viewBody(data) {
 
 applyTheme(localStorage.getItem("theme"));
 setRenderer(renderApp);
+setBooter(boot);
 initHistoryListeners();
 initSwipeListeners();
 boot();

@@ -1,4 +1,3 @@
-import { boot } from "../app.js";
 import { el } from "./dom.js";
 
 export const root = document.querySelector("#app");
@@ -185,7 +184,7 @@ export function bootMark(retry = false) {
       el("div", { class: "mark" }, "R$"),
     ]),
     retry && state.error ? el("p", { class: "lede" }, state.error) : "",
-    retry ? el("button", { class: "primary", type: "button", onclick: () => boot() }, "Tentar de novo") : "",
+    retry ? el("button", { class: "primary", type: "button", onclick: () => retryBoot() }, "Tentar de novo") : "",
   ]);
 }
 
@@ -204,11 +203,20 @@ export function renderSafely() {
 }
 
 let renderHandler = () => {};
+let bootHandler = () => {};
 
 export function setRenderer(fn) {
   renderHandler = fn;
 }
 
+export function setBooter(fn) {
+  bootHandler = fn;
+}
+
 export function render() {
   renderHandler();
+}
+
+export function retryBoot() {
+  bootHandler();
 }

@@ -10,10 +10,12 @@ import {
   resolveCardLabel,
 } from "../domain.ts";
 import {
+  EXPENSE_META_SET_SQL,
   addLivingCardPartial,
   applySeriesEdit,
   createCardSpendWithAnchor,
   deleteMatchingExpenses,
+  expenseMetaParams,
   getExpense,
   getMonth,
   insertCardPurchase,
@@ -353,7 +355,8 @@ export function registerExpenseRoutes(app: App): void {
     const statements: D1PreparedStatement[] = [
       c.env.DB.prepare(
         `UPDATE expenses
-         SET name = ?, section = ?, amount_cents = ?, payment = ?, on_card = ?, card_label = ?, paid = ?, note = ?, installment = ?
+         SET name = ?, section = ?, amount_cents = ?, payment = ?, on_card = ?, card_label = ?, paid = ?, note = ?, installment = ?,
+             ${EXPENSE_META_SET_SQL}
          WHERE owner_id = ? AND id = ?`,
       ).bind(
         parsed.value.name,
@@ -365,6 +368,7 @@ export function registerExpenseRoutes(app: App): void {
         parsed.value.paid ? 1 : 0,
         nextNote,
         parsed.value.installment,
+        ...expenseMetaParams(parsed.value.section, nextNote),
         writer.scope.ownerId,
         current.id,
       ),
@@ -372,11 +376,8 @@ export function registerExpenseRoutes(app: App): void {
     if (clearFixedCard) {
       statements.push(
         c.env.DB.prepare(
-          `DELETE FROM expenses
-           WHERE owner_id = ? AND section = 'card'
-             AND ('\n' || COALESCE(note, '') || '\n') LIKE ?
-             AND ('\n' || COALESCE(note, '') || '\n') NOT LIKE '%\nparcial:%'`,
-        ).bind(writer.scope.ownerId, `%\norigem:${current.id}\n%`),
+          "DELETE FROM expenses WHERE owner_id = ? AND section = 'card' AND origin_expense_id = ? AND partial_id IS NULL",
+        ).bind(writer.scope.ownerId, current.id),
       );
     }
     await c.env.DB.batch(statements);

@@ -45,7 +45,7 @@ import {
   noteWithFinalizedZero,
   type Expense,
 } from "../src/domain.ts";
-import seedJson from "../src/seed-data.json" with { type: "json" };
+import seedJson from "./fixtures/seed-data.json" with { type: "json" };
 
 type Seed = {
   months: Array<{ id: string; incomeCents: number; settled: number }>;

@@ -1,5 +1,20 @@
-import type { Expense, Section } from "../domain.ts";
-import { coercePayment } from "../domain.ts";
+import {
+  chargedInvoiceMonth,
+  coercePayment,
+  expenseTrack,
+  invoiceShiftFromNote,
+  isFinalizedWithoutSpend,
+  isPlannedCost,
+  isVariableCost,
+  originExpenseId,
+  partialIdFromNote,
+  purchaseMonthFromNote,
+  seriesIdFromNote,
+  type Expense,
+  type Payment,
+  type Section,
+} from "../domain.ts";
+import { isImprevistoNote, noteMarker } from "../../public/shared/note-markers.js";
 
 export type MonthRow = {
   id: string;
@@ -33,7 +48,122 @@ export type ExpenseRow = {
   sort_order: number;
   source: string;
   created_at: string;
+  series_id?: string | null;
+  origin_expense_id?: string | null;
+  partial_id?: string | null;
+  track?: string | null;
+  cost_kind?: string | null;
+  invoice_shift?: string | null;
+  invoice_month_id?: string | null;
+  reference_month_id?: string | null;
+  purchase_date?: string | null;
+  finalized_zero?: number | null;
 };
+
+export type ExpenseMetadata = {
+  seriesId: string | null;
+  originExpenseId: string | null;
+  partialId: string | null;
+  track: string | null;
+  costKind: string | null;
+  invoiceShift: "mes" | "seguinte";
+  invoiceMonthId: string | null;
+  referenceMonthId: string | null;
+  purchaseDate: string | null;
+  finalizedZero: number;
+};
+
+export function extractExpenseMetadata(section: string, note: string | null | undefined): ExpenseMetadata {
+  const raw = note ?? null;
+  const purchaseRaw = noteMarker(raw, "compra:");
+  const purchaseDate = /^\d{4}-\d{2}-\d{2}$/.test(purchaseRaw) ? purchaseRaw : null;
+  const refRaw = noteMarker(raw, "ref:");
+  const refMonth = /^\d{4}-\d{2}$/.test(refRaw) ? refRaw : null;
+  const purchaseMonth = purchaseMonthFromNote(raw) || null;
+  const track = isPlannedCost(raw)
+    ? "planejado"
+    : isImprevistoNote(raw)
+      ? "imprevisto"
+      : expenseTrack({ section: section as Section, note: raw }) || null;
+  return {
+    seriesId: seriesIdFromNote(raw) || null,
+    originExpenseId: originExpenseId(raw) || null,
+    partialId: partialIdFromNote(raw) || null,
+    track,
+    costKind: isVariableCost(raw) ? "variavel" : null,
+    invoiceShift: invoiceShiftFromNote(raw),
+    invoiceMonthId: chargedInvoiceMonth(raw) || null,
+    referenceMonthId: purchaseMonth ?? refMonth,
+    purchaseDate,
+    finalizedZero: isFinalizedWithoutSpend(raw) ? 1 : 0,
+  };
+}
+
+export const EXPENSE_META_SET_SQL =
+  "series_id = ?, origin_expense_id = ?, partial_id = ?, track = ?, cost_kind = ?, invoice_shift = ?, invoice_month_id = ?, reference_month_id = ?, purchase_date = ?, finalized_zero = ?";
+
+export function expenseMetaParams(section: string, note: string | null | undefined): Array<string | number | null> {
+  const meta = extractExpenseMetadata(section, note);
+  return [
+    meta.seriesId,
+    meta.originExpenseId,
+    meta.partialId,
+    meta.track,
+    meta.costKind,
+    meta.invoiceShift,
+    meta.invoiceMonthId,
+    meta.referenceMonthId,
+    meta.purchaseDate,
+    meta.finalizedZero,
+  ];
+}
+
+export function prepareInsertExpense(
+  db: D1Database,
+  input: {
+    id: string;
+    ownerId: string;
+    monthId: string;
+    name: string;
+    section: Section;
+    amountCents: number;
+    payment: Payment;
+    onCard: boolean | number;
+    cardLabel: string | null;
+    paid: boolean | number;
+    note: string | null;
+    installment: string | null;
+    sortOrder: number;
+    source?: "user" | "sheet";
+    createdAt: string;
+  },
+): D1PreparedStatement {
+  return db
+    .prepare(
+      `INSERT INTO expenses
+        (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at,
+         series_id, origin_expense_id, partial_id, track, cost_kind, invoice_shift, invoice_month_id, reference_month_id, purchase_date, finalized_zero)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    .bind(
+      input.id,
+      input.ownerId,
+      input.monthId,
+      input.name,
+      input.section,
+      input.amountCents,
+      input.payment,
+      input.onCard ? 1 : 0,
+      input.cardLabel,
+      input.paid ? 1 : 0,
+      input.note,
+      input.installment,
+      input.sortOrder,
+      input.source ?? "user",
+      input.createdAt,
+      ...expenseMetaParams(input.section, input.note),
+    );
+}
 
 export type Account = {
   id: string;
