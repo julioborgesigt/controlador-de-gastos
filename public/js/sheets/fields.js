@@ -1,7 +1,7 @@
 import { centsToInput, money, parseMoney } from "../../format.js";
 import { quoteInstallments, solveInstallmentTriple } from "../../installment-link.js";
 import { request } from "../api.js";
-import { el, messageOf, shortMonth } from "../dom.js";
+import { el, messageOf, on, shortMonth } from "../dom.js";
 import { render, renderSafely, setWorking, state } from "../state.js";
 import { cardPayoffPreview, firstCardName } from "../views/card-helpers.js";
 import { applyInvoiceSuggestion, refreshInvoiceChoice } from "./openers.js";
@@ -138,8 +138,8 @@ export function invoiceMonthField(draft, labelText = "Este valor será pago na f
   }
   for (const month of months) select.append(el("option", { value: month.id }, month.label));
   select.value = draft.invoiceMonthId || "";
-  select.addEventListener("change", () => {
-    state.sheet.invoiceMonthId = select.value;
+  on(select, "change", (event) => {
+    state.sheet.invoiceMonthId = event.currentTarget.value;
     refreshCardPayPreview();
   });
   return el("div", { class: "field" }, [
@@ -203,8 +203,8 @@ export function monthSelect(selected) {
     if (month.id === selected) option.selected = true;
     return option;
   }));
-  select.addEventListener("change", () => {
-    state.sheet.monthId = select.value;
+  on(select, "change", (event) => {
+    state.sheet.monthId = event.currentTarget.value;
   });
   return el("div", { class: "field" }, [el("label", { for: "extra-month" }, "Mês"), select]);
 }
@@ -257,8 +257,8 @@ function managedMonthSelect(draft, key, label) {
   const months = state.data?.months || [];
   const select = el("select", { id: key }, months.map((month) => el("option", { value: month.id }, month.label)));
   select.value = draft[key] || months[0]?.id || "";
-  select.addEventListener("change", () => {
-    draft[key] = select.value;
+  on(select, "change", (event) => {
+    draft[key] = event.currentTarget.value;
   });
   return el("div", { class: "field" }, [el("label", { for: key }, label), select]);
 }
@@ -365,8 +365,8 @@ export function cardSelect(draft) {
   if (current && !known) select.append(el("option", { value: current }, current));
   for (const card of cards) select.append(el("option", { value: card.name }, card.name));
   select.value = current;
-  select.addEventListener("change", () => {
-    state.sheet.cardLabel = select.value;
+  on(select, "change", (event) => {
+    state.sheet.cardLabel = event.currentTarget.value;
     if (state.sheet.mode === "card-spend") {
       state.sheet.invoiceTouched = false;
       applyInvoiceSuggestion(state.sheet);
@@ -388,8 +388,8 @@ export function field(labelText, key, value, mode, placeholder = "") {
     autocomplete: mode === "password" ? "new-password" : undefined,
     inputmode: mode === "decimal" ? "decimal" : mode === "numeric" ? "numeric" : "text",
   });
-  input.addEventListener("input", () => {
-    state.sheet[key] = input.value;
+  on(input, "input", (event) => {
+    state.sheet[key] = event.currentTarget.value;
     if (state.sheet.mode === "card-pay" && state.sheet.billing === "installments" && (key === "chargedAmount" || key === "installmentCount" || key === "installmentAmount")) {
       linkCardPayAmounts(key);
       return;

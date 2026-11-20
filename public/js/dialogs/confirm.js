@@ -118,9 +118,10 @@ export function confirmDialog() {
     || state.confirm === "delete-expense-simple";
   const overlay = el("div", {
     class: "overlay center",
+    "data-key": "confirm",
     role: "presentation",
     onclick: (event) => {
-      if (event.target === overlay) closeConfirm();
+      if (event.target === event.currentTarget) closeConfirm();
     },
   }, [
     el("div", { class: "dialog", role: "alertdialog", "aria-modal": "true", "aria-labelledby": "confirm-title", tabindex: "-1" }, [

@@ -8,6 +8,7 @@ import {
   applyTheme,
   el,
   messageOf,
+  on,
   onDesktop,
 } from "./dom.js";
 import { render, renderSafely, setWorking, state } from "./state.js";
@@ -42,8 +43,8 @@ function periodYears(draft) {
 export function periodSelect(draft, key, label, values, labels) {
   const select = el("select", { id: key }, values.map((value, index) => el("option", { value }, labels[index])));
   select.value = draft[key];
-  select.addEventListener("change", () => {
-    draft[key] = select.value;
+  on(select, "change", (event) => {
+    draft[key] = event.currentTarget.value;
   });
   return el("div", { class: "field" }, [el("label", { for: key }, label), select]);
 }
@@ -96,7 +97,7 @@ function setupInput(id, label, value, oninput, placeholder, mode) {
     placeholder,
     inputmode: mode === "decimal" ? "decimal" : mode === "numeric" ? "numeric" : "text",
   });
-  input.addEventListener("input", () => oninput(input.value));
+  on(input, "input", (event) => oninput(event.currentTarget.value));
   return el("div", { class: "field" }, [el("label", { for: id }, label), input]);
 }
 

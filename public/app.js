@@ -27,6 +27,7 @@ import {
   messageOf,
   onDesktop,
 } from "./js/dom.js";
+import { patchChildren } from "./js/patch.js";
 import { periodGate } from "./js/setup.js";
 import { sheet } from "./js/sheets/render.js";
 import {
@@ -110,25 +111,24 @@ function renderApp() {
   const sheetScroll = document.querySelector(".sheet")?.scrollTop || 0;
   const viewKey = `${state.authed}:${state.monthId}:${state.view}:${state.cardFocus || ""}`;
   const keepPlace = state.viewKey === viewKey;
-  root.replaceChildren();
   root.removeAttribute("aria-busy");
   announceLive(state.error || state.notice || "");
   if (state.booting) {
-    root.append(bootMark());
+    patchChildren(root, [bootMark()]);
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
     syncOverlayHistory();
     return;
   }
   if (state.authed && !state.data && !state.needsPeriod && !state.choosing) {
-    root.append(bootMark(true));
+    patchChildren(root, [bootMark(true)]);
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
     syncOverlayHistory();
     return;
   }
   if (!state.authed) {
-    root.append(authScreen());
+    patchChildren(root, [authScreen()]);
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
@@ -136,7 +136,7 @@ function renderApp() {
     return;
   }
   if (state.needsPeriod || state.setupGuide) {
-    root.append(periodGate());
+    patchChildren(root, [periodGate()]);
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
@@ -144,7 +144,7 @@ function renderApp() {
     return;
   }
   if (state.devicePrompt) {
-    root.append(devicePromptScreen());
+    patchChildren(root, [devicePromptScreen()]);
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
@@ -152,28 +152,30 @@ function renderApp() {
     return;
   }
   if (state.choosing) {
-    root.append(accessScreen());
+    patchChildren(root, [accessScreen()]);
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
     syncOverlayHistory();
     return;
   }
-  root.append(shell());
-  if (state.sheet) root.append(sheet());
+  const nextNodes = [shell()];
+  if (state.sheet) nextNodes.push(sheet());
+  if (state.expenseInfo) nextNodes.push(expenseInfoDialog());
+  if (state.help) nextNodes.push(helpDialog());
+  if (state.costDetail) nextNodes.push(costDetailDialog());
+  if (state.tabIntro) nextNodes.push(tabIntroDialog());
+  if (state.confirm) nextNodes.push(confirmDialog());
+  patchChildren(root, nextNodes);
   const nextSheet = document.querySelector(".sheet");
   if (nextSheet) nextSheet.scrollTop = sheetScroll;
-  if (state.expenseInfo) root.append(expenseInfoDialog());
-  if (state.help) root.append(helpDialog());
-  if (state.costDetail) root.append(costDetailDialog());
-  if (state.tabIntro) root.append(tabIntroDialog());
-  if (state.confirm) root.append(confirmDialog());
   if (state.sheet || state.confirm || state.expenseInfo || state.help || state.costDetail || state.tabIntro) lockPage(keepPlace ? lockedScroll : 0);
   else unlockPage(keepPlace ? lockedScroll : 0);
   state.viewKey = viewKey;
-  if (keepPlace && onDesktop()) {
-    const nextContent = document.querySelector(".content");
-    if (nextContent) nextContent.scrollTop = contentScroll;
+  const nextContent = document.querySelector(".content");
+  if (nextContent) {
+    if (keepPlace && onDesktop()) nextContent.scrollTop = contentScroll;
+    else if (!keepPlace) nextContent.scrollTop = 0;
   }
   applyFocusAfterRender(focusBefore, true);
   queueMicrotask(centerMonthChip);
@@ -183,8 +185,8 @@ function renderApp() {
 function shell() {
   const data = state.data;
   const viewingOther = data?.access?.own === false;
-  return el("div", { class: "shell" }, [
-    el("header", { class: "top" }, [
+  return el("div", { class: "shell", "data-key": "shell" }, [
+    el("header", { class: "top", "data-key": "top" }, [
       el("div", { class: "top-row" }, [
         el("div", { class: "brand-block" }, [
           el("p", { class: "brand" }, viewingOther ? data.access.label : "Gastos"),
@@ -193,19 +195,20 @@ function shell() {
         accountButton(),
       ]),
     ]),
-    el("div", { class: "months" }, (data.months || []).map(monthChip)),
-    el("main", { class: "content" }, [
-      state.error && !state.sheet ? el("p", { class: "error" }, state.error) : "",
-      state.notice && !state.sheet ? el("p", { class: "note" }, state.notice) : "",
+    el("div", { class: "months", "data-key": "months" }, (data.months || []).map(monthChip)),
+    el("main", { class: "content", "data-key": "content" }, [
+      state.error && !state.sheet ? el("p", { class: "error", "data-key": "error" }, state.error) : "",
+      state.notice && !state.sheet ? el("p", { class: "note", "data-key": "notice" }, state.notice) : "",
       data.access?.permission === "view"
-        ? el("p", { class: "note" }, `Você está vendo os gastos de ${data.access.label}. Dá para consultar, sem alterar.`)
+        ? el("p", { class: "note", "data-key": "access-note" }, `Você está vendo os gastos de ${data.access.label}. Dá para consultar, sem alterar.`)
         : data.access && data.access.own === false
-          ? el("p", { class: "note" }, `Você está nos gastos de ${data.access.label} e pode alterar.`)
+          ? el("p", { class: "note", "data-key": "access-note" }, `Você está nos gastos de ${data.access.label} e pode alterar.`)
           : "",
       viewBody(data),
     ]),
-    el("nav", { class: "nav" }, views.map(([id, label]) => el("button", {
+    el("nav", { class: "nav", "data-key": "nav" }, views.map(([id, label]) => el("button", {
       type: "button",
+      "data-key": id,
       class: state.view === id ? "active" : "",
       onclick: () => {
         state.view = id;
@@ -225,6 +228,7 @@ function monthChip(month) {
   const names = ["Jan", "Fev", "Mar", "Abr", "Mai", "Jun", "Jul", "Ago", "Set", "Out", "Nov", "Dez"];
   return el("button", {
     type: "button",
+    "data-key": month.id,
     class: `chip${month.id === state.monthId ? " active" : ""}`,
     onclick: () => changeMonth(month.id),
   }, [

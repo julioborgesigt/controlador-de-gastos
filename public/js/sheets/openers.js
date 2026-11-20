@@ -11,7 +11,7 @@ import {
   visibleNote,
 } from "../../format.js";
 import { ensureLinkChoices, knownLinks, linkMonthId } from "../api.js";
-import { el, localToday, monthName } from "../dom.js";
+import { el, localToday, monthName, on } from "../dom.js";
 import { render, state } from "../state.js";
 import { firstCardName, openCreateCard } from "../views/card-helpers.js";
 import { cardTrack } from "../views/expenses.js";
@@ -174,7 +174,7 @@ export function livingLinkSelect(draft) {
       : `${expense.name} · previsto ${money(expense.amountCents)}`)),
   ]);
   link.value = !waiting && links.some((expense) => expense.id === draft.linkExpenseId) ? draft.linkExpenseId : "";
-  link.addEventListener("change", () => { draft.linkExpenseId = link.value; });
+  on(link, "change", (event) => { draft.linkExpenseId = event.currentTarget.value; });
   return link;
 }
 
@@ -217,8 +217,8 @@ export function cardSpendFields(draft) {
     ensureLinkChoices(draft);
   }
   const date = el("input", { id: "purchaseDate", type: "date", value: draft.purchaseDate || "" });
-  date.addEventListener("input", () => {
-    draft.purchaseDate = date.value;
+  on(date, "input", (event) => {
+    draft.purchaseDate = event.currentTarget.value;
     applyInvoiceSuggestion(draft);
     if (!draft.costTouched) {
       const monthId = String(draft.purchaseDate || "").slice(0, 7);
@@ -232,14 +232,14 @@ export function cardSpendFields(draft) {
   });
   const invoice = el("select", { id: "invoiceMonthId" }, months.map((month) => el("option", { value: month.id }, month.label)));
   if (draft.invoiceMonthId) invoice.value = draft.invoiceMonthId;
-  invoice.addEventListener("change", () => {
-    draft.invoiceMonthId = invoice.value;
+  on(invoice, "change", (event) => {
+    draft.invoiceMonthId = event.currentTarget.value;
     draft.invoiceTouched = true;
     refreshInvoiceChoice(draft);
   });
   const costMonth = el("select", { id: "costMonthId" }, months.map((month) => el("option", { value: month.id }, month.label)));
   costMonth.value = draft.costMonthId || state.monthId;
-  costMonth.addEventListener("change", () => useCostMonth(draft, costMonth.value, true));
+  on(costMonth, "change", (event) => useCostMonth(draft, event.currentTarget.value, true));
   const parcelado = draft.billing === "installments";
   const amountName = parcelado && draft.amountMode === "total" ? "Valor da compra" : parcelado ? "Valor da parcela" : "Valor";
   const costLabel = monthName(draft.costMonthId || state.monthId) || "este mês";

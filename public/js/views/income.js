@@ -1,7 +1,7 @@
 import { centsToInput, money, parseMoney } from "../../format.js";
 import { loadMonth, rememberMonth, request } from "../api.js";
 import { titleWithHelp } from "../dialogs/info.js";
-import { el, messageOf, monthName } from "../dom.js";
+import { el, messageOf, monthName, on } from "../dom.js";
 import { editable, render, setWorking, state } from "../state.js";
 
 export function incomeView(data) {
@@ -83,8 +83,8 @@ export function extraAmountField(extra, index) {
     inputmode: "decimal",
     value: extra.amount,
   });
-  input.addEventListener("input", () => {
-    state.sheet.extras[index].amount = input.value;
+  on(input, "input", (event) => {
+    state.sheet.extras[index].amount = event.currentTarget.value;
   });
   return el("div", { class: "field" }, [el("label", { for: `extra-${extra.id}` }, extra.name), input]);
 }

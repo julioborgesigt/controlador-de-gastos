@@ -1,19 +1,11 @@
-import { composeNote, money, nextMonthId, parseMoney } from "../../format.js";
-import { quoteInstallments } from "../../installment-link.js";
+import { composeNote, parseMoney } from "../../format.js";
 import { loadMonth, rememberMonth, request } from "../api.js";
-import { livingChargeIsFull } from "../dialogs/expense-info.js";
 import { messageOf, monthName } from "../dom.js";
-import { savePeriod } from "../setup.js";
 import { renderSafely, setWorking, state } from "../state.js";
-import {
-  acceptPastDue,
-  cardClosingDay,
-  cardDueDay,
-  pastDueWarning,
-  sameCardName,
-} from "../views/card-helpers.js";
-import { deleteExpenseNow } from "../views/expenses.js";
-import { faturaWhen, recurringMonthIds } from "./fields.js";
+import { acceptPastDue, pastDueWarning } from "../views/card-helpers.js";
+import { recurringMonthIds } from "./fields.js";
+import { saveAccountSheet } from "./save-account.js";
+import { savePaymentSheet } from "./save-payments.js";
 
 export async function saveSheet(event) {
   event.preventDefault();
@@ -22,258 +14,20 @@ export async function saveSheet(event) {
   state.notice = "";
   try {
     if (draft.mode === "passkey" || draft.mode === "undo-payments") return;
-    if (draft.mode === "close-living") {
-      setWorking(true, "Finalizando...");
-      state.data = await request(`/api/expenses/${draft.id}/settle`, {
-        method: "POST",
-        body: { useRegistered: false, noAddition: true, amountCents: 0 },
-      });
-      rememberMonth(state.data);
-      state.notice = `“${draft.name}” finalizada com custo de ${money(draft.already || 0)} neste mês.`;
-      state.sheet = null;
+
+    const paymentResult = await savePaymentSheet(draft);
+    if (paymentResult) {
+      if (paymentResult === "close") state.sheet = null;
       return;
     }
-    if (draft.mode === "partial") {
-      const amountCents = parseMoney(draft.amount || "");
-      if (amountCents === null || amountCents <= 0) throw new Error("Informe o valor pago. Exemplo: 75,90");
-      const count = Number(draft.installmentCount);
-      if (draft.payment === "card") {
-        if (!draft.cardLabel) throw new Error("Escolha o cartão.");
-        if (!draft.invoiceMonthId) throw new Error("Escolha o mês da fatura.");
-        if (draft.billing === "installments" && (!Number.isInteger(count) || count < 2 || count > 48)) {
-          throw new Error("Informe de 2 a 48 parcelas.");
-        }
-        if (!acceptPastDue(pastDueWarning(draft.cardLabel, draft.invoiceMonthId))) return;
-      }
-      setWorking(true, draft.closeAfter === "close" ? "Encerrando..." : "Lançando...");
-      const cardCount = draft.billing === "installments" ? count : 1;
-      const fullCard = !draft.variable && draft.payment === "card" && livingChargeIsFull(draft.planned || 0, draft.already || 0, amountCents);
-      if (fullCard) {
-        state.data = await request(`/api/expenses/${draft.id}/card-payment`, {
-          method: "POST",
-          body: {
-            cardLabel: draft.cardLabel,
-            alias: draft.name,
-            amountCents,
-            installmentCount: cardCount,
-            invoiceMonthId: draft.invoiceMonthId,
-            amountMode: "total",
-            scope: "month",
-          },
-        });
-        state.notice = `Enviei o valor inteiro de “${draft.name}” para o cartão.`;
-      } else {
-        state.data = await request(`/api/expenses/${draft.id}/partials`, {
-          method: "POST",
-          body: {
-            amountCents,
-            payment: draft.payment,
-            cardLabel: draft.payment === "card" ? draft.cardLabel : undefined,
-            installmentCount: draft.payment === "card" ? cardCount : 1,
-            invoiceMonthId: draft.payment === "card" ? draft.invoiceMonthId : undefined,
-          },
-        });
-        if (draft.closeAfter === "close") {
-          state.data = await request(`/api/expenses/${draft.id}/settle`, {
-            method: "POST",
-            body: { noAddition: true, amountCents: 0, useRegistered: false },
-          });
-        }
-        state.notice = draft.closeAfter === "close"
-          ? `Lancei ${money(amountCents)} e finalizei “${draft.name}”.`
-          : `Pagamento de ${money(amountCents)} lançado em “${draft.name}”.`;
-      }
-      rememberMonth(state.data);
-      state.sheet = null;
+
+    const accountResult = await saveAccountSheet(draft);
+    if (accountResult) {
+      if (accountResult === "close") state.sheet = null;
       return;
     }
-    if (draft.mode === "delete-expense") {
-      const scope = draft.scope === "series" || draft.scope === "forward" ? draft.scope : "month";
-      await deleteExpenseNow(draft, scope);
-      return;
-    }
-    if (draft.mode === "undo-card") {
-      const scope = draft.scope === "series" ? "series" : "month";
-      setWorking(true, "Tirando do cartão...");
-      state.data = await request(`/api/expenses/${draft.id}/card-payment?scope=${scope}`, { method: "DELETE" });
-      rememberMonth(state.data);
-      state.notice = scope === "series"
-        ? `Tirei “${draft.name}” do cartão em todos os meses em que estava lançado.`
-        : `Tirei “${draft.name}” do cartão neste mês.`;
-      state.sheet = null;
-      return;
-    }
-    if (draft.mode === "card-pay") {
-      if (draft.amountChoice === "none") {
-        setWorking(true, "Encerrando...");
-        state.data = await request(`/api/expenses/${draft.id}/settle`, {
-          method: "POST",
-          body: { noAddition: true, amountCents: 0, useRegistered: false },
-        });
-        rememberMonth(state.data);
-        state.notice = `“${draft.alias || draft.name}” encerrada sem acréscimo.`;
-        state.sheet = null;
-        return;
-      }
-      const alias = String(draft.alias || "").trim();
-      if (!alias) throw new Error("Escolha o apelido que vai aparecer na fatura.");
-      if (!draft.cardLabel) throw new Error("Escolha o cartão.");
-      if (draft.variable) {
-        const base = draft.costMonthId || state.monthId;
-        draft.invoiceMonthId = draft.invoiceTiming === "seguinte" ? nextMonthId(base) : base;
-        if (!draft.invoiceMonthId || !(state.data?.months || []).some((month) => month.id === draft.invoiceMonthId)) {
-          throw new Error("O mês seguinte está fora do período. Aumente o período para lançar nessa fatura.");
-        }
-      }
-      if (!draft.invoiceMonthId) throw new Error("Escolha o mês da fatura.");
-      let amountCents = draft.described;
-      let installmentCount = 1;
-      let amountMode = "installment";
-      if (draft.billing === "installments") {
-        const charged = parseMoney(draft.chargedAmount || "");
-        installmentCount = Number(draft.installmentCount);
-        const per = parseMoney(draft.installmentAmount || "");
-        if (!Number.isInteger(installmentCount) || installmentCount < 2 || installmentCount > 48) {
-          throw new Error("Informe de 2 a 48 parcelas.");
-        }
-        if (per === null || per <= 0) throw new Error("Informe o valor da parcela.");
-        if (charged === null || charged <= 0) throw new Error("Informe o valor cobrado no cartão.");
-        const quote = quoteInstallments(charged, installmentCount, per);
-        if (!quote || quote.kind === "mismatch") {
-          throw new Error("O valor cobrado não fecha com a quantidade e o valor da parcela.");
-        }
-        if (quote.kind === "remainder") {
-          amountCents = charged;
-          amountMode = "total";
-        } else {
-          amountCents = per;
-        }
-      } else if (draft.amountChoice === "other") {
-        amountCents = parseMoney(draft.chargedAmount || "");
-        if (amountCents === null || amountCents <= 0) throw new Error("Informe o valor cobrado no cartão.");
-      } else if (!amountCents || amountCents <= 0) {
-        throw new Error("Este gasto está sem valor. Informe outro valor.");
-      }
-      if (!acceptPastDue(pastDueWarning(draft.cardLabel, draft.invoiceMonthId))) return;
-      const chargedTotal = draft.billing === "installments"
-        ? (amountMode === "total" ? amountCents : amountCents * installmentCount)
-        : amountCents;
-      const fullCard = !draft.variable && livingChargeIsFull(draft.planned || draft.described || 0, draft.already || 0, chargedTotal);
-      const close = !fullCard && draft.closeAfter === "close";
-      setWorking(true, close ? "Encerrando..." : "Lançando na fatura...");
-      state.data = await request(`/api/expenses/${draft.id}/card-payment`, {
-        method: "POST",
-        body: {
-          cardLabel: draft.cardLabel,
-          alias,
-          amountCents,
-          installmentCount,
-          invoiceMonthId: draft.invoiceMonthId,
-          amountMode,
-          scope: !fullCard || installmentCount > 1 ? "month" : (draft.cardScope === "following" ? "following" : "month"),
-          close,
-        },
-      });
-      rememberMonth(state.data);
-      const several = fullCard && installmentCount === 1 && draft.cardScope === "following";
-      state.notice = close
-        ? `Lancei ${money(chargedTotal)} no cartão e encerrei “${alias}”.`
-        : fullCard
-          ? (installmentCount > 1
-            ? `Lancei ${installmentCount} parcelas ${faturaWhen(draft.invoiceMonthId, true)}, com o apelido “${alias}”.`
-            : several
-              ? `Lancei “${alias}” no cartão neste mês e nos seguintes.`
-              : `Lancei “${alias}” ${faturaWhen(draft.invoiceMonthId)}.`)
-          : `Lancei ${money(chargedTotal)} no cartão. “${alias}” continua em aberto.`;
-      state.sheet = null;
-      return;
-    } else if (draft.mode === "share") {
-      setWorking(true, "Salvando...");
-      const data = await request("/api/shares", { method: "POST", body: { cpf: draft.cpf, permission: draft.permission } });
-      state.shares = data.shares || [];
-      draft.cpf = "";
-      state.notice = "Compartilhamento salvo.";
-      const spaces = await request("/api/spaces");
-      state.spaces = spaces.spaces || state.spaces;
-      return;
-    }
-    if (draft.mode === "month-income") {
-      const incomeCents = parseMoney(draft.amount);
-      if (incomeCents === null) throw new Error("Informe a receita. Exemplo: 9800,00");
-      const extras = [];
-      for (const extra of draft.extras || []) {
-        const amountCents = parseMoney(extra.amount || "");
-        if (amountCents === null || amountCents <= 0) throw new Error(`Informe o valor de ${extra.name}. Exemplo: 1200,00`);
-        extras.push({ id: extra.id, amountCents });
-      }
-      setWorking(true, "Salvando...");
-      await request(`/api/months/${draft.monthId}`, { method: "PATCH", body: { incomeCents } });
-      for (const extra of extras) {
-        state.data = await request(`/api/income/extras/${extra.id}`, {
-          method: "PATCH",
-          body: { amountCents: extra.amountCents, focusMonthId: state.monthId },
-        });
-      }
-      await loadMonth(state.monthId);
-    } else if (draft.mode === "income-extra") {
-      const amountCents = parseMoney(draft.amount || "");
-      if (amountCents === null || amountCents <= 0) throw new Error("Informe o valor da receita extra.");
-      if (draft.kind === "other" && !String(draft.name || "").trim()) throw new Error("Dê um nome para essa receita.");
-      if (!draft.id && !(draft.monthIds || []).length) throw new Error("Escolha ao menos um mês.");
-      setWorking(true, "Salvando...");
-      if (draft.id) {
-        state.data = await request(`/api/income/extras/${draft.id}`, {
-          method: "PATCH",
-          body: { kind: draft.kind, name: draft.name, amountCents, monthId: draft.monthId, focusMonthId: state.monthId },
-        });
-      } else {
-        const count = draft.monthIds.length;
-        state.data = await request("/api/income/extras", {
-          method: "POST",
-          body: { kind: draft.kind, name: draft.name, amountCents, monthIds: draft.monthIds, monthId: state.monthId },
-        });
-        state.notice = count > 1 ? `Receita extra lançada em ${count} meses.` : "";
-      }
-      rememberMonth(state.data);
-    } else if (draft.mode === "period") {
-      await savePeriod(draft, false);
-      return;
-    } else if (draft.mode === "password") {
-      if (draft.next !== draft.confirmation) throw new Error("A confirmação da senha não confere.");
-      setWorking(true, "Salvando...");
-      const data = await request("/api/password", {
-        method: "POST",
-        body: { currentPassword: draft.current, nextPassword: draft.next, passwordConfirmation: draft.confirmation },
-      });
-      state.passkeys = [];
-      if (data.passkeysRemoved) {
-        state.notice = "Senha trocada. As digitais cadastradas foram removidas. Cadastre de novo neste celular se quiser entrar com a digital.";
-      }
-    } else if (draft.mode === "card-payoff") {
-      const hasDown = String(draft.down || "").trim() !== "";
-      const downCents = hasDown ? parseMoney(draft.down) : 0;
-      const count = Number(draft.count);
-      const installmentCents = parseMoney(draft.per || "");
-      if (hasDown && (downCents === null || downCents < 0)) throw new Error("Informe a entrada. Exemplo: 200,00. Deixe em branco se não houver.");
-      if (!Number.isInteger(count) || count < 2 || count > 48) throw new Error("Informe de 2 a 48 parcelas.");
-      if (installmentCents === null || installmentCents <= 0) throw new Error("Informe o valor da parcela.");
-      if (!draft.startMonthId) throw new Error("Escolha o mês em que o parcelamento começa.");
-      if (!acceptPastDue(pastDueWarning(draft.cardName, draft.startMonthId))) return;
-      setWorking(true, "Parcelando...");
-      state.data = await request(`/api/cards/${draft.cardId}/payoff`, {
-        method: "POST",
-        body: {
-          mode: "installments",
-          monthId: state.monthId,
-          downCents,
-          count,
-          installmentCents,
-          startMonthId: draft.startMonthId,
-        },
-      });
-      rememberMonth(state.data);
-      state.notice = `Fatura de ${draft.cardName} parcelada em ${count} vezes.`;
-    } else if (draft.mode === "cash-spend") {
+
+    if (draft.mode === "cash-spend") {
       const amountCents = parseMoney(draft.amount || "");
       if (amountCents === null || amountCents <= 0) throw new Error("Informe um valor maior que zero.");
       if (!["casa", "imprevisto", "planejado"].includes(draft.expenseKind)) throw new Error("Escolha a classificação.");
@@ -356,29 +110,6 @@ export async function saveSheet(event) {
         : draft.expenseKind === "casa" && draft.linkExpenseId
           ? `Vinculei ao custo de vida de ${cost}. O previsto continua e o valor entrou na fatura de ${invoice}.`
           : `Lancei em ${place} de ${cost}, na fatura de ${invoice}.`;
-    } else if (draft.mode === "card") {
-      if (!draft.name.trim()) throw new Error("Dê um apelido ao cartão.");
-      const dueDay = cardDueDay(draft.dueDay);
-      const closingDay = cardClosingDay(draft.closingDay);
-      if (dueDay === null) throw new Error("Informe o dia de vencimento, de 1 a 31.");
-      if (closingDay === null) throw new Error("Informe o dia de fechamento, de 1 a 31.");
-      setWorking(true, "Salvando...");
-      const data = await request(draft.id ? `/api/cards/${draft.id}` : "/api/cards", {
-        method: draft.id ? "PATCH" : "POST",
-        body: { name: draft.name, dueDay, closingDay },
-      });
-      const saved = (data.cards || []).find((card) => card.id === draft.id);
-      const nextName = saved?.name || draft.name.trim();
-      if (draft.previousName) {
-        for (const expense of state.data.expenses || []) {
-          if (sameCardName(expense.cardLabel, draft.previousName)) expense.cardLabel = nextName;
-          for (const partial of expense.partials || []) {
-            if (sameCardName(partial.cardLabel, draft.previousName)) partial.cardLabel = nextName;
-          }
-        }
-      }
-      state.data.cards = data.cards;
-      rememberMonth(state.data);
     } else if (draft.fromCard && draft.mode === "edit") {
       if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
       const amountCents = parseMoney(draft.amount || "");
