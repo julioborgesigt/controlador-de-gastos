@@ -19,6 +19,7 @@ import { cardTrack } from "../views/expenses.js";
 import {
   cardSelect,
   field,
+  formSection,
   installmentDraft,
   installmentPreview,
   segmented,
@@ -58,7 +59,7 @@ export function openCreate(section, payment, kind = "imprevisto") {
   render();
 }
 
-export function openCardExpense(cardName = "", kind = "imprevisto") {
+export function openCardExpense(cardName = "") {
   const cards = state.data?.cards ?? [];
   if (!cards.length) {
     state.error = "Adicione um cartão antes de lançar o gasto.";
@@ -68,16 +69,19 @@ export function openCardExpense(cardName = "", kind = "imprevisto") {
   const selected = cards.some((card) => card.name === cardName) ? cardName : (cards.length === 1 ? cards[0].name : "");
   const card = cards.find((item) => item.name === selected) || null;
   const purchaseDate = localToday();
+  const fallbackMonth = (state.data?.months || []).some((month) => month.id === purchaseDate.slice(0, 7))
+    ? purchaseDate.slice(0, 7)
+    : state.monthId;
   state.sheet = {
     mode: "card-spend",
     name: "",
     amount: "",
     cardLabel: selected,
-    expenseKind: kind === "planejado" || kind === "casa" ? kind : "imprevisto",
+    expenseKind: "",
     purchaseDate,
-    invoiceMonthId: state.monthId,
+    invoiceMonthId: fallbackMonth,
     invoiceTouched: false,
-    costMonthId: (state.data?.months || []).some((month) => month.id === purchaseDate.slice(0, 7)) ? purchaseDate.slice(0, 7) : state.monthId,
+    costMonthId: fallbackMonth,
     costTouched: false,
     showCostMonth: false,
     linkExpenseId: "",
@@ -86,19 +90,22 @@ export function openCardExpense(cardName = "", kind = "imprevisto") {
     installmentsPaid: "0",
     amountMode: "installment",
   };
-  applyInvoiceSuggestion(state.sheet, card);
+  applyInvoiceSuggestion(state.sheet, card, { silent: true });
   state.error = "";
   render();
 }
 
-export function applyInvoiceSuggestion(draft, card = null) {
+export function applyInvoiceSuggestion(draft, card = null, { silent = false } = {}) {
   const chosen = card || (state.data?.cards || []).find((item) => item.name === draft.cardLabel) || null;
-  const suggested = suggestedInvoiceMonth(draft.purchaseDate, chosen?.closingDay ?? null);
+  const suggested = suggestedInvoiceMonth(draft.purchaseDate, chosen?.closingDay ?? null, chosen?.dueDay ?? null);
   draft.suggestedMonthId = suggested;
-  if (draft.invoiceTouched) return;
   const known = (state.data?.months || []).some((month) => month.id === suggested);
-  if (!known || draft.invoiceMonthId === suggested) return;
-  draft.invoiceMonthId = suggested;
+  if (!draft.invoiceTouched && known && draft.invoiceMonthId !== suggested) {
+    draft.invoiceMonthId = suggested;
+  }
+  if (!draft.costTouched && known && draft.costMonthId !== suggested) {
+    useCostMonth(draft, suggested, false, { silent });
+  }
 }
 
 export function matchesLink(expense, kind) {
@@ -122,9 +129,14 @@ export function livingLinkStatus(draft) {
       ? "O Pix abate o custo previsto. O que faltar continua em falta no Pix ou no cartão, conforme o custo foi cadastrado."
       : `Não há custo de vida em aberto em ${label}. Cadastre o previsto em Custo de vida.`;
   }
+  if (draft.mode === "card-spend") {
+    return links.length
+      ? "Selecione o custo previsto da lista. O valor entra na fatura escolhida e abate este custo."
+      : `Não há custo de vida em aberto em ${label}. Cadastre o previsto em Custo de vida ou escolha outro mês.`;
+  }
   return links.length
     ? "A lista é do mês do custo de vida. Se vincular, o previsto continua nesse mês e este valor entra na fatura escolhida."
-    : `Não há custo de vida em aberto em ${label}. O gasto cria um custo novo nesse mês.`;
+    : `Não há custo de vida em aberto em ${label}.`;
 }
 
 export function paintLivingLinks(draft) {
@@ -133,11 +145,9 @@ export function paintLivingLinks(draft) {
   if (!select || !status || state.sheet !== draft) return false;
   const waiting = Boolean(draft.linkLoading);
   const links = waiting ? [] : (knownLinks(draft) || []);
-  const blank = draft.mode === "cash-spend"
-    ? "Escolha o custo"
-    : draft.mode === "edit"
-      ? "Sem vínculo (custo próprio)"
-      : "Criar um custo novo";
+  const blank = draft.mode === "edit"
+    ? "Sem vínculo (custo próprio)"
+    : "Escolha o custo";
   select.replaceChildren(
     el("option", { value: "" }, waiting ? "Carregando..." : blank),
     ...links.map((expense) => el("option", {
@@ -154,9 +164,9 @@ export function paintLivingLinks(draft) {
   const label = document.getElementById("link-label");
   if (label) {
     const name = monthName(linkMonthId(draft)) || "este mês";
-    label.textContent = draft.mode === "cash-spend"
-      ? `Custo de vida de ${name}`
-      : `Vincular a um custo previsto de ${name}`;
+    label.textContent = draft.mode === "edit"
+      ? `Vincular a um custo previsto de ${name}`
+      : `Custo de vida de ${name}`;
   }
   status.textContent = livingLinkStatus(draft);
   return true;
@@ -165,11 +175,9 @@ export function paintLivingLinks(draft) {
 export function livingLinkSelect(draft) {
   const waiting = Boolean(draft.linkLoading);
   const links = waiting ? [] : (knownLinks(draft) || []);
-  const blank = draft.mode === "cash-spend"
-    ? "Escolha o custo"
-    : draft.mode === "edit"
-      ? "Sem vínculo (custo próprio)"
-      : "Criar um custo novo";
+  const blank = draft.mode === "edit"
+    ? "Sem vínculo (custo próprio)"
+    : "Escolha o custo";
   const link = el("select", {
     id: "linkExpenseId",
     disabled: waiting ? "" : null,
@@ -187,7 +195,7 @@ export function livingLinkSelect(draft) {
   return link;
 }
 
-function useCostMonth(draft, monthId, manual = false) {
+function useCostMonth(draft, monthId, manual = false, { silent = false } = {}) {
   if (manual) draft.costTouched = true;
   if (draft.costMonthId === monthId) return;
   draft.costMonthId = monthId;
@@ -196,17 +204,26 @@ function useCostMonth(draft, monthId, manual = false) {
   draft.linkKey = "";
   draft.linkLoading = "";
   draft.linkError = "";
-  ensureLinkChoices(draft);
-  if (!paintLivingLinks(draft)) render();
+  if (draft.expenseKind === "casa") ensureLinkChoices(draft);
+  if (silent) return;
+  const budgetLabel = document.getElementById("budget-month-label");
+  if (budgetLabel) budgetLabel.textContent = `Contabilizado no orçamento de ${monthName(monthId) || "este mês"}.`;
+  const select = document.getElementById("costMonthId");
+  if (select && select.value !== monthId) select.value = monthId;
+  if (draft.expenseKind === "casa" && !paintLivingLinks(draft)) render();
 }
 
 function invoiceHint(draft) {
   const card = (state.data?.cards || []).find((item) => item.name === draft.cardLabel) || null;
+  if (!card) return "Escolha um cartão para sugerir o mês da fatura conforme o fechamento.";
   const suggested = draft.suggestedMonthId || "";
   const knownSuggestion = (state.data?.months || []).some((month) => month.id === suggested);
-  if (!card?.closingDay) return "Este cartão ainda não tem dia de fechamento. A sugestão fica no mês da compra e você pode escolher outra fatura.";
+  if (!card.closingDay) return "Este cartão ainda não tem dia de fechamento. A sugestão fica no mês da compra e você pode escolher outra fatura.";
   if (!knownSuggestion) return `O fechamento sugere ${monthName(suggested) || suggested}, que está fora do período.`;
   if (draft.invoiceTouched) return "Você escolheu a fatura manualmente.";
+  if (card.dueDay && card.closingDay > card.dueDay) {
+    return `Sugerido pelo fechamento no dia ${card.closingDay} (vencimento dia ${card.dueDay}). Dá para escolher outra fatura.`;
+  }
   return `Sugerido pelo fechamento no dia ${card.closingDay}. Dá para escolher outra fatura.`;
 }
 
@@ -216,48 +233,88 @@ export function refreshInvoiceChoice(draft) {
   if (!invoice || !hint) return false;
   if (draft.invoiceMonthId) invoice.value = draft.invoiceMonthId;
   hint.textContent = invoiceHint(draft);
+  const costSelect = document.getElementById("costMonthId");
+  if (costSelect && draft.costMonthId) costSelect.value = draft.costMonthId;
+  const budgetLabel = document.getElementById("budget-month-label");
+  if (budgetLabel) budgetLabel.textContent = `Contabilizado no orçamento de ${monthName(draft.costMonthId || state.monthId) || "este mês"}.`;
+  const preview = document.getElementById("installment-preview");
+  if (preview) preview.textContent = installmentPreview(draft);
   return true;
 }
 
 export function cardSpendFields(draft, { onDelete = null } = {}) {
   const editing = draft.mode === "edit";
   const months = state.data?.months || [];
-  if (draft.expenseKind === "casa") {
-    if (!draft.costMonthId) draft.costMonthId = state.monthId;
+  const kind = draft.expenseKind || "";
+  const hasKind = kind === "casa" || kind === "planejado" || kind === "imprevisto";
+  const isLiving = kind === "casa";
+  if (isLiving) {
+    if (!draft.costMonthId) draft.costMonthId = draft.invoiceMonthId || state.monthId;
     ensureLinkChoices(draft);
   }
-  const date = el("input", { id: "purchaseDate", type: "date", value: draft.purchaseDate || "" });
-  on(date, "input", (event) => {
+
+  const classificationSection = formSection("Classificação", [
+    el("div", { class: "field" }, [
+      segmented("expenseKind", [
+        ["casa", "Custo de vida"],
+        ["planejado", "Planejado"],
+        ["imprevisto", "Imprevisto"],
+      ], kind, {
+        layout: "triple",
+        tones: { casa: "fixed", planejado: "planned", imprevisto: "extra" },
+      }),
+    ]),
+  ], "card-spend-kind");
+
+  if (!editing && !hasKind) {
+    return [
+      el("h2", {}, "Gasto no crédito"),
+      classificationSection,
+      el("div", { class: "form-empty-step", "data-key": "card-spend-pick-kind" }, [
+        el("strong", {}, "Escolha a classificação para continuar"),
+        el("p", { class: "muted" }, "Selecione Custo de vida, Planejado ou Imprevisto acima para preencher o restante do lançamento."),
+      ]),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
+        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Lançando..." : "Lançar"),
+      ]),
+    ];
+  }
+
+  const handleDateChange = (event) => {
     draft.purchaseDate = event.currentTarget.value;
     applyInvoiceSuggestion(draft);
-    if (!draft.costTouched) {
-      const monthId = String(draft.purchaseDate || "").slice(0, 7);
-      if ((state.data?.months || []).some((month) => month.id === monthId)) {
-        useCostMonth(draft, monthId);
-        const select = document.getElementById("costMonthId");
-        if (select) select.value = monthId;
-      }
-    }
     if (!refreshInvoiceChoice(draft)) render();
-  });
+  };
+  const date = el("input", { id: "purchaseDate", type: "date", value: draft.purchaseDate || "" });
+  on(date, "input", handleDateChange);
+  on(date, "change", handleDateChange);
+
   const invoice = el("select", { id: "invoiceMonthId" }, months.map((month) => el("option", { value: month.id }, month.label)));
   if (draft.invoiceMonthId) invoice.value = draft.invoiceMonthId;
   on(invoice, "change", (event) => {
     draft.invoiceMonthId = event.currentTarget.value;
     draft.invoiceTouched = true;
+    if (!draft.costTouched && months.some((month) => month.id === draft.invoiceMonthId)) {
+      useCostMonth(draft, draft.invoiceMonthId, false);
+    }
     refreshInvoiceChoice(draft);
   });
+
   const costMonth = el("select", { id: "costMonthId" }, months.map((month) => el("option", { value: month.id }, month.label)));
-  costMonth.value = draft.costMonthId || state.monthId;
+  costMonth.value = draft.costMonthId || draft.invoiceMonthId || state.monthId;
   on(costMonth, "change", (event) => useCostMonth(draft, event.currentTarget.value, true));
+
   const parcelado = draft.billing === "installments";
   const amountName = parcelado && draft.amountMode === "total" ? "Valor da compra" : parcelado ? "Valor da parcela" : "Valor";
-  const costLabel = monthName(draft.costMonthId || state.monthId) || "este mês";
-  const showBudgetMonth = draft.expenseKind === "casa" || draft.showCostMonth || draft.costTouched;
-  return [
-    el("h2", {}, editing ? "Editar gasto no crédito" : "Gasto no crédito"),
-    field("Nome", "name", draft.name, "text"),
-    field(amountName, "amount", draft.amount, "decimal"),
+  const costLabel = monthName(draft.costMonthId || draft.invoiceMonthId || state.monthId) || "este mês";
+  const showBudgetMonth = isLiving || draft.showCostMonth || draft.costTouched;
+
+  const amountFields = [
+    !isLiving
+      ? field("Nome", "name", draft.name, "text", kind === "planejado" ? "Ex.: Viagem, presente, curso..." : "Ex.: Farmácia, oficina, café...")
+      : "",
+    field(amountName, "amount", draft.amount, "decimal", "0,00"),
     el("div", { class: "field" }, [
       el("label", {}, "Parcelamento"),
       segmented("billing", [["once", "À vista"], ["installments", "Parcelado"]], parcelado ? "installments" : "once"),
@@ -274,45 +331,63 @@ export function cardSpendFields(draft, { onDelete = null } = {}) {
         segmented("amountMode", [["installment", "Da parcela"], ["total", "Da compra toda"]], draft.amountMode === "total" ? "total" : "installment"),
       ])
       : "",
-    parcelado ? el("p", { class: "muted", id: "installment-preview" }, installmentPreview(draft)) : "",
+    parcelado ? el("p", { class: "muted form-hint", id: "installment-preview" }, installmentPreview(draft)) : "",
+  ];
+
+  const livingSection = isLiving
+    ? formSection("Custo de vida", [
+      el("div", { class: "field" }, [
+        el("label", { for: "costMonthId" }, "Custo de vida de"),
+        costMonth,
+      ]),
+      el("div", { class: "field" }, [
+        el("label", { id: "link-label", for: "linkExpenseId" }, editing ? `Vincular a um custo previsto de ${costLabel}` : `Custo de vida de ${costLabel}`),
+        livingLinkSelect(draft),
+        el("p", { class: "muted form-hint link-status", id: "link-status" }, livingLinkStatus(draft)),
+      ]),
+    ], "card-spend-living")
+    : "";
+
+  const detailsSection = formSection(isLiving ? "Valor e parcelamento" : "Detalhes do gasto", amountFields, "card-spend-details");
+
+  const cardAndInvoiceSection = formSection("Cartão e fatura", [
     cardSelect(draft),
-    el("div", { class: "field" }, [
-      el("label", {}, "Classificação"),
-      segmented("expenseKind", [
-        ["casa", "Custo de vida"],
-        ["planejado", "Planejado"],
-        ["imprevisto", "Imprevisto"],
-      ], draft.expenseKind || "imprevisto"),
-    ]),
     el("div", { class: "pair" }, [
       el("div", { class: "field" }, [el("label", { for: "purchaseDate" }, "Data da compra"), date]),
       el("div", { class: "field" }, [el("label", { for: "invoiceMonthId" }, "Entra na fatura de"), invoice]),
     ]),
-    el("p", { class: "muted", id: "invoice-hint" }, invoiceHint(draft)),
-    showBudgetMonth
-      ? el("div", { class: "field" }, [
-        el("label", { for: "costMonthId" }, draft.expenseKind === "casa" ? "Custo de vida de" : draft.expenseKind === "planejado" ? "Mês do orçamento (Planejado)" : "Mês do orçamento (Imprevisto)"),
-        costMonth,
-      ])
-      : el("p", { class: "muted" }, [
-        `Contabilizado no orçamento de ${costLabel}. `,
-        el("button", {
-          type: "button",
-          class: "linkish",
-          onclick: () => {
-            draft.showCostMonth = true;
-            render();
-          },
-        }, "Mudar mês do orçamento"),
-      ]),
-    draft.expenseKind === "casa"
-      ? el("div", { class: "field" }, [
-        el("label", { id: "link-label", for: "linkExpenseId" }, `Vincular a um custo previsto de ${costLabel}`),
-        livingLinkSelect(draft),
-        el("p", { class: "muted link-status", id: "link-status" }, livingLinkStatus(draft)),
-      ])
+    el("p", { class: "muted form-hint", id: "invoice-hint" }, invoiceHint(draft)),
+    !isLiving
+      ? (showBudgetMonth
+        ? el("div", { class: "field form-budget-field" }, [
+          el("label", { for: "costMonthId" }, kind === "planejado" ? "Mês do orçamento (Planejado)" : "Mês do orçamento (Imprevisto)"),
+          costMonth,
+        ])
+        : el("div", { class: "form-inline-row" }, [
+          el("span", { class: "muted", id: "budget-month-label" }, `Contabilizado no orçamento de ${costLabel}.`),
+          el("button", {
+            type: "button",
+            class: "linkish form-inline-btn",
+            onclick: () => {
+              draft.showCostMonth = true;
+              render();
+            },
+          }, "Mudar mês do orçamento"),
+        ]))
       : "",
-    editing ? field("Observação", "note", draft.note || "", "text", "Opcional") : "",
+  ], "card-spend-invoice");
+
+  const noteSection = editing
+    ? formSection("Observação", [field("Observação", "note", draft.note || "", "text", "Opcional")], "card-spend-note")
+    : "";
+
+  return [
+    el("h2", {}, editing ? "Editar gasto no crédito" : "Gasto no crédito"),
+    classificationSection,
+    livingSection,
+    detailsSection,
+    cardAndInvoiceSection,
+    noteSection,
     el("div", { class: "actions" }, [
       el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
       el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? (editing ? "Salvando..." : "Lançando...") : (editing ? "Salvar" : "Lançar")),
@@ -355,7 +430,7 @@ export function openEdit(expense, options = {}) {
     invoiceTouched: true,
     suggestedMonthId: "",
     costMonthId,
-    costTouched: Boolean(refMonth && costMonthId !== expense.monthId),
+    costTouched: fromCard || Boolean(refMonth && costMonthId !== expense.monthId),
     showCostMonth: Boolean(refMonth && costMonthId !== expense.monthId),
     billing: Number(parts.installmentCount) > 1 ? "installments" : "once",
     installment: expense.installment || "",
@@ -372,7 +447,7 @@ export function openEdit(expense, options = {}) {
     inOtherMonths: Boolean(expense.inOtherMonths),
     editScope: "month",
   };
-  if (fromCard) applyInvoiceSuggestion(state.sheet);
+  if (fromCard) applyInvoiceSuggestion(state.sheet, null, { silent: true });
   state.error = "";
   render();
 }

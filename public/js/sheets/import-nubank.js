@@ -8,7 +8,7 @@ import {
 import { clearMonthCache, rememberMonth, request } from "../api.js";
 import { el, on } from "../dom.js";
 import { render, renderSafely, setWorking, state } from "../state.js";
-import { segmented } from "./fields.js";
+import { formSection, segmented } from "./fields.js";
 import { closeSheet } from "./openers.js";
 
 function firstNubankCardName() {
@@ -146,52 +146,58 @@ export function renderNubankImportSheet(panel, draft) {
   panel.append(
     el("h2", {}, "Importar fatura Nubank (CSV)"),
     el("p", { class: "muted" }, NUBANK_EXPORT_HINT),
-    el("div", { class: "field file-pick", "data-key": "nubank-file-field" }, [
-      el("label", { for: "nubank-csv-file" }, draft.filename ? `Arquivo: ${draft.filename}` : "Escolha o arquivo CSV da fatura"),
-      fileInput,
-    ]),
-    parsed ? el("div", { class: "import-preview", "data-key": "nubank-preview" }, [
-      el("div", { class: "row-between" }, [
-        el("strong", {}, `${parsed.items.length} ${parsed.items.length === 1 ? "lançamento" : "lançamentos"} na fatura`),
-        el("strong", {}, money(parsed.totalCents)),
+    formSection("Arquivo CSV", [
+      el("div", { class: "field file-pick", "data-key": "nubank-file-field" }, [
+        el("label", { for: "nubank-csv-file" }, draft.filename ? `Arquivo: ${draft.filename}` : "Escolha o arquivo CSV da fatura"),
+        fileInput,
       ]),
-      el("small", {}, [
-        parsed.futureInstallmentsCount > 0
-          ? `${parsed.futureInstallmentsCount} ${parsed.futureInstallmentsCount === 1 ? "parcela futura será projetada" : "parcelas futuras serão projetadas"} nos meses seguintes`
-          : "Nenhuma parcela futura a projetar",
-        parsed.ignoredPayments > 0 ? `${parsed.ignoredPayments} pagamento de fatura ignorado` : "",
-        parsed.ignoredCredits > 0 ? `${parsed.ignoredCredits} estorno/crédito ignorado` : "",
-        parsed.invalidRows > 0 ? `${parsed.invalidRows} ${parsed.invalidRows === 1 ? "linha inválida ignorada" : "linhas inválidas ignoradas"}` : "",
-      ].filter(Boolean).join(" · ")),
-      el("div", { class: "import-sample" }, parsed.items.slice(0, 4).map((item) => el("div", { class: "row-between" }, [
-        el("span", {}, item.totalInstallments > 1
-          ? `${item.name} (${item.currentInstallment}/${item.totalInstallments})`
-          : item.name),
-        el("span", {}, money(item.amountCents)),
-      ]))),
-      parsed.items.length > 4
-        ? el("small", { class: "muted" }, `... e mais ${parsed.items.length - 4} lançamentos`)
-        : "",
-    ]) : "",
-    parsed ? el("div", { class: "field", "data-key": "nubank-due-field" }, [
-      el("label", { for: "nubank-due-date" }, parsed.detectedDueDate
-        ? "Data de vencimento captada do arquivo (confirme ou ajuste)"
-        : "Data de vencimento da fatura"),
-      dueInput,
-    ]) : "",
-    parsed && dueBr ? el("label", { class: "confirm-check", for: "nubank-due-confirm", "data-key": "nubank-confirm-box" }, [
-      confirmCheckbox,
-      el("span", {}, `Confirmo que o vencimento desta fatura é ${dueBr} (fatura de ${dueMonthLabel}).`),
-    ]) : "",
-    parsed ? el("div", { class: "field", "data-key": "nubank-card-field" }, [
-      el("label", { for: "nubank-card-name" }, "Cartão de destino"),
-      cardSelect,
-    ]) : "",
-    parsed ? el("div", { class: "field", "data-key": "nubank-track-field" }, [
-      el("label", {}, "Tarja inicial dos lançamentos"),
-      segmented("classification", [["imprevisto", "Imprevisto"], ["planejado", "Planejado"]], draft.classification || "imprevisto"),
-    ]) : "",
-    el("p", { class: "muted" }, "Se esta fatura já foi importada antes, o sistema apenas sincroniza os lançamentos novos sem duplicar parcelas."),
+      parsed ? el("div", { class: "import-preview", "data-key": "nubank-preview" }, [
+        el("div", { class: "row-between" }, [
+          el("strong", {}, `${parsed.items.length} ${parsed.items.length === 1 ? "lançamento" : "lançamentos"} na fatura`),
+          el("strong", {}, money(parsed.totalCents)),
+        ]),
+        el("small", {}, [
+          parsed.futureInstallmentsCount > 0
+            ? `${parsed.futureInstallmentsCount} ${parsed.futureInstallmentsCount === 1 ? "parcela futura será projetada" : "parcelas futuras serão projetadas"} nos meses seguintes`
+            : "Nenhuma parcela futura a projetar",
+          parsed.ignoredPayments > 0 ? `${parsed.ignoredPayments} pagamento de fatura ignorado` : "",
+          parsed.ignoredCredits > 0 ? `${parsed.ignoredCredits} estorno/crédito ignorado` : "",
+          parsed.invalidRows > 0 ? `${parsed.invalidRows} ${parsed.invalidRows === 1 ? "linha inválida ignorada" : "linhas inválidas ignoradas"}` : "",
+        ].filter(Boolean).join(" · ")),
+        el("div", { class: "import-sample" }, parsed.items.slice(0, 4).map((item) => el("div", { class: "row-between" }, [
+          el("span", {}, item.totalInstallments > 1
+            ? `${item.name} (${item.currentInstallment}/${item.totalInstallments})`
+            : item.name),
+          el("span", {}, money(item.amountCents)),
+        ]))),
+        parsed.items.length > 4
+          ? el("small", { class: "muted" }, `... e mais ${parsed.items.length - 4} lançamentos`)
+          : "",
+      ]) : "",
+    ], "nubank-file-section"),
+    parsed ? formSection("Confirmação e destino", [
+      el("div", { class: "field", "data-key": "nubank-due-field" }, [
+        el("label", { for: "nubank-due-date" }, parsed.detectedDueDate
+          ? "Data de vencimento captada do arquivo (confirme ou ajuste)"
+          : "Data de vencimento da fatura"),
+        dueInput,
+      ]),
+      dueBr ? el("label", { class: "confirm-check", for: "nubank-due-confirm", "data-key": "nubank-confirm-box" }, [
+        confirmCheckbox,
+        el("span", {}, `Confirmo que o vencimento desta fatura é ${dueBr} (fatura de ${dueMonthLabel}).`),
+      ]) : "",
+      el("div", { class: "field", "data-key": "nubank-card-field" }, [
+        el("label", { for: "nubank-card-name" }, "Cartão de destino"),
+        cardSelect,
+      ]),
+      el("div", { class: "field", "data-key": "nubank-track-field" }, [
+        el("label", {}, "Tarja inicial dos lançamentos"),
+        segmented("classification", [["imprevisto", "Imprevisto"], ["planejado", "Planejado"]], draft.classification || "imprevisto", {
+          tones: { planejado: "planned", imprevisto: "extra" },
+        }),
+      ]),
+    ], "nubank-target-section") : "",
+    el("p", { class: "muted form-hint" }, "Se esta fatura já foi importada antes, o sistema apenas sincroniza os lançamentos novos sem duplicar parcelas."),
     el("div", { class: "actions" }, [
       el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
       el("button", {

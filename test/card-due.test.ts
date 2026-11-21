@@ -21,3 +21,17 @@ test("fechamento sugere a fatura deste mês ou a do mês seguinte", () => {
   assert.equal(suggestedInvoiceMonth("2026-12-20", 10), "2027-01");
   assert.equal(suggestedInvoiceMonth("2026-11-20", null), "2026-11");
 });
+
+test("fechamento considera dia de vencimento no mês seguinte quando fechamento > vencimento", () => {
+  // Cartão que fecha dia 26 e vence dia 5 do mês seguinte (ex.: Nubank)
+  assert.equal(suggestedInvoiceMonth("2026-10-20", 26, 5), "2026-11");
+  assert.equal(suggestedInvoiceMonth("2026-10-27", 26, 5), "2026-12");
+  assert.equal(suggestedInvoiceMonth("2026-11-21", 26, 5), "2026-12");
+  assert.equal(suggestedInvoiceMonth("2026-11-26", 26, 5), "2026-12");
+  assert.equal(suggestedInvoiceMonth("2026-11-27", 26, 5), "2027-01");
+  // Cartão que fecha dia 1 e vence dia 10 do mesmo mês
+  assert.equal(suggestedInvoiceMonth("2026-11-01", 1, 10), "2026-11");
+  assert.equal(suggestedInvoiceMonth("2026-11-02", 1, 10), "2026-12");
+  // Mês mais curto (fev/2026 com fechamento dia 31 -> 28)
+  assert.equal(suggestedInvoiceMonth("2026-02-28", 31, 5), "2026-03");
+});

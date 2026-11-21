@@ -1,5 +1,5 @@
 import { composeNote, parseMoney } from "../../format.js";
-import { loadMonth, rememberMonth, request } from "../api.js";
+import { knownLinks, loadMonth, rememberMonth, request } from "../api.js";
 import { messageOf, monthName } from "../dom.js";
 import { renderSafely, setWorking, state } from "../state.js";
 import { acceptPastDue, pastDueWarning } from "../views/card-helpers.js";
@@ -56,16 +56,23 @@ export async function saveSheet(event) {
           ? "Pix vinculado ao gasto."
           : `Lancei em ${draft.expenseKind === "planejado" ? "Planejado" : "Imprevisto"}, pago no Pix.`;
     } else if (draft.mode === "card-spend") {
-      if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
+      if (!["casa", "imprevisto", "planejado"].includes(draft.expenseKind)) throw new Error("Escolha a classificação.");
+      let expenseName = draft.name.trim();
+      if (draft.expenseKind === "casa") {
+        if (!draft.linkExpenseId) throw new Error("Escolha o custo de vida.");
+        const linked = (knownLinks(draft) || []).find((item) => item.id === draft.linkExpenseId);
+        expenseName = linked?.name || "";
+      } else if (!expenseName) {
+        throw new Error("Dê um nome ao gasto.");
+      }
       const amountCents = parseMoney(draft.amount || "");
       if (amountCents === null || amountCents <= 0) throw new Error("Informe um valor maior que zero.");
       if (!draft.cardLabel) throw new Error("Escolha o cartão.");
-      if (!["casa", "imprevisto", "planejado"].includes(draft.expenseKind)) throw new Error("Escolha a classificação.");
       if (!draft.invoiceMonthId) throw new Error("Escolha o mês da fatura.");
       if (!(state.data?.months || []).some((month) => month.id === draft.invoiceMonthId)) {
         throw new Error("Essa fatura está fora do período. Aumente o período ou escolha outro mês.");
       }
-      draft.costMonthId = draft.costMonthId || state.monthId;
+      draft.costMonthId = draft.costMonthId || draft.invoiceMonthId || state.monthId;
       if (!(state.data?.months || []).some((month) => month.id === draft.costMonthId)) {
         throw new Error(draft.expenseKind === "casa" ? "Escolha o mês do custo de vida." : "Escolha o mês deste gasto.");
       }
@@ -83,7 +90,7 @@ export async function saveSheet(event) {
       state.data = await request("/api/card-spend", {
         method: "POST",
         body: {
-          name: draft.name.trim(),
+          name: expenseName,
           amountCents,
           cardLabel: draft.cardLabel,
           classification: draft.expenseKind,
@@ -111,12 +118,17 @@ export async function saveSheet(event) {
           ? `Vinculei ao custo de vida de ${cost}. O previsto continua e o valor entrou na fatura de ${invoice}.`
           : `Lancei em ${place} de ${cost}, na fatura de ${invoice}.`;
     } else if (draft.fromCard && draft.mode === "edit") {
-      if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
-      let amountCents = parseMoney(draft.amount || "");
-      if (amountCents === null || amountCents <= 0) throw new Error("Informe um valor maior que zero.");
       if (!["imprevisto", "planejado", "casa"].includes(draft.expenseKind)) {
         throw new Error("Escolha a classificação: Custo de vida, Planejado ou Imprevisto.");
       }
+      let expenseName = draft.name.trim();
+      if (draft.expenseKind === "casa" && draft.linkExpenseId) {
+        const linked = (knownLinks(draft) || []).find((item) => item.id === draft.linkExpenseId);
+        if (linked?.name) expenseName = linked.name;
+      }
+      if (!expenseName) throw new Error("Dê um nome ao gasto.");
+      let amountCents = parseMoney(draft.amount || "");
+      if (amountCents === null || amountCents <= 0) throw new Error("Informe um valor maior que zero.");
       if (!String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão deste gasto.");
       if (!draft.invoiceMonthId) throw new Error("Escolha o mês da fatura.");
       const parcelado = draft.billing === "installments";
@@ -137,7 +149,7 @@ export async function saveSheet(event) {
         method: "POST",
         body: {
           classification: draft.expenseKind,
-          name: draft.name.trim(),
+          name: expenseName,
           amountCents,
           cardLabel: draft.cardLabel,
           note: draft.note || "",

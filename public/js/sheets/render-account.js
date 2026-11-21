@@ -6,7 +6,7 @@ import { el } from "../dom.js";
 import { askReset, periodFields, periodSelect } from "../setup.js";
 import { editable, state } from "../state.js";
 import { extraAmountField, openIncomeExtra, useBaseIncome } from "../views/income.js";
-import { field, monthChecks, monthSelect, segmented } from "./fields.js";
+import { field, formSection, monthChecks, monthSelect, segmented } from "./fields.js";
 import { renderNubankImportSheet } from "./import-nubank.js";
 import { closeSheet } from "./openers.js";
 
@@ -20,10 +20,12 @@ export function renderAccountSheet(panel, draft) {
     panel.append(
       el("h2", {}, "Exportar backup"),
       el("p", { class: "muted" }, "Baixe seus lançamentos em planilha (CSV) para conferir no Excel/Sheets ou em backup completo (JSON)."),
-      el("div", { class: "field" }, [
-        el("label", {}, "O que exportar"),
-        segmented("scope", [["all", "Período inteiro"], ["month", "Somente este mês"]], scope),
-      ]),
+      formSection("Abrangência", [
+        el("div", { class: "field" }, [
+          el("label", {}, "O que exportar"),
+          segmented("scope", [["all", "Período inteiro"], ["month", "Somente este mês"]], scope),
+        ]),
+      ], "export-scope"),
       el("div", { class: "stack-actions" }, [
         el("button", { class: "primary", type: "button", onclick: () => downloadExport("csv", scope) }, "Baixar planilha (CSV)"),
         el("button", { class: "secondary", type: "button", onclick: () => downloadExport("json", scope) }, "Baixar backup completo (JSON)"),
@@ -36,11 +38,13 @@ export function renderAccountSheet(panel, draft) {
     panel.append(
       el("h2", {}, "Compartilhar dados"),
       el("p", { class: "muted" }, "Informe o CPF de quem já tem conta. A pessoa escolhe, no login ou em Acesso, se abre os próprios gastos ou os seus."),
-      field("CPF", "cpf", draft.cpf, "text", "000.000.000-00"),
-      el("div", { class: "field" }, [
-        el("label", {}, "Permissão"),
-        segmented("permission", [["view", "Só ver"], ["edit", "Ver e editar"]], draft.permission),
-      ]),
+      formSection("Novo acesso", [
+        field("CPF", "cpf", draft.cpf, "text", "000.000.000-00"),
+        el("div", { class: "field" }, [
+          el("label", {}, "Permissão"),
+          segmented("permission", [["view", "Só ver"], ["edit", "Ver e editar"]], draft.permission),
+        ]),
+      ], "share-form"),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Fechar"),
         el("button", { class: "primary", type: "submit" }, "Compartilhar"),
@@ -63,19 +67,22 @@ export function renderAccountSheet(panel, draft) {
   } else if (draft.mode === "month-income") {
     panel.append(
       el("h2", {}, draft.label),
-      field("Receita base deste mês", "amount", draft.amount, "decimal"),
-      el("p", { class: "muted" }, "Este mês deixa de seguir a receita base. Os extras abaixo continuam somados."),
-      el("p", { class: "eyebrow group" }, "Extras deste mês"),
-      draft.extras?.length
-        ? el("div", {}, draft.extras.map((extra, index) => extraAmountField(extra, index)))
-        : el("p", { class: "muted" }, "Nenhum extra neste mês."),
-      editable()
-        ? el("button", {
-          class: "linkish",
-          type: "button",
-          onclick: () => openIncomeExtra([draft.monthId]),
-        }, "Adicionar extra neste mês")
-        : "",
+      formSection("Receita base", [
+        field("Receita base deste mês", "amount", draft.amount, "decimal", "0,00"),
+        el("p", { class: "muted form-hint" }, "Este mês deixa de seguir a receita base. Os extras abaixo continuam somados."),
+      ], "month-income-base"),
+      formSection("Extras deste mês", [
+        draft.extras?.length
+          ? el("div", {}, draft.extras.map((extra, index) => extraAmountField(extra, index)))
+          : el("p", { class: "muted" }, "Nenhum extra neste mês."),
+        editable()
+          ? el("button", {
+            class: "linkish",
+            type: "button",
+            onclick: () => openIncomeExtra([draft.monthId]),
+          }, "Adicionar extra neste mês")
+          : "",
+      ], "month-income-extras"),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
         el("button", { class: "primary", type: "submit" }, "Salvar"),
@@ -85,19 +92,23 @@ export function renderAccountSheet(panel, draft) {
   } else if (draft.mode === "income-extra") {
     panel.append(
       el("h2", {}, draft.id ? "Editar receita extra" : "Receita extra"),
-      el("div", { class: "field" }, [
-        el("label", {}, "Tipo"),
-        segmented("kind", [
-          ["ir", "Imposto de renda"],
-          ["thirteenth", "Décimo terceiro"],
-          ["vacation", "Férias"],
-          ["other", "Outro"],
-        ], draft.kind),
-      ]),
-      draft.kind === "other" ? field("Nome", "name", draft.name, "text", "Bônus, PLR...") : "",
-      field("Valor", "amount", draft.amount, "decimal"),
-      draft.id ? monthSelect(draft.monthId) : monthChecks(),
-      draft.id ? "" : el("p", { class: "muted" }, "O mesmo valor entra em cada mês marcado."),
+      formSection("Detalhes", [
+        el("div", { class: "field" }, [
+          el("label", {}, "Tipo"),
+          segmented("kind", [
+            ["ir", "Imposto de renda"],
+            ["thirteenth", "Décimo terceiro"],
+            ["vacation", "Férias"],
+            ["other", "Outro"],
+          ], draft.kind),
+        ]),
+        draft.kind === "other" ? field("Nome", "name", draft.name, "text", "Bônus, PLR...") : "",
+        field("Valor", "amount", draft.amount, "decimal", "0,00"),
+      ], "income-extra-details"),
+      formSection(draft.id ? "Mês" : "Meses", [
+        draft.id ? monthSelect(draft.monthId) : monthChecks(),
+        draft.id ? "" : el("p", { class: "muted form-hint" }, "O mesmo valor entra em cada mês marcado."),
+      ], "income-extra-months"),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
         el("button", { class: "primary", type: "submit" }, draft.id ? "Salvar" : "Adicionar"),
@@ -125,9 +136,11 @@ export function renderAccountSheet(panel, draft) {
     panel.append(
       el("h2", {}, "Alterar senha"),
       el("p", { class: "muted" }, "Trocar a senha remove as digitais cadastradas. Dá para cadastrar de novo neste celular."),
-      field("Senha atual", "current", "", "password"),
-      field("Nova senha", "next", "", "password"),
-      field("Confirmar nova senha", "confirmation", "", "password"),
+      formSection("Segurança", [
+        field("Senha atual", "current", "", "password"),
+        field("Nova senha", "next", "", "password"),
+        field("Confirmar nova senha", "confirmation", "", "password"),
+      ], "password-fields"),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
         el("button", { class: "primary", type: "submit" }, "Trocar"),
@@ -137,7 +150,7 @@ export function renderAccountSheet(panel, draft) {
     panel.append(
       el("h2", {}, "Período gerenciado"),
       el("p", { class: "muted" }, "O período escolhido poderá ser alterado depois, aqui no seu perfil."),
-      periodFields(draft),
+      formSection("Intervalo", [periodFields(draft)], "period-fields"),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
         el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : "Salvar"),
@@ -148,19 +161,21 @@ export function renderAccountSheet(panel, draft) {
     const years = [...new Set(months.map((month) => month.id.slice(0, 4)))];
     panel.append(
       el("h2", {}, "Resetar meus dados"),
-      el("p", { class: "muted" }, draft.scope === "all"
-        ? "Desde o início apaga gastos, receitas, cartões e o período. Você sai da conta e, ao entrar de novo, refaz o formulário de primeiro login."
-        : "Apaga os gastos e as receitas extras do ano ou do mês escolhido. O período e os cartões continuam."),
-      el("div", { class: "field" }, [
-        el("label", {}, "Apagar"),
-        segmented("scope", [["all", "Desde o início"], ["year", "Um ano"], ["month", "Um mês"]], draft.scope),
-      ]),
-      draft.scope === "year"
-        ? periodSelect(draft, "year", "Ano", years, years)
-        : "",
-      draft.scope === "month"
-        ? periodSelect(draft, "monthId", "Mês", months.map((month) => month.id), months.map((month) => month.label))
-        : "",
+      formSection("O que apagar", [
+        el("div", { class: "field" }, [
+          el("label", {}, "Apagar"),
+          segmented("scope", [["all", "Desde o início"], ["year", "Um ano"], ["month", "Um mês"]], draft.scope),
+        ]),
+        draft.scope === "year"
+          ? periodSelect(draft, "year", "Ano", years, years)
+          : "",
+        draft.scope === "month"
+          ? periodSelect(draft, "monthId", "Mês", months.map((month) => month.id), months.map((month) => month.label))
+          : "",
+        el("p", { class: "muted form-hint" }, draft.scope === "all"
+          ? "Desde o início apaga gastos, receitas, cartões e o período. Você sai da conta e, ao entrar de novo, refaz o formulário de primeiro login."
+          : "Apaga os gastos e as receitas extras do ano ou do mês escolhido. O período e os cartões continuam."),
+      ], "reset-scope"),
       el("div", { class: "actions" }, [
         el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
         el("button", { class: "danger", type: "button", onclick: askReset }, "Apagar"),
