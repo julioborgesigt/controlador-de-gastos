@@ -5,8 +5,9 @@ import { el } from "../dom.js";
 import { executeReset, settle } from "../setup.js";
 import { saveSheet } from "../sheets/save.js";
 import { render, state } from "../state.js";
-import { removeCard } from "../views/card-helpers.js";
-import { deleteExpenseNow } from "../views/expenses.js";
+import { removeCard, undoCardPayment } from "../views/card-helpers.js";
+import { deleteExpenseNow, patchExpense } from "../views/expenses.js";
+import { reopenLivingExpense } from "./expense-info.js";
 
 export function askConfirm(kind) {
   state.accountMenu = false;
@@ -97,6 +98,33 @@ function confirmCopy() {
       title: "Reabrir mês",
       body: `Desmarca os pagamentos de ${month}. A fatura, o Pix e os imprevistos voltam a ficar em aberto.`,
       action: "Reabrir",
+      cancel: "Cancelar",
+    };
+  }
+  if (state.confirm === "undo-card-payment") {
+    const name = state.confirmTarget?.name || "este cartão";
+    return {
+      title: "Desfazer pagamento da fatura",
+      body: `Desfazer o pagamento da fatura de “${name}” em ${month}? A fatura volta a ficar em aberto.`,
+      action: "Desfazer",
+      cancel: "Cancelar",
+    };
+  }
+  if (state.confirm === "reopen-living") {
+    const name = state.confirmTarget?.name || "esta despesa";
+    return {
+      title: "Reabrir despesa",
+      body: `Desfazer a finalização de “${name}”? A despesa volta a ficar em aberto.`,
+      action: "Reabrir",
+      cancel: "Cancelar",
+    };
+  }
+  if (state.confirm === "undo-expense-paid") {
+    const name = state.confirmTarget?.name || "este lançamento";
+    return {
+      title: "Desfazer pagamento",
+      body: `Desfazer o pagamento de “${name}”? O lançamento volta a ficar em aberto.`,
+      action: "Desfazer",
       cancel: "Cancelar",
     };
   }
@@ -204,6 +232,19 @@ async function runConfirm() {
     if (state.sheet && state.pastDue) state.sheet.acceptedDueKey = state.pastDue.key;
     render();
     await saveSheet({ preventDefault() {} });
+    return;
+  }
+  if (kind === "undo-card-payment") {
+    await undoCardPayment(target);
+    return;
+  }
+  if (kind === "reopen-living") {
+    await reopenLivingExpense(target);
+    return;
+  }
+  if (kind === "undo-expense-paid") {
+    if (target) await patchExpense(target, { paid: false });
+    else render();
     return;
   }
   if (kind === "settle") await settle("pay-remaining");

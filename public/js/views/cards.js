@@ -363,7 +363,7 @@ export function cardDetail(data) {
     ],
     ["Planejados na fatura", visible.filter((expense) => !fixedOnCard(expense) && cardTrack(expense) === "planejado")],
     ["Imprevistos na fatura", visible.filter((expense) => !fixedOnCard(expense) && cardTrack(expense) === "imprevisto")],
-    ["Fatura prevista / parcelamentos", visible.filter((expense) => expense.section === "card" && cardTrack(expense) === "")],
+    ["Fatura prevista / parcelamentos", visible.filter((expense) => (expense.section === "card" || expense.section === "extra") && !fixedOnCard(expense) && cardTrack(expense) === "")],
   ];
   for (const [title, rows] of groups) {
     if (!rows.length) continue;

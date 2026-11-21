@@ -24,7 +24,6 @@ import {
   openCloseLiving,
   openExpenseInfo,
   openUndoCard,
-  reopenLivingExpense,
 } from "../dialogs/expense-info.js";
 import { titleWithHelp } from "../dialogs/info.js";
 import { el, messageOf, monthName } from "../dom.js";
@@ -310,25 +309,41 @@ export function expenseRow(expense, section, options = {}) {
   ]);
   if (!editable()) return front;
   const informational = section === "extra";
+  const cardSection = section === "card";
   const onCardHere = section === "fixed" && expense.onCard;
   const living = section === "fixed" && !expense.onCard;
-  const leads = informational
+  const leads = informational || cardSection
     ? null
     : onCardHere
     ? [{ label: "Desfazer", tone: "undo", commit: true, run: () => openUndoCard(expense) }]
     : living
     ? [
       expense.paid
-        ? { label: "Reabrir\ndespesa", tone: "undo", commit: true, run: () => reopenLivingExpense(expense) }
+        ? {
+          label: "Reabrir\ndespesa",
+          tone: "undo",
+          commit: true,
+          run: () => {
+            state.confirmTarget = expense;
+            askConfirm("reopen-living");
+          },
+        }
         : { label: "Finalizar\ndespesa", tone: "pay", run: () => openCloseLiving(expense) },
     ]
     : null;
   return swipeRow(front, {
     leads,
-    pay: informational || living || onInvoice ? null : {
+    pay: informational || living || onInvoice || cardSection ? null : {
       label: expense.paid ? "Desfazer" : "Pago",
       undo: expense.paid,
-      run: () => patchExpense(expense, { paid: !expense.paid }),
+      run: () => {
+        if (expense.paid) {
+          state.confirmTarget = expense;
+          askConfirm("undo-expense-paid");
+          return;
+        }
+        patchExpense(expense, { paid: true });
+      },
     },
     actions: [
       { label: "Editar", tone: "edit", run: edit },
