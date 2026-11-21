@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   BRAZILIAN_CARDS,
+  alignInstallmentPurchaseDate,
   extractDueDateFromFilename,
   isNubankName,
   parseNubankCsv,
@@ -388,5 +389,142 @@ test("excluir cartão apaga gastos entre meses (nov->dez) e reimportar CSV grand
   assert.equal((novReloaded.json.cards as Array<{ name: string }>).some((c) => c.name === "Nubank"), true);
   assert.equal((novReloaded.json.expenses as unknown[]).length, 115);
 });
+
+test("sincronização CSV alinha data da primeira parcela e não duplica quando Nubank avança data de lançamento entre meses", async () => {
+  // Alinhamento da data da primeira parcela
+  assert.equal(alignInstallmentPurchaseDate("2026-09-28", "2026-11", 9), "2026-01-28");
+  assert.equal(alignInstallmentPurchaseDate("2026-10-29", "2026-12", 10), "2026-01-29");
+  assert.equal(alignInstallmentPurchaseDate("2026-10-29", "2026-12", 9), "2026-02-28"); // clamp para fevereiro
+  assert.equal(alignInstallmentPurchaseDate("2026-10-16", "2026-12", 2), "2026-10-16"); // data original mantida
+  assert.equal(alignInstallmentPurchaseDate("2026-10-16", "2026-11", 1), "2026-10-16");
+
+  const env = createTestEnv();
+  const user = createClient(env, "198.51.100.44");
+  assert.equal((await user.request("POST", "/api/register", {
+    cpf: "52998224725",
+    email: "sync-shift@example.com",
+    password: "segredo-forte-123",
+    passwordConfirmation: "segredo-forte-123",
+  })).status, 201);
+  assert.equal((await user.request("POST", "/api/period", {
+    startMonthId: "2026-11",
+    endMonthId: "2027-04",
+  })).status, 200);
+
+  // 1) Importa fatura de novembro com datas de lançamento daquela parcela (28/09 para 9/12 e 8/12)
+  const novCsv = [
+    "date,title,amount",
+    "2026-09-28,Lite *Vivoeasyanual - Parcela 9/12,20.00",
+    "2026-09-28,Amazon - Parcela 8/12,222.33",
+  ].join("\n");
+
+  const impNov = await user.request("POST", "/api/import/nubank", {
+    csvText: novCsv,
+    filename: "Nubank_2026-11-05.csv",
+    dueDate: "2026-11-05",
+    cardName: "Nubank",
+    classification: "planejado",
+  });
+  assert.equal(impNov.status, 200);
+  const sNov = impNov.json.summary as Record<string, unknown>;
+  assert.equal(sNov.insertedCurrent, 2);
+  assert.equal(sNov.insertedFuture, 7); // 3 futuras do Vivoeasy (10,11,12) + 4 futuras da Amazon (9,10,11,12)
+
+  // Confere que em dez/26 as parcelas projetadas têm a data alinhada à 1ª parcela
+  const decBefore = await user.request("GET", "/api/months/2026-12");
+  const decItemsBefore = decBefore.json.expenses as Array<{ name: string; installment: string | null; note: string | null }>;
+  assert.equal(decItemsBefore.length, 2);
+  const vivoDec = decItemsBefore.find((e) => e.name === "Lite *Vivoeasyanual");
+  const amazonDec = decItemsBefore.find((e) => e.name === "Amazon");
+  assert.equal(vivoDec?.installment, "10/12");
+  assert.ok((vivoDec?.note || "").includes("compra:2026-01-28"));
+  assert.equal(amazonDec?.installment, "9/12");
+  assert.ok((amazonDec?.note || "").includes("compra:2026-02-28"));
+
+  // 2) Importa fatura de dezembro onde o Nubank avançou a data para 29/10 (mês +1 e dia +1)
+  const decCsv = [
+    "date,title,amount",
+    "2026-10-29,Lite *Vivoeasyanual - Parcela 10/12,20.00",
+    "2026-10-29,Amazon - Parcela 9/12,222.33",
+    "2026-11-15,Padaria Nova,42.00",
+  ].join("\n");
+
+  const impDec = await user.request("POST", "/api/import/nubank", {
+    csvText: decCsv,
+    filename: "Nubank_2026-12-05.csv",
+    dueDate: "2026-12-05",
+    cardName: "Nubank",
+    classification: "planejado",
+  });
+  assert.equal(impDec.status, 200);
+  const sDec = impDec.json.summary as Record<string, unknown>;
+  assert.equal(sDec.insertedCurrent, 1); // somente Padaria Nova!
+  assert.equal(sDec.insertedFuture, 0); // zero duplicatas projetadas!
+  assert.equal(sDec.syncedExisting, 7); // 10/12..12/12 + 9/12..12/12 sincronizadas!
+
+  const decAfter = await user.request("GET", "/api/months/2026-12");
+  const decItemsAfter = decAfter.json.expenses as Array<{ name: string; installment: string | null }>;
+  assert.equal(decItemsAfter.filter((e) => e.name === "Lite *Vivoeasyanual").length, 1);
+  assert.equal(decItemsAfter.filter((e) => e.name === "Amazon").length, 1);
+  assert.equal(decItemsAfter.length, 3);
+});
+
+test("reimportar fatura deduplica automaticamente parcelas legadas gravadas com chaves baseadas em datas diferentes", async () => {
+  const env = createTestEnv();
+  const user = createClient(env, "198.51.100.45");
+  assert.equal((await user.request("POST", "/api/register", {
+    cpf: "52998224725",
+    email: "legacy-dedup@example.com",
+    password: "segredo-forte-123",
+    passwordConfirmation: "segredo-forte-123",
+  })).status, 201);
+  assert.equal((await user.request("POST", "/api/period", {
+    startMonthId: "2026-11",
+    endMonthId: "2027-02",
+  })).status, 200);
+  assert.equal((await user.request("POST", "/api/cards", { name: "Nubank", dueDay: 5, closingDay: 26 })).status, 201);
+
+  const ownerRow = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind("legacy-dedup@example.com").first<{ id: string }>();
+  assert.ok(ownerRow?.id);
+
+  // Simula 2 linhas legadas duplicadas da mesma parcela 10/12 em dez/2026 (vindas de 28/09 e 29/10 no formato antigo)
+  await env.DB.prepare(
+    `INSERT INTO expenses (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, source, sort_order, created_at, import_key, track, purchase_date, reference_month_id)
+     VALUES (?, ?, '2026-12', 'Lite *Vivoeasyanual', 'card', 2000, 'card', 0, 'Nubank', 0, 'tipo:planejado\ncompra:2026-09-28\nref:2026-09', '10/12', 'user', 1, '2026-11-21T10:00:00Z', 'nb:p:nubank:2026-09-28:lite *vivoeasyanual:2000:10/12:1', 'planejado', '2026-09-28', '2026-09')`,
+  ).bind("legacy-1", ownerRow.id).run();
+  await env.DB.prepare(
+    `INSERT INTO expenses (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, source, sort_order, created_at, import_key, track, purchase_date, reference_month_id)
+     VALUES (?, ?, '2026-12', 'Lite *Vivoeasyanual', 'card', 2000, 'card', 0, 'Nubank', 0, 'tipo:planejado\ncompra:2026-10-29\nref:2026-10', '10/12', 'user', 2, '2026-11-21T10:01:00Z', 'nb:p:nubank:2026-10-29:lite *vivoeasyanual:2000:10/12:1', 'planejado', '2026-10-29', '2026-10')`,
+  ).bind("legacy-2", ownerRow.id).run();
+
+  const decCsv = [
+    "date,title,amount",
+    "2026-10-29,Lite *Vivoeasyanual - Parcela 10/12,20.00",
+  ].join("\n");
+
+  const reimp = await user.request("POST", "/api/import/nubank", {
+    csvText: decCsv,
+    filename: "Nubank_2026-12-05.csv",
+    dueDate: "2026-12-05",
+    cardName: "Nubank",
+    classification: "planejado",
+  });
+  assert.equal(reimp.status, 200);
+  const summary = reimp.json.summary as Record<string, unknown>;
+  assert.equal(summary.insertedCurrent, 0);
+  assert.equal(summary.syncedExisting, 1);
+
+  // Dezembro deve ficar com APENAS 1 lançamento, com chave canônica e data alinhada
+  const dec = await user.request("GET", "/api/months/2026-12");
+  const decItems = dec.json.expenses as Array<{ id: string; name: string; installment: string | null; note: string | null }>;
+  assert.equal(decItems.length, 1);
+  assert.equal(decItems[0]?.id, "legacy-1");
+  assert.equal(decItems[0]?.installment, "10/12");
+  assert.ok((decItems[0]?.note || "").includes("compra:2026-01-29"));
+
+  const upgraded = await env.DB.prepare("SELECT import_key FROM expenses WHERE id = 'legacy-1'").first<{ import_key: string | null }>();
+  assert.equal(upgraded?.import_key, "nb:p:nubank:2026-03:lite *vivoeasyanual:2000:10/12:1");
+});
+
 
 

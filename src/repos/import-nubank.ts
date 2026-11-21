@@ -1,4 +1,9 @@
-import { buildNubankSchedule, parseNubankCsv } from "../../public/shared/nubank-csv.js";
+import {
+  buildNubankSchedule,
+  normalizeNubankTextKey,
+  parseNubankCsv,
+  type ScheduledNubankEntry,
+} from "../../public/shared/nubank-csv.js";
 import {
   cardKey,
   noteWithChargeContext,
@@ -6,7 +11,15 @@ import {
   noteWithSeries,
 } from "../domain.ts";
 import { createCard, listCards } from "./cards.ts";
-import { chunkIds, nextSorts, prepareInsertExpense, runStatements, sqlMarks } from "./core.ts";
+import {
+  EXPENSE_META_SET_SQL,
+  chunkIds,
+  expenseMetaParams,
+  nextSorts,
+  prepareInsertExpense,
+  runStatements,
+  sqlMarks,
+} from "./core.ts";
 import { ensureMonths } from "./months.ts";
 
 export type NubankImportResult =
@@ -30,6 +43,8 @@ export type NubankImportResult =
       error: string;
     };
 
+const LEGACY_INSTALLMENT_KEY_RE = /^nb:p:[^:]+:\d{4}-\d{2}-\d{2}:/;
+
 function parseConfirmedDueDate(raw: string): { dueDate: string; invoiceMonthId: string; dueDay: number } | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(raw || "").trim());
   if (!match) return null;
@@ -48,6 +63,23 @@ function parseConfirmedDueDate(raw: string): { dueDate: string; invoiceMonthId: 
 
 function estimateClosingDay(dueDay: number): number {
   return dueDay > 7 ? dueDay - 7 : Math.max(1, 28 + dueDay - 7);
+}
+
+type ExistingInstallmentRow = {
+  id: string;
+  month_id: string;
+  name: string;
+  amount_cents: number;
+  card_label: string | null;
+  installment: string | null;
+  note: string | null;
+  import_key: string | null;
+  origin_expense_id: string | null;
+  partial_id: string | null;
+};
+
+function installmentSignature(monthId: string, normName: string, amountCents: number, installment: string): string {
+  return `${monthId}|${normName}|${amountCents}|${installment}`;
 }
 
 export async function importNubankCsv(
@@ -113,18 +145,120 @@ export async function importNubankCsv(
     }
   }
 
-  const toInsert = schedule.filter((entry) => !existingKeys.has(entry.importKey));
+  // Reconcilia parcelas legadas (gravadas com chave baseada na data de lançamento do CSV)
+  // para evitar duplicatas e limpar eventuais repetições da mesma parcela no mês.
+  const installmentMonthIds = [...new Set(schedule.filter((entry) => entry.installment).map((entry) => entry.monthId))];
+  const legacyBySig = new Map<string, ExistingInstallmentRow[]>();
+  const targetCardKey = cardKey(cardName);
+  for (const chunk of chunkIds(installmentMonthIds, 80)) {
+    const rows = await db
+      .prepare(
+        `SELECT id, month_id, name, amount_cents, card_label, installment, note, import_key, origin_expense_id, partial_id
+         FROM expenses
+         WHERE owner_id = ? AND section = 'card' AND installment IS NOT NULL AND import_key LIKE 'nb:p:%' AND month_id IN (${sqlMarks(chunk)})
+         ORDER BY created_at ASC, id ASC`,
+      )
+      .bind(input.ownerId, ...chunk)
+      .all<ExistingInstallmentRow>();
+    for (const row of rows.results ?? []) {
+      if (cardKey(row.card_label) !== targetCardKey || !row.installment) continue;
+      if (!row.import_key || !LEGACY_INSTALLMENT_KEY_RE.test(row.import_key)) continue;
+      const sig = installmentSignature(row.month_id, normalizeNubankTextKey(row.name), row.amount_cents, row.installment);
+      const list = legacyBySig.get(sig) ?? [];
+      list.push(row);
+      legacyBySig.set(sig, list);
+    }
+  }
+
+  const maintenanceStatements: D1PreparedStatement[] = [];
+  const matchedEntries = new Set<ScheduledNubankEntry>();
+  const consumedLegacyIds = new Set<string>();
+
+  if (legacyBySig.size > 0) {
+    const scheduleBySig = new Map<string, ScheduledNubankEntry[]>();
+    for (const entry of schedule) {
+      if (!entry.installment) continue;
+      const sig = installmentSignature(entry.monthId, entry.normName, entry.amountCents, entry.installment);
+      const list = scheduleBySig.get(sig) ?? [];
+      list.push(entry);
+      scheduleBySig.set(sig, list);
+    }
+
+    for (const [sig, entries] of scheduleBySig.entries()) {
+      const legacyRows = legacyBySig.get(sig);
+      if (!legacyRows?.length) continue;
+
+      // Prioriza preservar linhas já vinculadas pelo usuário (origem/parcial) antes de atualizar/deduplicar.
+      legacyRows.sort((left, right) => {
+        const leftLinked = left.origin_expense_id || left.partial_id ? 0 : 1;
+        const rightLinked = right.origin_expense_id || right.partial_id ? 0 : 1;
+        return leftLinked - rightLinked;
+      });
+
+      const unmatchedEntries = entries.filter((entry) => !existingKeys.has(entry.importKey));
+      let legacyIndex = 0;
+
+      for (const entry of unmatchedEntries) {
+        const row = legacyRows[legacyIndex];
+        if (!row) break;
+        legacyIndex += 1;
+        consumedLegacyIds.add(row.id);
+        matchedEntries.add(entry);
+
+        const isLinked = Boolean(row.origin_expense_id || row.partial_id);
+        let updatedNote = row.note || "";
+        if (!isLinked) {
+          updatedNote = noteWithChargeContext(updatedNote, {
+            purchaseDate: entry.purchaseDate,
+            referenceMonthId: entry.purchaseDate.slice(0, 7),
+          });
+          if (entry.seriesId) updatedNote = noteWithSeries(updatedNote, entry.seriesId);
+        }
+        maintenanceStatements.push(
+          db
+            .prepare(
+              `UPDATE expenses
+               SET import_key = ?, note = ?, ${EXPENSE_META_SET_SQL}
+               WHERE owner_id = ? AND id = ?`,
+            )
+            .bind(
+              entry.importKey,
+              updatedNote,
+              ...expenseMetaParams("card", updatedNote),
+              input.ownerId,
+              row.id,
+            ),
+        );
+      }
+
+      // Remove excedentes legados não vinculados da mesma parcela duplicada no mesmo mês
+      const excessLegacyIds = legacyRows
+        .slice(legacyIndex)
+        .filter((row) => !consumedLegacyIds.has(row.id) && !row.origin_expense_id && !row.partial_id)
+        .map((row) => row.id);
+      for (const idChunk of chunkIds(excessLegacyIds, 80)) {
+        maintenanceStatements.push(
+          db
+            .prepare(`DELETE FROM expenses WHERE owner_id = ? AND id IN (${sqlMarks(idChunk)})`)
+            .bind(input.ownerId, ...idChunk),
+        );
+      }
+    }
+  }
+
+  const toInsert = schedule.filter((entry) => !existingKeys.has(entry.importKey) && !matchedEntries.has(entry));
   const syncedExisting = schedule.length - toInsert.length;
 
   let insertedCurrent = 0;
   let insertedFuture = 0;
+
+  const statements: D1PreparedStatement[] = [...maintenanceStatements];
 
   if (toInsert.length > 0) {
     const usedSorts = await nextSorts(db, input.ownerId, toInsert.map((entry) => entry.monthId));
     const createdAt = new Date().toISOString();
     const planned = input.classification === "planejado";
     const baseTrack = planned ? noteWithPlanned("", true) : "tipo:imprevisto";
-    const statements: D1PreparedStatement[] = [];
 
     for (const entry of toInsert) {
       const sort = (usedSorts.get(entry.monthId) ?? 0) + 1;
@@ -157,7 +291,9 @@ export async function importNubankCsv(
       if (entry.isCurrentInvoice) insertedCurrent += 1;
       else insertedFuture += 1;
     }
+  }
 
+  if (statements.length > 0) {
     await runStatements(db, statements);
   }
 
