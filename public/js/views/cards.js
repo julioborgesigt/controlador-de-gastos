@@ -20,7 +20,6 @@ import {
   cardInvoiceCents,
   cardJump,
   cardManageRow,
-  cardTools,
   expensesForCardName,
   fixedOnCard,
   monthInvoicesSettled,
@@ -353,7 +352,6 @@ export function cardDetail(data) {
       el("p", { class: "money inline" }, money(total)),
       invoiceXray(all),
     ]),
-    editable() && card ? cardTools(card) : "",
     editable() ? el("div", { class: "stack-actions" }, [
       el("button", { class: "primary", type: "button", onclick: () => openCardExpense(card ? card.name : "") }, "+ Gasto no crédito"),
     ]) : "",

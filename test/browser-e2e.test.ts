@@ -324,6 +324,7 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       await page.click(".card-manage .item-main");
       await page.waitForText("Farmacia Central");
       await page.waitForText("1/2");
+      assert.equal(await page.evaluate<boolean>('Boolean(document.querySelector(".item-actions"))'), false);
 
       // Abre Editar em um gasto importado e confirma que a tela é a mesma de "Gasto no crédito"
       const editOpened = await page.evaluate<boolean>(`(() => {
