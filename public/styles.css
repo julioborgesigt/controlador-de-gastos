@@ -2406,3 +2406,337 @@ html[data-theme="dark"] .select-check.on {
     max-width: 560px;
   }
 }
+
+/* ---- Toast pop-up de feedback (topo direito, 3s com barra de progresso) ---- */
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes toast-countdown {
+  from { transform: scaleX(1); }
+  to { transform: scaleX(0); }
+}
+
+.toast {
+  position: fixed;
+  z-index: 40;
+  top: calc(12px + env(safe-area-inset-top, 0px));
+  right: 12px;
+  width: min(360px, calc(100vw - 24px));
+  background: var(--card);
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 14px 36px rgba(16, 24, 40, 0.2);
+  overflow: hidden;
+  animation: toast-in 180ms ease-out both;
+}
+
+.toast-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 12px 11px;
+}
+
+.toast-icon {
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--good) 14%, transparent);
+  color: var(--good);
+  margin-top: 1px;
+}
+
+.toast-text {
+  flex: 1;
+  min-width: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.38;
+  color: var(--ink);
+}
+
+.toast-close {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  line-height: 1;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  margin: -2px -2px 0 0;
+  cursor: pointer;
+}
+
+.toast-close:hover,
+.toast-close:focus-visible {
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
+}
+
+.toast-progress {
+  height: 3px;
+  width: 100%;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+.toast-progress-fill {
+  display: block;
+  height: 100%;
+  width: 100%;
+  background: var(--good);
+  transform-origin: left center;
+  animation: toast-countdown 3s linear forwards;
+}
+
+html[data-theme="dark"] .toast {
+  background: #1f252e;
+  border-color: #36404d;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+
+/* ---- Página Cartões de crédito: hierarquia e separação visual ---- */
+
+.card-launch-summary {
+  margin-bottom: 14px;
+  border-radius: 16px;
+  padding: 14px 16px;
+}
+
+.card-launch-summary .launch-title {
+  font-weight: 600;
+  font-size: 14.5px;
+  line-height: 1.3;
+}
+
+.card-launch-summary .launch-end {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.card-launch-summary .launch-chevron {
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  font-weight: 500;
+}
+
+.cards-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0 0 16px;
+}
+
+.cards-actions > .primary {
+  width: 100%;
+  margin-top: 0;
+}
+
+.cards-actions-sub {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.cards-actions-sub .secondary {
+  width: 100%;
+  margin-top: 0;
+  padding: 10px 10px;
+  font-size: 13.5px;
+  min-height: 44px;
+}
+
+.fold.invoice-panel {
+  margin: 0 0 14px;
+  padding: 14px 14px 16px;
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: var(--shadow);
+}
+
+.fold.invoice-panel .fold-body {
+  margin-top: 14px;
+}
+
+.cost-split.invoice-xray {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 0;
+}
+
+.cost-split.invoice-xray .xray-item {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 10px;
+}
+
+.cost-split.invoice-xray .xray-item small {
+  font-size: 11.5px;
+  line-height: 1.25;
+}
+
+.cost-split.invoice-xray .xray-item strong {
+  font-size: 15px;
+  margin-top: 4px;
+}
+
+.cost-split.invoice-xray .xray-sub {
+  font-size: 10.5px;
+  line-height: 1.25;
+}
+
+.cards-list-block.with-sep {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.cards-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.cards-list-head .eyebrow {
+  margin: 0;
+  font-size: 11.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.cards-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.cards-stack .card-swipe {
+  margin-bottom: 0;
+  border-radius: 14px;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.06);
+}
+
+.cards-stack .card-swipe > .jump {
+  border-radius: 14px;
+  margin-bottom: 0;
+  border: 1px solid var(--line);
+  border-left-width: 4px;
+  padding: 13px 14px;
+  box-shadow: none;
+}
+
+.card-manage.open {
+  border-left-color: var(--ink);
+}
+
+.card-manage.paid {
+  border-left-color: var(--good);
+}
+
+.card-manage.idle {
+  border-left-color: var(--line);
+}
+
+.card-title-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.card-chip-icon {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--ink) 7%, transparent);
+  color: var(--ink);
+}
+
+.card-manage.paid .card-chip-icon {
+  background: color-mix(in srgb, var(--good) 14%, transparent);
+  color: var(--good);
+}
+
+.card-manage .card-title {
+  font-size: 15.5px;
+  font-weight: 700;
+}
+
+.card-manage small {
+  margin-top: 6px;
+}
+
+html[data-theme="dark"] .fold.invoice-panel {
+  background: var(--card);
+}
+
+html[data-theme="dark"] .cost-split.invoice-xray .xray-item {
+  background: #171b22;
+  border-color: var(--line);
+}
+
+html[data-theme="dark"] .card-manage.open {
+  border-left-color: #7aa7e8;
+}
+
+@media (min-width: 1100px) {
+  .toast {
+    top: 20px;
+    right: 24px;
+  }
+
+  .cards-actions {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .cards-actions > .primary {
+    width: auto;
+  }
+
+  .cards-actions-sub {
+    display: flex;
+    gap: 8px;
+  }
+
+  .cards-actions-sub .secondary {
+    width: auto;
+    min-height: var(--control-h);
+    padding: 8px 14px;
+  }
+
+  .cost-split.invoice-xray .xray-item {
+    padding: 12px 14px;
+  }
+
+  .cost-split.invoice-xray .xray-item strong {
+    font-size: 17px;
+  }
+}
+

@@ -48,14 +48,35 @@ export function monthInvoicesSettled(data) {
   return any && open === 0;
 }
 
+function cardBadgeGlyph() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "1.9");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M3 7h18v10H3zM3 11h18M7 14h4");
+  svg.append(path);
+  return svg;
+}
+
 export function cardManageRow(card, amount, expenses) {
   const count = expenses.filter((expense) => shownExpense(expense) && !linkedLivingCost(expense)).length;
   const balance = openCardBalance(expenses);
   const settled = amount > 0 && balance === 0;
-  const front = el("article", { class: `jump card-manage${settled ? " paid" : ""}` }, [
+  const tone = settled ? " paid" : amount > 0 ? " open" : " idle";
+  const front = el("article", { class: `jump card-manage${tone}` }, [
     el("button", { type: "button", class: "item-main", onclick: () => openCard(card.id) }, [
       el("div", { class: "row-between" }, [
-        el("span", { class: "card-title" }, card.name),
+        el("span", { class: "card-title-wrap" }, [
+          el("span", { class: "card-chip-icon", "aria-hidden": "true" }, cardBadgeGlyph()),
+          el("span", { class: "card-title" }, card.name),
+        ]),
         el("div", { class: "item-end" }, [
           amount > 0 ? el("span", { class: settled ? "badge paid" : "badge open" }, settled ? "Pago" : "Em aberto") : "",
           el("strong", { class: "amount" }, money(amount)),

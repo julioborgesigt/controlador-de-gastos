@@ -137,7 +137,7 @@ export function purchaseDetail(data) {
 
 function invoiceFold(key, label, amount, helpLines, body) {
   const open = Boolean(state.folds && state.folds[key]);
-  return el("section", { class: `fold${open ? " open" : ""}` }, [
+  return el("section", { class: `fold invoice-panel${open ? " open" : ""}` }, [
     el("div", { class: "fold-bar" }, [
       el("button", {
         class: "fold-toggle",
@@ -167,23 +167,23 @@ function invoiceXray(expenses, fallbackLivingCents = 0) {
   const origins = formatMonthList(inv.originMonths);
   const cells = [
     el("div", { class: "xray-item" }, [
-      el("small", {}, "Custo de vida na fatura"),
+      el("small", {}, "Custo de vida"),
       el("strong", {}, money(living)),
       inv.livingFromOtherCents > 0 ? el("small", { class: "xray-sub" }, `inclui ${money(inv.livingFromOtherCents)} de ${origins}`) : "",
     ]),
     el("div", { class: "xray-item" }, [
-      el("small", {}, "Planejados na fatura"),
+      el("small", {}, "Planejados"),
       el("strong", {}, money(inv.plannedCents)),
       inv.plannedFromOtherCents > 0 ? el("small", { class: "xray-sub" }, `inclui ${money(inv.plannedFromOtherCents)} de ${origins}`) : "",
     ]),
     el("div", { class: "xray-item" }, [
-      el("small", {}, "Imprevistos na fatura"),
+      el("small", {}, "Imprevistos"),
       el("strong", {}, money(inv.unexpectedCents)),
       inv.unexpectedFromOtherCents > 0 ? el("small", { class: "xray-sub" }, `inclui ${money(inv.unexpectedFromOtherCents)} de ${origins}`) : "",
     ]),
   ];
   if (inv.otherCents > 0 && inv.livingCents > 0) {
-    cells.push(el("div", { class: "xray-item" }, [
+    cells.push(el("div", { class: "xray-item wide" }, [
       el("small", {}, "Parcelamentos / outros"),
       el("strong", {}, money(inv.otherCents)),
     ]));
@@ -206,17 +206,29 @@ export function cardsHome(data) {
   const invoiceRows = [];
   const xray = invoiceXray(data.expenses, data.totals.fixedOnCardCents);
   if (xray) invoiceRows.push(xray);
-  if (!cards.length) invoiceRows.push(el("p", { class: "muted" }, "Nenhum cartão ainda."));
+  const cardItems = [];
   for (const card of cards) {
-    invoiceRows.push(cardManageRow(card, cardInvoiceCents(data.expenses, card.name), expensesForCardName(data.expenses, card.name)));
+    cardItems.push(cardManageRow(card, cardInvoiceCents(data.expenses, card.name), expensesForCardName(data.expenses, card.name)));
   }
   const loose = unassignedCardExpenses(data.expenses, cards);
   if (loose.some(shownExpense)) {
     const amount = loose
       .filter((expense) => !fixedOnCard(expense))
       .reduce((sum, expense) => sum + expense.amountCents, 0);
-    invoiceRows.push(cardJump("Sem cartão", amount, loose, () => openCard("unassigned")));
+    cardItems.push(cardJump("Sem cartão", amount, loose, () => openCard("unassigned")));
   }
+  invoiceRows.push(el("div", { class: `cards-list-block${xray ? " with-sep" : ""}` }, [
+    el("div", { class: "cards-list-head" }, [
+      el("span", { class: "eyebrow" }, cards.length === 0
+        ? "Cartões cadastrados"
+        : cards.length === 1
+          ? "Cartão cadastrado · 1"
+          : `Cartões cadastrados · ${cards.length}`),
+    ]),
+    cardItems.length
+      ? el("div", { class: "cards-stack" }, cardItems)
+      : el("p", { class: "muted" }, "Nenhum cartão ainda."),
+  ]));
   const launchesSub = purchases?.error
     || (fin.launches.launchedFutureCents > 0 || fin.launches.forecastNextInvoiceCents > 0
       ? `${money(fin.launches.launchedFutureCents)} lançados p/ ${formatMonthList(fin.launches.futureInvoiceMonths) || "próximas faturas"}${fin.launches.forecastNextInvoiceCents > 0 ? ` · +${money(fin.launches.forecastNextInvoiceCents)} previstos` : ""}${fin.launches.launchedOwnInvoiceCents > 0 ? ` · ${money(fin.launches.launchedOwnInvoiceCents)} nesta fatura` : ""}`
@@ -225,7 +237,7 @@ export function cardsHome(data) {
         : "Valores lançados neste mês para pagar nas próximas faturas.");
   const children = [
     el("button", {
-      class: "jump",
+      class: "jump card-launch-summary",
       type: "button",
       onclick: () => {
         state.cardFocus = "purchases";
@@ -233,15 +245,20 @@ export function cardsHome(data) {
       },
     }, [
       el("div", { class: "row-between" }, [
-        el("span", {}, `Lançamentos feitos em ${phrase}`),
-        el("strong", {}, purchases ? money(fin.launches.launchedFutureCents || fin.launches.totalLaunchedCents || 0) : "…"),
+        el("span", { class: "launch-title" }, `Lançamentos feitos em ${phrase}`),
+        el("div", { class: "launch-end" }, [
+          el("strong", {}, purchases ? money(fin.launches.launchedFutureCents || fin.launches.totalLaunchedCents || 0) : "…"),
+          el("span", { class: "launch-chevron", "aria-hidden": "true" }, "›"),
+        ]),
       ]),
       el("small", {}, launchesSub),
     ]),
-    editable() ? el("div", { class: "stack-actions" }, [
+    editable() ? el("div", { class: "cards-actions" }, [
       el("button", { class: "primary", type: "button", onclick: () => openCardExpense() }, "+ Gasto no crédito"),
-      el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
-      el("button", { class: "secondary", type: "button", onclick: () => openNubankImport() }, "Importar CSV Nubank"),
+      el("div", { class: "cards-actions-sub" }, [
+        el("button", { class: "secondary", type: "button", onclick: () => { state.error = ""; openCreateCard(); } }, "Adicionar cartão"),
+        el("button", { class: "secondary", type: "button", onclick: () => openNubankImport() }, "Importar CSV Nubank"),
+      ]),
     ]) : "",
     invoiceFold(
       `invoices:${data.month.id}`,

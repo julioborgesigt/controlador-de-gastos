@@ -162,12 +162,18 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       await page.waitFor('!document.querySelector(".dialog")');
       await page.waitForText("Pago");
 
-      // Confirmando no diálogo, o pagamento da fatura é desfeito
+      // Confirmando no diálogo, o pagamento da fatura é desfeito e o feedback aparece no toast pop-up com barra de progresso
       await page.drag(".card-swipe .swipe-front", 140, 0);
       await page.waitForSelector('.dialog[role="alertdialog"]');
       await page.clickButton("Desfazer", ".dialog");
       await page.waitFor('!document.querySelector(".dialog")');
+      await page.waitForSelector('.toast[role="status"] .toast-progress-fill');
       await page.waitForText("Pagamento de Nubank desfeito.");
+      // Garante que não há banner inline de notice na página e que a página de cartões tem painéis e seção de cartões cadastrados
+      assert.equal(await page.evaluate<boolean>('Boolean(document.querySelector(\'[data-key="notice"]\'))'), false);
+      assert.equal(await page.evaluate<boolean>('Boolean(document.querySelector(".invoice-panel .cards-list-block .card-chip-icon"))'), true);
+      // Toast fecha automaticamente após 3 segundos
+      await page.waitFor('!document.querySelector(".toast")', 4500);
       await page.waitForText("Em aberto");
 
       // Quita novamente para validar o Resumo quitado

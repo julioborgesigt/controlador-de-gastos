@@ -32,6 +32,7 @@ import { periodGate } from "./js/setup.js";
 import { sheet } from "./js/sheets/render.js";
 import {
   bootMark,
+  dismissNotice,
   maybeOpenTabIntro,
   render,
   root,
@@ -121,6 +122,8 @@ function renderApp() {
   if (!keepPlace && state.selectedExpenses.size) state.selectedExpenses.clear();
   root.removeAttribute("aria-busy");
   announceLive(state.error || state.notice || "");
+  const toast = toastPopup();
+  const withToast = (nodes) => (toast ? [...nodes, toast] : nodes);
   if (state.booting) {
     patchChildren(root, [bootMark()]);
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
@@ -136,7 +139,7 @@ function renderApp() {
     return;
   }
   if (!state.authed) {
-    patchChildren(root, [authScreen()]);
+    patchChildren(root, withToast([authScreen()]));
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
@@ -144,7 +147,7 @@ function renderApp() {
     return;
   }
   if (state.needsPeriod || state.setupGuide) {
-    patchChildren(root, [periodGate()]);
+    patchChildren(root, withToast([periodGate()]));
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
@@ -152,7 +155,7 @@ function renderApp() {
     return;
   }
   if (state.devicePrompt) {
-    patchChildren(root, [devicePromptScreen()]);
+    patchChildren(root, withToast([devicePromptScreen()]));
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
@@ -160,7 +163,7 @@ function renderApp() {
     return;
   }
   if (state.choosing) {
-    patchChildren(root, [accessScreen()]);
+    patchChildren(root, withToast([accessScreen()]));
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
@@ -174,6 +177,7 @@ function renderApp() {
   if (state.costDetail) nextNodes.push(costDetailDialog());
   if (state.tabIntro) nextNodes.push(tabIntroDialog());
   if (state.confirm) nextNodes.push(confirmDialog());
+  if (toast) nextNodes.push(toast);
   patchChildren(root, nextNodes);
   const nextSheet = document.querySelector(".sheet");
   if (nextSheet) nextSheet.scrollTop = sheetScroll;
@@ -188,6 +192,47 @@ function renderApp() {
   applyFocusAfterRender(focusBefore, true);
   queueMicrotask(centerMonthChip);
   syncOverlayHistory();
+}
+
+function toastCheckGlyph() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2.4");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M5 13l4 4L19 7");
+  svg.append(path);
+  return svg;
+}
+
+function toastPopup() {
+  if (!state.notice) return null;
+  return el("div", {
+    class: "toast",
+    role: "status",
+    "aria-live": "polite",
+    "data-key": `toast-${state.noticeSeq}`,
+    "data-patch-replace": "1",
+  }, [
+    el("div", { class: "toast-row" }, [
+      el("span", { class: "toast-icon", "aria-hidden": "true" }, toastCheckGlyph()),
+      el("span", { class: "toast-text" }, state.notice),
+      el("button", {
+        class: "toast-close",
+        type: "button",
+        "aria-label": "Fechar aviso",
+        onclick: dismissNotice,
+      }, "×"),
+    ]),
+    el("div", { class: "toast-progress", "aria-hidden": "true" }, [
+      el("span", { class: "toast-progress-fill" }),
+    ]),
+  ]);
 }
 
 function shell() {
@@ -210,7 +255,6 @@ function shell() {
     el("main", { class: "content", "data-key": "content" }, [
       state.offline ? el("p", { class: "note", "data-key": "offline-note" }, "Sem conexão. Exibindo os últimos dados salvos neste aparelho (somente leitura).") : "",
       state.error && !state.sheet ? el("p", { class: "error", "data-key": "error" }, state.error) : "",
-      state.notice && !state.sheet ? el("p", { class: "note", "data-key": "notice" }, state.notice) : "",
       data.access?.permission === "view"
         ? el("p", { class: "note", "data-key": "access-note" }, `Você está vendo os gastos de ${data.access.label}. Dá para consultar, sem alterar.`)
         : data.access && data.access.own === false
@@ -229,7 +273,6 @@ function shell() {
         state.summaryFocus = null;
         state.showEmpty = false;
         state.error = "";
-        state.notice = "";
         maybeOpenTabIntro(id);
         render();
       },
