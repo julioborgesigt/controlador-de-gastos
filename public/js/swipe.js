@@ -224,10 +224,18 @@ export function initSwipeListeners() {
     render();
   });
   document.addEventListener("keydown", (event) => {
-    if (event.key !== "Escape" || !state.accountMenu) return;
-    event.preventDefault();
-    state.accountMenu = false;
-    render();
+    if (event.key !== "Escape") return;
+    if (state.accountMenu) {
+      event.preventDefault();
+      state.accountMenu = false;
+      render();
+      return;
+    }
+    if (state.selectedExpenses?.size && !state.sheet && !state.confirm && !state.expenseInfo && !state.help && !state.costDetail && !state.tabIntro) {
+      event.preventDefault();
+      state.selectedExpenses.clear();
+      render();
+    }
   });
   document.addEventListener("pointerdown", (event) => {
     if (!openSwipe) return;

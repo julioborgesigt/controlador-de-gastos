@@ -44,7 +44,7 @@ import {
 import { initSwipeListeners } from "./js/swipe.js";
 import { cardDetail, cardsHome, purchaseDetail } from "./js/views/cards.js";
 import { cashHome } from "./js/views/cash.js";
-import { sectionList } from "./js/views/expenses.js";
+import { sectionList, selectionBar } from "./js/views/expenses.js";
 import { incomeView } from "./js/views/income.js";
 import { overviewView } from "./js/views/overview.js";
 import { summary } from "./js/views/summary.js";
@@ -118,6 +118,7 @@ function renderApp() {
   const sheetScroll = document.querySelector(".sheet")?.scrollTop || 0;
   const viewKey = `${state.authed}:${state.monthId}:${state.view}:${state.cardFocus || ""}:${state.summaryFocus || ""}`;
   const keepPlace = state.viewKey === viewKey;
+  if (!keepPlace && state.selectedExpenses.size) state.selectedExpenses.clear();
   root.removeAttribute("aria-busy");
   announceLive(state.error || state.notice || "");
   if (state.booting) {
@@ -192,7 +193,10 @@ function renderApp() {
 function shell() {
   const data = state.data;
   const viewingOther = data?.access?.own === false;
-  return el("div", { class: "shell", "data-key": "shell" }, [
+  state.selectableIds = [];
+  const body = viewBody(data);
+  const bar = selectionBar();
+  return el("div", { class: `shell${bar ? " selecting" : ""}`, "data-key": "shell" }, [
     el("header", { class: "top", "data-key": "top" }, [
       el("div", { class: "top-row" }, [
         el("div", { class: "brand-block" }, [
@@ -212,8 +216,9 @@ function shell() {
         : data.access && data.access.own === false
           ? el("p", { class: "note", "data-key": "access-note" }, `Você está nos gastos de ${data.access.label} e pode alterar.`)
           : "",
-      viewBody(data),
+      body,
     ]),
+    bar,
     el("nav", { class: "nav", "data-key": "nav" }, views.map(([id, label]) => el("button", {
       type: "button",
       "data-key": id,

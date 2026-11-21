@@ -94,7 +94,14 @@ export function registerCardRoutes(app: App): void {
     const writer = await requireWriter(c);
     if (!writer.ok) return c.json({ error: writer.error }, writer.status);
     const removed = await deleteCard(c.env.DB, writer.scope.ownerId, c.req.param("id"));
-    if (!removed.ok) return c.json({ error: removed.error }, removed.error === "Cartão não encontrado." ? 404 : 409);
-    return c.json({ cards: await listCards(c.env.DB, writer.scope.ownerId) });
+    if (!removed.ok) return c.json({ error: removed.error }, 404);
+    const monthId = c.req.query("monthId");
+    if (isMonthId(monthId) && await getMonth(c.env.DB, writer.scope.ownerId, monthId)) {
+      return c.json({
+        ...withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, monthId), writer.scope),
+        deletedExpenses: removed.deletedExpenses,
+      });
+    }
+    return c.json({ cards: await listCards(c.env.DB, writer.scope.ownerId), deletedExpenses: removed.deletedExpenses });
   });
 }

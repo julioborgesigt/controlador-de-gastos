@@ -1,6 +1,7 @@
 import { dueDatePassed, invoiceDueDate } from "../../card-due.js";
 import { extraOnOwnInvoice, money, parseMoney } from "../../format.js";
 import { rememberMonth, request } from "../api.js";
+import { pulseResetConfirm } from "../dialogs/confirm.js";
 import { linkedLivingCost } from "../dialogs/expense-info.js";
 import {
   el,
@@ -49,7 +50,6 @@ export function monthInvoicesSettled(data) {
 
 export function cardManageRow(card, amount, expenses) {
   const count = expenses.filter((expense) => shownExpense(expense) && !linkedLivingCost(expense)).length;
-  const blocked = Number(card.expenseCount) > 0;
   const balance = openCardBalance(expenses);
   const settled = amount > 0 && balance === 0;
   const front = el("article", { class: `jump card-manage${settled ? " paid" : ""}` }, [
@@ -79,8 +79,7 @@ export function cardManageRow(card, amount, expenses) {
       {
         label: "Excluir",
         tone: "delete",
-        disabled: blocked,
-        title: blocked ? "Este cartão tem gastos lançados." : "Excluir cartão",
+        title: "Excluir cartão",
         run: () => askDeleteCard(card),
       },
     ],
@@ -94,15 +93,13 @@ function openEditCard(card) {
 }
 
 function askDeleteCard(card) {
-  if (Number(card.expenseCount) > 0) {
-    state.error = "Este cartão tem gastos lançados. A exclusão só fica disponível quando não houver nenhum.";
-    render();
-    return;
-  }
+  state.accountMenu = false;
   state.error = "";
   state.confirmCard = card;
   state.confirm = "delete-card";
+  state.resetReadyAt = Date.now() + 5000;
   render();
+  pulseResetConfirm();
 }
 
 export async function removeCard(card) {
@@ -110,10 +107,16 @@ export async function removeCard(card) {
   state.error = "";
   setWorking(true, "Excluindo...");
   try {
-    const data = await request(`/api/cards/${card.id}`, { method: "DELETE" });
-    state.data.cards = data.cards;
+    const query = state.monthId ? `?monthId=${encodeURIComponent(state.monthId)}` : "";
+    const data = await request(`/api/cards/${card.id}${query}`, { method: "DELETE" });
+    if (data?.month?.id) {
+      state.data = data;
+      rememberMonth(data);
+    } else if (Array.isArray(data?.cards)) {
+      state.data.cards = data.cards;
+    }
     if (state.cardFocus === card.id) state.cardFocus = null;
-    state.notice = `Cartão “${card.name}” excluído.`;
+    state.notice = `Cartão “${card.name}” excluído permanentemente.`;
   } catch (error) {
     state.error = messageOf(error);
   } finally {
