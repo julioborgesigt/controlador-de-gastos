@@ -69,7 +69,7 @@ export function cardManageRow(card, amount, expenses) {
     { label: "Pago\nno Pix", tone: "pay", run: () => payCardPix(card) },
     { label: "Pago\nparcelado", tone: "send", run: () => openCardPayoff(card, balance) },
   ] : settled ? [
-    { label: "Desfazer", tone: "undo", commit: true, run: () => undoCardPayment(card) },
+    { label: "Desfazer", tone: "undo", commit: true, run: () => askUndoCardPayment(card) },
   ] : null;
   return swipeRow(front, {
     card: true,
@@ -194,10 +194,19 @@ export function openCardBalance(expenses) {
     .reduce((sum, expense) => sum + expense.amountCents, 0);
 }
 
-function undoCardPayment(card) {
+function askUndoCardPayment(card) {
+  state.accountMenu = false;
+  state.error = "";
+  state.confirmTarget = card;
+  state.confirm = "undo-card-payment";
+  render();
+}
+
+export function undoCardPayment(card) {
+  if (!card?.id) return Promise.resolve();
   state.error = "";
   setWorking(true, "Desfazendo...");
-  request(`/api/cards/${card.id}/payoff`, {
+  return request(`/api/cards/${card.id}/payoff`, {
     method: "POST",
     body: { mode: "undo", monthId: state.monthId },
   }).then((data) => {

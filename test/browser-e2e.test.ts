@@ -124,18 +124,54 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       await page.click(".card-manage .item-main");
       await page.waitForText("Notebook");
       await page.waitForText("1/2");
+      // Dentro do detalhe do cartão não deve existir ação de pagar/desfazer item individual
+      const cardLeadButtons = await page.evaluate<number>('document.querySelectorAll(".swipe .swipe-lead button").length');
+      assert.equal(cardLeadButtons, 0, "itens dentro da fatura do cartão não devem ter swipe-right Pago/Desfazer");
 
       // Volta para lista de cartões e quita a fatura do Nubank via swipe para a direita ("Pago no Pix")
+      const payCardByPix = async () => {
+        await page.waitForSelector(".card-swipe .swipe-front");
+        await page.drag(".card-swipe .swipe-front", 140, 0);
+        const clicked = await page.evaluate<boolean>(`(() => {
+          const btn = [...document.querySelectorAll(".card-swipe .swipe-lead button")]
+            .find((b) => (b.textContent || "").includes("Pago"));
+          if (!btn) return false;
+          btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 1 }));
+          return true;
+        })()`);
+        assert.equal(clicked, true);
+        await page.waitForText("Fatura de Nubank paga no Pix.");
+        await new Promise((resolve) => setTimeout(resolve, 750));
+      };
+      await page.clickButton("Todos os cartões");
+      await payCardByPix();
+
+      // Mesmo com a fatura paga, dentro do cartão não deve existir Desfazer individual
+      await page.click(".card-manage .item-main");
+      await page.waitForText("Notebook");
+      const paidCardLeadButtons = await page.evaluate<number>('document.querySelectorAll(".swipe .swipe-lead button").length');
+      assert.equal(paidCardLeadButtons, 0, "itens de fatura paga não devem ter Desfazer individual");
       await page.clickButton("Todos os cartões");
       await page.waitForSelector(".card-swipe .swipe-front");
+
+      // Arrastar para a direita na fatura paga pede confirmação antes de desfazer
       await page.drag(".card-swipe .swipe-front", 140, 0);
-      await page.clickButton("Pago", ".card-swipe");
-      const confirmOpen = await page.evaluate<boolean>('Boolean(document.querySelector(".dialog"))');
-      if (confirmOpen) {
-        await page.clickButton("Quitar", ".dialog");
-        await page.waitFor('!document.querySelector(".dialog")');
-      }
+      await page.waitForSelector('.dialog[role="alertdialog"]');
+      await page.waitForText("Desfazer pagamento da fatura");
+      await page.clickButton("Cancelar", ".dialog");
+      await page.waitFor('!document.querySelector(".dialog")');
       await page.waitForText("Pago");
+
+      // Confirmando no diálogo, o pagamento da fatura é desfeito
+      await page.drag(".card-swipe .swipe-front", 140, 0);
+      await page.waitForSelector('.dialog[role="alertdialog"]');
+      await page.clickButton("Desfazer", ".dialog");
+      await page.waitFor('!document.querySelector(".dialog")');
+      await page.waitForText("Pagamento de Nubank desfeito.");
+      await page.waitForText("Em aberto");
+
+      // Quita novamente para validar o Resumo quitado
+      await payCardByPix();
 
       // Volta para Resumo e valida que barra de progresso (CSSOM) foi aplicada sem erro CSP
       await page.click('nav.nav button[data-key="resumo"]');
