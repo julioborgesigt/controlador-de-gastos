@@ -1250,33 +1250,83 @@ body.is-working::before {
   z-index: 7;
   top: calc(100% + 8px);
   right: 0;
-  width: 240px;
+  width: min(296px, calc(100vw - 24px));
+  max-height: calc(100dvh - 80px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 6px;
   background: white;
   border: 1px solid var(--line);
-  border-radius: 12px;
-  box-shadow: 0 10px 28px rgba(16, 24, 40, 0.14);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(16, 24, 40, 0.16);
 }
 
 .menu-head {
-  padding: 8px 10px 10px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px 12px;
 }
+
+.menu-avatar {
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  flex: none;
+  display: grid;
+  place-items: center;
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
+  color: var(--ink);
+}
+
+.menu-head-copy { min-width: 0; }
 
 .menu-head strong, .menu-head small { display: block; }
 
+.menu-head strong { font-size: 15px; line-height: 1.2; }
+
 .menu-head small { color: var(--muted); font-size: 13px; margin-top: 2px; }
+
+.menu-group {
+  border-top: 1px solid var(--line);
+  padding: 6px 0 4px;
+}
+
+.menu-group-danger {
+  margin-top: 2px;
+  padding-bottom: 2px;
+}
+
+.menu-label {
+  margin: 2px 10px 4px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
 
 .menu-item {
   width: 100%;
-  min-height: 42px;
+  min-height: 40px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
+  color: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
   text-align: left;
-  padding: 0 10px;
+  padding: 6px 10px;
+  font-size: 14.5px;
   font-weight: 600;
+  line-height: 1.25;
+}
+
+.menu-icon {
+  flex: none;
+  color: var(--muted);
 }
 
 .menu-item:hover, .menu-item:focus-visible { background: #f3f5f8; }
@@ -1284,7 +1334,15 @@ body.is-working::before {
 html[data-theme="dark"] .menu-item:hover,
 html[data-theme="dark"] .menu-item:focus-visible { background: #2a313b; }
 
-.menu-item.danger { color: var(--bad); }
+.menu-item-danger { color: var(--bad); }
+
+.menu-item-danger .menu-icon { color: var(--bad); }
+
+.menu-item-danger:hover,
+.menu-item-danger:focus-visible { background: #fdecec; }
+
+html[data-theme="dark"] .menu-item-danger:hover,
+html[data-theme="dark"] .menu-item-danger:focus-visible { background: #361c20; }
 
 .overlay.center {
   align-items: center;
