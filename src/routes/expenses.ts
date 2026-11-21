@@ -6,6 +6,7 @@ import {
   noteWithFinalizedZero,
   noteWithPlanned,
   noteWithVariable,
+  parseInstallment,
   planCardPurchase,
   resolveCardLabel,
 } from "../domain.ts";
@@ -402,6 +403,16 @@ export function registerExpenseRoutes(app: App): void {
     const card = resolveCardLabel(cards, typeof body.cardLabel === "string" ? body.cardLabel : null, true);
     if (!card.ok) return c.json({ error: card.error }, 400);
     const note = typeof body.note === "string" ? body.note.trim().slice(0, 300) : "";
+    const purchaseDate = typeof body.purchaseDate === "string" ? body.purchaseDate.trim() : undefined;
+    const invoiceMonthId = isMonthId(body.invoiceMonthId) ? body.invoiceMonthId : undefined;
+    const costMonthId = isMonthId(body.costMonthId) ? body.costMonthId : undefined;
+    const linkExpenseId = typeof body.linkExpenseId === "string" ? body.linkExpenseId.trim() : undefined;
+    let installment: string | null | undefined;
+    if (body.installment !== undefined) {
+      const parsedInst = parseInstallment(body.installment);
+      if (!parsedInst.ok) return c.json({ error: parsedInst.error }, 400);
+      installment = parsedInst.value;
+    }
     const saved = await reclassifyExpense(c.env.DB, {
       ownerId: writer.scope.ownerId,
       expenseId: current.id,
@@ -410,6 +421,11 @@ export function registerExpenseRoutes(app: App): void {
       amountCents: body.amountCents,
       cardLabel: card.cardLabel || "",
       note,
+      purchaseDate,
+      invoiceMonthId,
+      costMonthId,
+      linkExpenseId,
+      installment,
     });
     if (!saved.ok) return c.json({ error: saved.error }, 400);
     return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, saved.monthId), writer.scope));

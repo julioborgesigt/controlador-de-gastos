@@ -324,6 +324,28 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       await page.click(".card-manage .item-main");
       await page.waitForText("Farmacia Central");
       await page.waitForText("1/2");
+
+      // Abre Editar em um gasto importado e confirma que a tela é a mesma de "Gasto no crédito"
+      const editOpened = await page.evaluate<boolean>(`(() => {
+        const rows = [...document.querySelectorAll(".swipe")];
+        const row = rows.find((el) => (el.textContent || "").includes("Farmacia Central"));
+        const btn = row && [...row.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "Editar");
+        if (!btn) return false;
+        btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 1 }));
+        return true;
+      })()`);
+      assert.equal(editOpened, true);
+      await page.waitForSelector("form.sheet");
+      await page.waitForText("Editar gasto no crédito");
+      await page.waitForSelector('form.sheet #purchaseDate');
+      await page.waitForSelector('form.sheet #invoiceMonthId');
+      await page.waitForSelector('form.sheet [data-segment="billing"][data-value="installments"].on');
+      await page.waitForSelector('form.sheet [data-segment="expenseKind"][data-value="casa"]');
+      await page.click('form.sheet [data-segment="expenseKind"][data-value="planejado"]');
+      await page.clickButton("Salvar", "form.sheet");
+      await page.waitFor('!document.querySelector("form.sheet")');
+      await page.waitForText("Planejado");
+
       await page.click('div.months button[data-key="2026-12"]');
       await page.waitForText("2/2");
 

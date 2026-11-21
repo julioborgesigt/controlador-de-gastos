@@ -32,27 +32,7 @@ export function sheet() {
   if (state.notice) panel.append(el("p", { class: "note", "data-key": "sheet-notice" }, state.notice));
   if (!renderAccountSheet(panel, draft) && !renderPaymentSheet(panel, draft)) {
   if (draft.fromCard && draft.mode === "edit") {
-    panel.append(
-      el("h2", {}, "Editar gasto do cartão"),
-      field("Nome", "name", draft.name, "text"),
-      field("Valor", "amount", draft.amount, "decimal"),
-      el("div", { class: "field" }, [
-        el("label", {}, "Tarja"),
-        segmented("expenseKind", [
-          ["imprevisto", "Imprevisto"],
-          ["planejado", "Planejado"],
-          ["casa", "Custo de vida"],
-        ], draft.expenseKind || ""),
-      ]),
-      el("p", { class: "muted" }, "A tarja manda este lançamento para a aba correspondente. Ele continua neste cartão, no crédito."),
-      cardSelect(draft),
-      field("Observação", "note", draft.note, "text"),
-      el("div", { class: "actions" }, [
-        el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
-        el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Salvando..." : "Salvar"),
-      ]),
-      el("button", { class: "danger", type: "button", onclick: () => openDeleteExpense(draft) }, "Excluir gasto"),
-    );
+    panel.append(...cardSpendFields(draft, { onDelete: () => openDeleteExpense(draft) }).filter(Boolean));
   } else if (draft.mode === "cash-spend") {
     panel.append(...cashSpendFields(draft).filter(Boolean));
   } else if (draft.mode === "card-spend") {
