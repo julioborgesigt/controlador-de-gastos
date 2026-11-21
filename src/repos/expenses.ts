@@ -321,16 +321,24 @@ export async function resetOwnerData(
   const income = base === null ? 0 : Number(base);
   const incomeCents = Number.isFinite(income) ? income : 0;
   const ids = targets.ids;
-  const marks = sqlMarks(ids);
-  const parents = await db
-    .prepare(`SELECT id FROM expenses WHERE owner_id = ? AND month_id IN (${marks})`)
-    .bind(ownerId, ...ids)
-    .all<{ id: string }>();
-  await deletePartialsForExpenses(db, ownerId, (parents.results ?? []).map((row) => row.id));
-  await db.batch([
-    db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND month_id IN (${marks})`).bind(ownerId, ...ids),
-    db.prepare(`DELETE FROM income_extras WHERE owner_id = ? AND month_id IN (${marks})`).bind(ownerId, ...ids),
-    db.prepare(`UPDATE months SET income_cents = ?, income_locked = 0, settled = 0 WHERE owner_id = ? AND id IN (${marks})`).bind(incomeCents, ownerId, ...ids),
-  ]);
+  const parentIds: string[] = [];
+  for (const part of chunkIds(ids, 80)) {
+    const parents = await db
+      .prepare(`SELECT id FROM expenses WHERE owner_id = ? AND month_id IN (${sqlMarks(part)})`)
+      .bind(ownerId, ...part)
+      .all<{ id: string }>();
+    for (const row of parents.results ?? []) parentIds.push(row.id);
+  }
+  await deletePartialsForExpenses(db, ownerId, parentIds);
+  const resetStatements: D1PreparedStatement[] = [];
+  for (const part of chunkIds(ids, 80)) {
+    const marks = sqlMarks(part);
+    resetStatements.push(
+      db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND month_id IN (${marks})`).bind(ownerId, ...part),
+      db.prepare(`DELETE FROM income_extras WHERE owner_id = ? AND month_id IN (${marks})`).bind(ownerId, ...part),
+      db.prepare(`UPDATE months SET income_cents = ?, income_locked = 0, settled = 0 WHERE owner_id = ? AND id IN (${marks})`).bind(incomeCents, ownerId, ...part),
+    );
+  }
+  await runStatements(db, resetStatements);
   return { ok: true, ids };
 }

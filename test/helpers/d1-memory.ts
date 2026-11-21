@@ -38,7 +38,14 @@ export function createMemoryD1(): D1Database {
   const sqlite = new DatabaseSync(":memory:");
   let inTx = false;
 
+  const assertD1Params = (params: SQLInputValue[]) => {
+    if (params.length > 100) {
+      throw new Error(`D1_ERROR: too many SQL variables (got ${params.length}, max 100)`);
+    }
+  };
+
   const execOne = (sql: string, params: SQLInputValue[]) => {
+    assertD1Params(params);
     const stmt = sqlite.prepare(sql);
     if (isQueryStatement(sql)) {
       const rows = (stmt.all(...params) as Record<string, unknown>[]).map(cloneRow);
@@ -64,6 +71,7 @@ export function createMemoryD1(): D1Database {
         return makeStatement(sql, values.map(toSqlValue));
       },
       async first<T = Record<string, unknown>>(colName?: string): Promise<T | null> {
+        assertD1Params(params);
         const stmt = sqlite.prepare(sql);
         const row = stmt.get(...params) as Record<string, unknown> | undefined;
         if (!row) return null;
@@ -77,6 +85,7 @@ export function createMemoryD1(): D1Database {
         return execOne(sql, params) as unknown as D1Result<T>;
       },
       raw: (async (options?: { columnNames?: boolean }) => {
+        assertD1Params(params);
         const stmt = sqlite.prepare(sql);
         const rows = stmt.all(...params) as Record<string, unknown>[];
         if (options?.columnNames) {

@@ -321,20 +321,26 @@ export function chunkIds(ids: readonly string[], size = 80): string[][] {
 }
 
 export async function runStatements(db: D1Database, statements: D1PreparedStatement[]): Promise<void> {
-  for (let index = 0; index < statements.length; index += 80) {
-    await db.batch(statements.slice(index, index + 80));
+  for (let index = 0; index < statements.length; index += 40) {
+    await db.batch(statements.slice(index, index + 40));
   }
 }
 
 export async function nextSorts(db: D1Database, ownerId: string, monthIds: readonly string[]): Promise<Map<string, number>> {
   const ids = [...new Set(monthIds)];
-  if (!ids.length) return new Map();
-  const sorts = await db
-    .prepare(
-      `SELECT month_id, COALESCE(MAX(sort_order), 0) AS max_sort
-       FROM expenses WHERE owner_id = ? AND month_id IN (${sqlMarks(ids)}) GROUP BY month_id`,
-    )
-    .bind(ownerId, ...ids)
-    .all<{ month_id: string; max_sort: number }>();
-  return new Map((sorts.results ?? []).map((row) => [row.month_id, Number(row.max_sort) || 0]));
+  const map = new Map<string, number>();
+  if (!ids.length) return map;
+  for (const part of chunkIds(ids, 80)) {
+    const sorts = await db
+      .prepare(
+        `SELECT month_id, COALESCE(MAX(sort_order), 0) AS max_sort
+         FROM expenses WHERE owner_id = ? AND month_id IN (${sqlMarks(part)}) GROUP BY month_id`,
+      )
+      .bind(ownerId, ...part)
+      .all<{ month_id: string; max_sort: number }>();
+    for (const row of sorts.results ?? []) {
+      map.set(row.month_id, Number(row.max_sort) || 0);
+    }
+  }
+  return map;
 }

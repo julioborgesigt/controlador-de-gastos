@@ -22,6 +22,7 @@ export type NubankImportResult =
       syncedExisting: number;
       ignoredPayments: number;
       ignoredCredits: number;
+      invalidRows: number;
       totalCents: number;
     }
   | {
@@ -172,6 +173,7 @@ export async function importNubankCsv(
     syncedExisting,
     ignoredPayments: parsed.ignoredPayments,
     ignoredCredits: parsed.ignoredCredits,
+    invalidRows: parsed.invalidRows,
     totalCents: parsed.totalCents,
   };
 }

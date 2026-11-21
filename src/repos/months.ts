@@ -1,5 +1,5 @@
 import { listMonthRange, monthLabel, monthSortOrder } from "../domain.ts";
-import { baseIncomeKey, getSetting, runStatements, setSetting, sqlMarks, type IncomeExtra, type MonthRow } from "./core.ts";
+import { baseIncomeKey, chunkIds, getSetting, runStatements, setSetting, sqlMarks, type IncomeExtra, type MonthRow } from "./core.ts";
 
 export async function listMonths(db: D1Database, ownerId: string): Promise<Array<{ id: string; label: string; settled: boolean; sortOrder: number; incomeCents: number; incomeLocked: boolean }>> {
   const result = await db
@@ -40,11 +40,14 @@ export async function listIncomeExtras(db: D1Database, ownerId: string): Promise
 export async function ensureMonths(db: D1Database, ownerId: string, monthIds: readonly string[]): Promise<void> {
   const ids = [...new Set(monthIds)];
   if (!ids.length) return;
-  const known = await db
-    .prepare(`SELECT id FROM months WHERE owner_id = ? AND id IN (${sqlMarks(ids)})`)
-    .bind(ownerId, ...ids)
-    .all<{ id: string }>();
-  const have = new Set((known.results ?? []).map((row) => row.id));
+  const have = new Set<string>();
+  for (const part of chunkIds(ids, 80)) {
+    const known = await db
+      .prepare(`SELECT id FROM months WHERE owner_id = ? AND id IN (${sqlMarks(part)})`)
+      .bind(ownerId, ...part)
+      .all<{ id: string }>();
+    for (const row of known.results ?? []) have.add(row.id);
+  }
   const missing = ids.filter((id) => !have.has(id));
   if (!missing.length) return;
   const base = await getSetting(db, baseIncomeKey(ownerId));
@@ -55,7 +58,7 @@ export async function ensureMonths(db: D1Database, ownerId: string, monthIds: re
     missing.map((monthId) =>
       db
         .prepare(
-          "INSERT INTO months (owner_id, id, label, income_cents, settled, sort_order, income_locked) VALUES (?, ?, ?, ?, 0, ?, 0)",
+          "INSERT OR IGNORE INTO months (owner_id, id, label, income_cents, settled, sort_order, income_locked) VALUES (?, ?, ?, ?, 0, ?, 0)",
         )
         .bind(ownerId, monthId, monthLabel(monthId), cents, monthSortOrder(monthId)),
     ),
@@ -80,13 +83,16 @@ export async function setManagedPeriod(
   if (dropping.length) {
     const blocked = await busyMonthLabel(db, ownerId, dropping);
     if (blocked) return { ok: false, error: `Há dados em ${blocked}. Apague esses dados antes de tirar o mês do período.` };
-    const ids = dropping.map((month) => month.id);
-    const marks = sqlMarks(ids);
-    await db.batch([
-      db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND month_id IN (${marks})`).bind(ownerId, ...ids),
-      db.prepare(`DELETE FROM income_extras WHERE owner_id = ? AND month_id IN (${marks})`).bind(ownerId, ...ids),
-      db.prepare(`DELETE FROM months WHERE owner_id = ? AND id IN (${marks})`).bind(ownerId, ...ids),
-    ]);
+    const statements: D1PreparedStatement[] = [];
+    for (const part of chunkIds(dropping.map((month) => month.id), 80)) {
+      const marks = sqlMarks(part);
+      statements.push(
+        db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND month_id IN (${marks})`).bind(ownerId, ...part),
+        db.prepare(`DELETE FROM income_extras WHERE owner_id = ? AND month_id IN (${marks})`).bind(ownerId, ...part),
+        db.prepare(`DELETE FROM months WHERE owner_id = ? AND id IN (${marks})`).bind(ownerId, ...part),
+      );
+    }
+    await runStatements(db, statements);
   }
   await ensureMonths(db, ownerId, range.months);
   return { ok: true, startMonthId: range.months[0] };
@@ -97,20 +103,20 @@ async function busyMonthLabel(
   ownerId: string,
   months: Array<{ id: string; label: string; incomeLocked: boolean }>,
 ): Promise<string | null> {
-  const ids = months.map((month) => month.id);
-  const marks = sqlMarks(ids);
-  const expenses = await db
-    .prepare(`SELECT month_id FROM expenses WHERE owner_id = ? AND month_id IN (${marks}) GROUP BY month_id`)
-    .bind(ownerId, ...ids)
-    .all<{ month_id: string }>();
-  const extras = await db
-    .prepare(`SELECT month_id FROM income_extras WHERE owner_id = ? AND month_id IN (${marks}) GROUP BY month_id`)
-    .bind(ownerId, ...ids)
-    .all<{ month_id: string }>();
-  const busy = new Set([
-    ...(expenses.results ?? []).map((row) => row.month_id),
-    ...(extras.results ?? []).map((row) => row.month_id),
-  ]);
+  const busy = new Set<string>();
+  for (const part of chunkIds(months.map((month) => month.id), 80)) {
+    const marks = sqlMarks(part);
+    const expenses = await db
+      .prepare(`SELECT month_id FROM expenses WHERE owner_id = ? AND month_id IN (${marks}) GROUP BY month_id`)
+      .bind(ownerId, ...part)
+      .all<{ month_id: string }>();
+    const extras = await db
+      .prepare(`SELECT month_id FROM income_extras WHERE owner_id = ? AND month_id IN (${marks}) GROUP BY month_id`)
+      .bind(ownerId, ...part)
+      .all<{ month_id: string }>();
+    for (const row of expenses.results ?? []) busy.add(row.month_id);
+    for (const row of extras.results ?? []) busy.add(row.month_id);
+  }
   const found = months.find((month) => month.incomeLocked || busy.has(month.id));
   return found ? found.label : null;
 }
