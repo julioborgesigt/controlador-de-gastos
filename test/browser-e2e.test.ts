@@ -443,6 +443,14 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       const addCardSpend = async (name: string, amount: string) => {
         await page.clickButton("+ Gasto no crédito");
         await page.waitForSelector("form.sheet");
+        if (name === "Café") {
+          const selectionPolicy = await page.evaluate<{ body: string; input: string }>(`(() => ({
+            body: getComputedStyle(document.body).userSelect,
+            input: getComputedStyle(document.querySelector('form.sheet input[name="name"]')).userSelect,
+          }))()`);
+          assert.equal(selectionPolicy.body, "none", "body deve bloquear seleção acidental de texto");
+          assert.equal(selectionPolicy.input, "text", "campos de entrada devem manter seleção de texto liberada");
+        }
         await page.fill('form.sheet input[name="name"]', name);
         await page.fill('form.sheet input[name="amount"]', amount);
         await page.selectOption("#invoiceMonthId", "2026-11");
