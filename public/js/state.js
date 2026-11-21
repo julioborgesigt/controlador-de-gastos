@@ -1,4 +1,28 @@
+import { DEFAULT_INVOICE_SORTS, normalizeInvoiceSorts } from "../installment-order.js";
 import { el } from "./dom.js";
+
+const INVOICE_SORT_KEY = "invoiceSort:v1";
+
+function readStoredInvoiceSorts() {
+  try {
+    const raw = typeof localStorage !== "undefined" ? localStorage.getItem(INVOICE_SORT_KEY) : null;
+    if (!raw) return DEFAULT_INVOICE_SORTS.map((item) => ({ ...item }));
+    return normalizeInvoiceSorts(JSON.parse(raw));
+  } catch {
+    return DEFAULT_INVOICE_SORTS.map((item) => ({ ...item }));
+  }
+}
+
+export function setInvoiceSorts(next) {
+  state.invoiceSorts = normalizeInvoiceSorts(next);
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(INVOICE_SORT_KEY, JSON.stringify(state.invoiceSorts));
+    }
+  } catch {
+    /* segue apenas nesta sessão */
+  }
+}
 
 export const root = document.querySelector("#app");
 
@@ -78,6 +102,7 @@ export const state = {
   monthId: sessionStorage.getItem("monthId") || "",
   view: "resumo",
   extraFilter: "all",
+  invoiceSorts: readStoredInvoiceSorts(),
   data: null,
   error: "",
   get notice() {

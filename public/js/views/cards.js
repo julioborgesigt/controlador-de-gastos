@@ -8,14 +8,19 @@ import {
   previousMonthId,
   shortMonthLabel,
 } from "../../format.js";
-import { compareInvoiceItems } from "../../installment-order.js";
+import {
+  DEFAULT_INVOICE_SORTS,
+  INVOICE_SORT_OPTIONS,
+  createInvoiceComparator,
+  isDefaultInvoiceSorts,
+} from "../../installment-order.js";
 import { ensureNextInvoices, openMonthCard, purchasesOf } from "../api.js";
 import { linkedInvoice } from "../dialogs/expense-info.js";
 import { helpButton, titleWithHelp } from "../dialogs/info.js";
 import { backArrow, el, monthPhrase, onDesktop } from "../dom.js";
 import { openNubankImport } from "../sheets/import-nubank.js";
 import { openCardExpense } from "../sheets/openers.js";
-import { editable, monthStore, render, state } from "../state.js";
+import { editable, monthStore, render, setInvoiceSorts, state } from "../state.js";
 import {
   cardInvoiceCents,
   cardJump,
@@ -31,7 +36,135 @@ import {
 } from "./card-helpers.js";
 import { cardSourceLabel, cardTrack, expenseRow } from "./expenses.js";
 
-function purchaseGroups(items) {
+const SORT_OPTION_MAP = new Map(INVOICE_SORT_OPTIONS.map((option) => [option.key, option]));
+
+function sortGlyph() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "15");
+  svg.setAttribute("height", "15");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M3 7h18M6 12h12M10 17h4");
+  svg.append(path);
+  return svg;
+}
+
+function invoiceSortBar() {
+  const rules = Array.isArray(state.invoiceSorts) ? state.invoiceSorts : DEFAULT_INVOICE_SORTS;
+  const isDefault = isDefaultInvoiceSorts(rules);
+  const trail = rules
+    .map((rule, index) => {
+      const option = SORT_OPTION_MAP.get(rule.key);
+      if (!option) return "";
+      const hint = rule.dir === "desc" ? option.descHint : option.ascHint;
+      return `${index + 1}º ${option.label} (${hint})`;
+    })
+    .filter(Boolean)
+    .join(" → ");
+
+  return el("div", {
+    class: "invoice-sort-bar",
+    "data-key": "invoice-sort-bar",
+    role: "region",
+    "aria-label": "Ordenação da fatura",
+  }, [
+    el("div", { class: "invoice-sort-head" }, [
+      el("span", { class: "invoice-sort-title" }, [
+        sortGlyph(),
+        "Ordenar fatura",
+      ]),
+      el("div", { class: "invoice-sort-actions" }, [
+        !isDefault
+          ? el("button", {
+            type: "button",
+            class: "invoice-sort-action",
+            onclick: () => {
+              setInvoiceSorts(DEFAULT_INVOICE_SORTS);
+              render();
+            },
+          }, "Padrão")
+          : "",
+        rules.length > 0
+          ? el("button", {
+            type: "button",
+            class: "invoice-sort-action",
+            onclick: () => {
+              setInvoiceSorts([]);
+              render();
+            },
+          }, "Limpar")
+          : "",
+      ]),
+    ]),
+    el("div", { class: "sort-chips", role: "group", "aria-label": "Critérios cumulativos de ordenação" }, INVOICE_SORT_OPTIONS.map((option) => {
+      const idx = rules.findIndex((rule) => rule.key === option.key);
+      if (idx >= 0) {
+        const rule = rules[idx];
+        const dirHint = rule.dir === "desc" ? option.descHint : option.ascHint;
+        const nextDir = rule.dir === "desc" ? "asc" : "desc";
+        const nextHint = nextDir === "desc" ? option.descHint : option.ascHint;
+        return el("div", {
+          class: "sort-chip on",
+          "data-key": `sort-${option.key}`,
+          "data-sort-key": option.key,
+          "data-sort-dir": rule.dir,
+        }, [
+          el("button", {
+            type: "button",
+            class: "sort-chip-main",
+            "aria-pressed": "true",
+            "aria-label": `${option.label}: ${idx + 1}º critério (${dirHint}). Toque para mudar para ${nextHint}.`,
+            title: `Toque para ordenar por ${nextHint}`,
+            onclick: () => {
+              const next = rules.map((item, i) => (i === idx ? { ...item, dir: nextDir } : item));
+              setInvoiceSorts(next);
+              render();
+            },
+          }, [
+            el("span", { class: "sort-chip-rank", "aria-hidden": "true" }, String(idx + 1)),
+            el("span", { class: "sort-chip-label" }, option.label),
+            el("span", { class: "sort-chip-dir", "aria-hidden": "true" }, rule.dir === "desc" ? "↓" : "↑"),
+          ]),
+          el("button", {
+            type: "button",
+            class: "sort-chip-remove",
+            "aria-label": `Remover ${option.label}`,
+            title: `Remover ${option.label}`,
+            onclick: () => {
+              setInvoiceSorts(rules.filter((item) => item.key !== option.key));
+              render();
+            },
+          }, "×"),
+        ]);
+      }
+      const defaultHint = option.defaultDir === "desc" ? option.descHint : option.ascHint;
+      return el("button", {
+        type: "button",
+        class: "sort-chip",
+        "data-key": `sort-${option.key}`,
+        "data-sort-key": option.key,
+        "aria-pressed": "false",
+        "aria-label": `Adicionar ordenação por ${option.label} (${defaultHint})`,
+        title: `Adicionar ${option.label} (${defaultHint})`,
+        onclick: () => {
+          setInvoiceSorts([...rules, { key: option.key, dir: option.defaultDir }]);
+          render();
+        },
+      }, [
+        el("span", { class: "sort-chip-label" }, option.label),
+      ]);
+    })),
+    el("p", { class: "invoice-sort-summary" }, trail || "Sem filtro ativo (ordem alfabética). Toque nos critérios acima para combinar."),
+  ]);
+}
+
+function purchaseGroups(items, comparator) {
   const groups = new Map();
   for (const item of items || []) {
     const key = item.invoiceMonthId || "";
@@ -44,7 +177,7 @@ function purchaseGroups(items) {
     .map(([invoiceMonthId, rows]) => ({
       invoiceMonthId,
       totalCents: rows.reduce((sum, row) => sum + row.amountCents, 0),
-      rows: rows.slice().sort(compareInvoiceItems),
+      rows: rows.slice().sort(comparator),
     }));
 }
 
@@ -56,7 +189,8 @@ export function purchaseDetail(data) {
   const nextData = state.nextInvoicesFor === data.month.id ? state.nextInvoices : (monthStore.get(nextId) || null);
   const prevData = monthStore.get(prevId) || null;
   const fin = monthFinancialSummary(data, nextData, prevData, payload);
-  const groups = purchaseGroups(items).sort((left, right) => {
+  const comparator = createInvoiceComparator(state.invoiceSorts);
+  const groups = purchaseGroups(items, comparator).sort((left, right) => {
     const leftSame = left.invoiceMonthId === data.month.id ? 1 : 0;
     const rightSame = right.invoiceMonthId === data.month.id ? 1 : 0;
     if (leftSame !== rightSame) return leftSame - rightSame;
@@ -112,6 +246,7 @@ export function purchaseDetail(data) {
   if (!groups.length && fin.launches.forecastNextInvoiceCents <= 0) {
     children.push(el("p", { class: "muted" }, "Nenhum gasto deste mês lançado no cartão."));
   }
+  if (groups.length) children.push(invoiceSortBar());
   for (const group of groups) {
     const same = group.invoiceMonthId === data.month.id;
     children.push(el("p", { class: "eyebrow group" }, same
@@ -373,6 +508,7 @@ export function cardDetail(data) {
       el("button", { class: "primary", type: "button", onclick: () => openCardExpense(card ? card.name : "") }, "+ Gasto no crédito"),
     ]) : "",
   ];
+  const comparator = createInvoiceComparator(state.invoiceSorts);
   const groups = [
     [
       "Custo de vida na fatura",
@@ -382,11 +518,12 @@ export function cardDetail(data) {
     ["Imprevistos na fatura", visible.filter((expense) => !fixedOnCard(expense) && cardTrack(expense) === "imprevisto")],
     ["Fatura prevista / parcelamentos", visible.filter((expense) => (expense.section === "card" || expense.section === "extra") && !fixedOnCard(expense) && cardTrack(expense) === "")],
   ];
+  if (visible.length) children.push(invoiceSortBar());
   for (const [title, rows] of groups) {
     if (!rows.length) continue;
     const groupTotal = rows.reduce((sum, row) => sum + row.amountCents, 0);
     children.push(el("p", { class: "eyebrow group" }, `${title} · ${money(groupTotal)}`));
-    children.push(el("div", { class: "list" }, rows.slice().sort(compareInvoiceItems).map((expense) => expenseRow(expense, "card", { manage: editable(), cardExpense: editable() }))));
+    children.push(el("div", { class: "list" }, rows.slice().sort(comparator).map((expense) => expenseRow(expense, "card", { manage: editable(), cardExpense: editable() }))));
   }
   if (!visible.length) {
     children.push(el("p", { class: "muted" }, card ? "Nenhum gasto neste cartão neste mês." : "Nada sem cartão neste mês."));
