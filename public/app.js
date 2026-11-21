@@ -32,7 +32,6 @@ import { periodGate } from "./js/setup.js";
 import { sheet } from "./js/sheets/render.js";
 import {
   bootMark,
-  dismissNotice,
   maybeOpenTabIntro,
   render,
   root,
@@ -122,8 +121,6 @@ function renderApp() {
   if (!keepPlace && state.selectedExpenses.size) state.selectedExpenses.clear();
   root.removeAttribute("aria-busy");
   announceLive(state.error || state.notice || "");
-  const toast = toastPopup();
-  const withToast = (nodes) => (toast ? [...nodes, toast] : nodes);
   if (state.booting) {
     patchChildren(root, [bootMark()]);
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
@@ -139,7 +136,7 @@ function renderApp() {
     return;
   }
   if (!state.authed) {
-    patchChildren(root, withToast([authScreen()]));
+    patchChildren(root, [authScreen()]);
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
@@ -147,7 +144,7 @@ function renderApp() {
     return;
   }
   if (state.needsPeriod || state.setupGuide) {
-    patchChildren(root, withToast([periodGate()]));
+    patchChildren(root, [periodGate()]);
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
@@ -155,7 +152,7 @@ function renderApp() {
     return;
   }
   if (state.devicePrompt) {
-    patchChildren(root, withToast([devicePromptScreen()]));
+    patchChildren(root, [devicePromptScreen()]);
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
@@ -163,7 +160,7 @@ function renderApp() {
     return;
   }
   if (state.choosing) {
-    patchChildren(root, withToast([accessScreen()]));
+    patchChildren(root, [accessScreen()]);
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
@@ -177,7 +174,6 @@ function renderApp() {
   if (state.costDetail) nextNodes.push(costDetailDialog());
   if (state.tabIntro) nextNodes.push(tabIntroDialog());
   if (state.confirm) nextNodes.push(confirmDialog());
-  if (toast) nextNodes.push(toast);
   patchChildren(root, nextNodes);
   const nextSheet = document.querySelector(".sheet");
   if (nextSheet) nextSheet.scrollTop = sheetScroll;
@@ -192,47 +188,6 @@ function renderApp() {
   applyFocusAfterRender(focusBefore, true);
   queueMicrotask(centerMonthChip);
   syncOverlayHistory();
-}
-
-function toastCheckGlyph() {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("width", "16");
-  svg.setAttribute("height", "16");
-  svg.setAttribute("fill", "none");
-  svg.setAttribute("stroke", "currentColor");
-  svg.setAttribute("stroke-width", "2.4");
-  svg.setAttribute("stroke-linecap", "round");
-  svg.setAttribute("stroke-linejoin", "round");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", "M5 13l4 4L19 7");
-  svg.append(path);
-  return svg;
-}
-
-function toastPopup() {
-  if (!state.notice) return null;
-  return el("div", {
-    class: "toast",
-    role: "status",
-    "aria-live": "polite",
-    "data-key": `toast-${state.noticeSeq}`,
-    "data-patch-replace": "1",
-  }, [
-    el("div", { class: "toast-row" }, [
-      el("span", { class: "toast-icon", "aria-hidden": "true" }, toastCheckGlyph()),
-      el("span", { class: "toast-text" }, state.notice),
-      el("button", {
-        class: "toast-close",
-        type: "button",
-        "aria-label": "Fechar aviso",
-        onclick: dismissNotice,
-      }, "×"),
-    ]),
-    el("div", { class: "toast-progress", "aria-hidden": "true" }, [
-      el("span", { class: "toast-progress-fill" }),
-    ]),
-  ]);
 }
 
 function shell() {

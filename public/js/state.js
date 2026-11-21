@@ -10,12 +10,59 @@ let noticeText = "";
 let noticeSeq = 0;
 let noticeTimer = 0;
 
+function toastCheckGlyph() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("width", "16");
+  svg.setAttribute("height", "16");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2.4");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", "M5 13l4 4L19 7");
+  svg.append(path);
+  return svg;
+}
+
+function removeToastNode() {
+  if (typeof document === "undefined") return;
+  document.querySelectorAll(".toast").forEach((node) => node.remove());
+}
+
+function mountToastNode(text, seq) {
+  if (typeof document === "undefined" || !document.body) return;
+  removeToastNode();
+  if (!text) return;
+  const toast = el("div", {
+    class: "toast",
+    role: "status",
+    "aria-live": "polite",
+    "data-key": `toast-${seq}`,
+  }, [
+    el("div", { class: "toast-row" }, [
+      el("span", { class: "toast-icon", "aria-hidden": "true" }, toastCheckGlyph()),
+      el("span", { class: "toast-text" }, text),
+      el("button", {
+        class: "toast-close",
+        type: "button",
+        "aria-label": "Fechar aviso",
+        onclick: dismissNotice,
+      }, "×"),
+    ]),
+    el("div", { class: "toast-progress", "aria-hidden": "true" }, [
+      el("span", { class: "toast-progress-fill" }),
+    ]),
+  ]);
+  document.body.append(toast);
+}
+
 export function dismissNotice() {
   clearTimeout(noticeTimer);
   noticeTimer = 0;
-  if (!noticeText) return;
   noticeText = "";
-  renderSafely();
+  removeToastNode();
 }
 
 export const state = {
@@ -44,12 +91,15 @@ export const state = {
     if (next) {
       noticeSeq += 1;
       const token = noticeSeq;
+      mountToastNode(next, token);
       noticeTimer = setTimeout(() => {
         if (noticeSeq !== token) return;
         noticeTimer = 0;
         noticeText = "";
-        renderSafely();
+        removeToastNode();
       }, TOAST_MS);
+    } else {
+      removeToastNode();
     }
   },
   get noticeSeq() {
