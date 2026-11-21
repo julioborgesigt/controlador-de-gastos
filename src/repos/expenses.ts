@@ -127,16 +127,95 @@ export async function deleteExpensesBatch(
 ): Promise<{ ok: true; monthId: string; count: number } | { ok: false; error: string }> {
   const uniqueIds = [...new Set(expenseIds.map((id) => String(id || "").trim()).filter(Boolean))];
   if (!uniqueIds.length) return { ok: false, error: "Selecione pelo menos um gasto para excluir." };
-  let deleted = 0;
-  let monthId = fallbackMonthId;
-  for (const id of uniqueIds) {
-    const removed = await deleteMatchingExpenses(db, ownerId, id, "month");
-    if (!removed.ok) continue;
-    deleted += removed.count;
-    if (!monthId) monthId = removed.monthId;
+
+  const selected: Array<{ id: string; month_id: string; section: string; note: string | null }> = [];
+  for (const part of chunkIds(uniqueIds, 80)) {
+    const res = await db
+      .prepare(`SELECT id, month_id, section, note FROM expenses WHERE owner_id = ? AND id IN (${sqlMarks(part)})`)
+      .bind(ownerId, ...part)
+      .all<{ id: string; month_id: string; section: string; note: string | null }>();
+    selected.push(...(res.results ?? []));
   }
-  if (!deleted) return { ok: false, error: "Nenhum dos gastos selecionados foi encontrado." };
-  return { ok: true, monthId, count: deleted };
+  if (!selected.length) return { ok: false, error: "Nenhum dos gastos selecionados foi encontrado." };
+
+  const ids = selected.map((item) => item.id);
+  const idSet = new Set(ids);
+  const monthId = fallbackMonthId || selected[0]!.month_id;
+  const extraIds = selected.filter((item) => item.section === "extra").map((item) => item.id);
+  const fixedIds = selected.filter((item) => item.section === "fixed").map((item) => item.id);
+  const deletedNotes = selected.map((item) => item.note);
+
+  const deleteStatements: D1PreparedStatement[] = [];
+  for (const part of chunkIds(extraIds, 80)) {
+    deleteStatements.push(
+      db
+        .prepare(`DELETE FROM expenses WHERE owner_id = ? AND section = 'card' AND origin_expense_id IN (${sqlMarks(part)})`)
+        .bind(ownerId, ...part),
+    );
+  }
+  for (const part of chunkIds(fixedIds, 80)) {
+    deleteStatements.push(
+      db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND origin_expense_id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
+      db.prepare(`DELETE FROM partial_payments WHERE owner_id = ? AND expense_id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
+    );
+  }
+  for (const part of chunkIds(ids, 80)) {
+    deleteStatements.push(
+      db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
+    );
+  }
+  await runStatements(db, deleteStatements);
+
+  const hasLinkedNotes = deletedNotes.some((note) => note && (note.includes("origem:") || note.includes("parcial:")));
+  if (hasLinkedNotes) {
+    const left = await db
+      .prepare("SELECT note FROM expenses WHERE owner_id = ? AND note IS NOT NULL")
+      .bind(ownerId)
+      .all<{ note: string }>();
+    const effects = cardDeletionEffects(deletedNotes, (left.results ?? []).map((row) => row.note));
+    const cleanupStatements: D1PreparedStatement[] = [];
+    const resetOrigins = effects.resetOriginIds.filter((origin) => !idSet.has(origin));
+    for (const part of chunkIds(resetOrigins, 80)) {
+      cleanupStatements.push(
+        db
+          .prepare(
+            `UPDATE expenses SET payment = 'pix', on_card = 0, card_label = NULL, paid = 0
+             WHERE owner_id = ? AND section = 'fixed' AND id IN (${sqlMarks(part)})`,
+          )
+          .bind(ownerId, ...part),
+      );
+    }
+    if (effects.dropPartialIds.length) {
+      const partialRows: Array<{ id: string; expense_id: string }> = [];
+      for (const part of chunkIds(effects.dropPartialIds, 80)) {
+        const result = await db
+          .prepare(`SELECT id, expense_id FROM partial_payments WHERE owner_id = ? AND id IN (${sqlMarks(part)})`)
+          .bind(ownerId, ...part)
+          .all<{ id: string; expense_id: string }>();
+        partialRows.push(...(result.results ?? []));
+      }
+      const activePartials = partialRows.filter((row) => !idSet.has(row.expense_id));
+      if (activePartials.length) {
+        const dropIds = activePartials.map((row) => row.id);
+        const affectedExpenseIds = [...new Set(activePartials.map((row) => row.expense_id))];
+        for (const part of chunkIds(dropIds, 80)) {
+          cleanupStatements.push(
+            db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND partial_id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
+            db.prepare(`DELETE FROM partial_payments WHERE owner_id = ? AND id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
+          );
+        }
+        for (const part of chunkIds(affectedExpenseIds, 80)) {
+          cleanupStatements.push(
+            db
+              .prepare(`UPDATE expenses SET paid = 0 WHERE owner_id = ? AND section = 'fixed' AND id IN (${sqlMarks(part)})`)
+              .bind(ownerId, ...part),
+          );
+        }
+      }
+    }
+    if (cleanupStatements.length) await runStatements(db, cleanupStatements);
+  }
+  return { ok: true, monthId, count: ids.length };
 }
 
 export async function applySeriesEdit(

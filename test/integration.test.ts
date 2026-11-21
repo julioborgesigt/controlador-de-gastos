@@ -579,5 +579,50 @@ test("exclusão em lote de gastos (bulk-delete) e exclusão permanente de cartã
   assert.equal(mercadoAfter.payment, "pix");
   assert.equal(mercadoAfter.cardLabel, null);
   assert.equal((mercadoAfter.partials || []).length, 0);
+
+  // 3) Confirma inOtherMonths (false para despesa só de um mês, true para recorrente) e bulk-delete de 30 itens em lote único
+  const singleRes = await user.request("POST", "/api/expenses", {
+    monthId: "2026-11",
+    name: "Despesa Única Nov",
+    section: "fixed",
+    amountCents: 5000,
+    payment: "pix",
+  });
+  assert.equal(singleRes.status, 201);
+  const recRes = await user.request("POST", "/api/expenses", {
+    monthId: "2026-11",
+    monthIds: ["2026-11", "2026-12"],
+    name: "Internet Mensal",
+    section: "fixed",
+    amountCents: 9900,
+    payment: "pix",
+  });
+  assert.equal(recRes.status, 201);
+
+  const novCheck = await user.request("GET", "/api/months/2026-11");
+  const novItems = novCheck.json.expenses as Array<{ id: string; name: string; inOtherMonths?: boolean }>;
+  assert.equal(novItems.find((e) => e.name === "Despesa Única Nov")?.inOtherMonths, false);
+  assert.equal(novItems.find((e) => e.name === "Internet Mensal")?.inOtherMonths, true);
+
+  const manyIds: string[] = [];
+  for (let i = 1; i <= 30; i += 1) {
+    const r = await user.request("POST", "/api/expenses", {
+      monthId: "2026-11",
+      name: `Lote ${i}`,
+      section: "extra",
+      amountCents: 1000,
+      payment: "pix",
+    });
+    assert.equal(r.status, 201);
+  }
+  const beforeMany = await user.request("GET", "/api/months/2026-11");
+  for (const e of beforeMany.json.expenses as Array<{ id: string; name: string }>) {
+    if (e.name.startsWith("Lote ")) manyIds.push(e.id);
+  }
+  assert.equal(manyIds.length, 30);
+  const bulkMany = await user.request("POST", "/api/expenses/bulk-delete", { ids: manyIds, monthId: "2026-11" });
+  assert.equal(bulkMany.status, 200);
+  assert.equal(bulkMany.json.deletedCount, 30);
+  assert.ok(!(bulkMany.json.expenses as Array<{ name: string }>).some((e) => e.name.startsWith("Lote ")));
 });
 

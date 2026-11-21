@@ -223,6 +223,7 @@ async function runConfirm() {
     leavePage();
     return;
   }
+  render();
   if (kind === "logout") {
     await logout();
     return;

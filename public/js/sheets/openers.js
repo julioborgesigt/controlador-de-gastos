@@ -369,6 +369,7 @@ export function openEdit(expense, options = {}) {
     originalCard: expense.cardLabel || "",
     originalName: expense.name,
     monthId: expense.monthId,
+    inOtherMonths: Boolean(expense.inOtherMonths),
     editScope: "month",
   };
   if (fromCard) applyInvoiceSuggestion(state.sheet);

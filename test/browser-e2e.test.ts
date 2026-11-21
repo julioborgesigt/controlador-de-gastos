@@ -475,15 +475,37 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       })()`);
       await page.waitForText("2 selecionados");
 
-      // Exclui os 2 gastos selecionados com confirmação
+      // Exclui os 2 gastos selecionados com confirmação (e garante que o overlay borra a barra de seleção)
       await page.clickButton("Excluir (2)", ".select-bar");
       await page.waitForSelector('.dialog[role="alertdialog"]');
       await page.waitForText("Excluir 2 gastos");
+      const overlayAboveSelectBar = await page.evaluate<boolean>(`(() => {
+        const ov = document.querySelector('.overlay[data-key="confirm"]');
+        const bar = document.querySelector('.select-bar');
+        return Boolean(ov && bar && Number(getComputedStyle(ov).zIndex) > Number(getComputedStyle(bar).zIndex));
+      })()`);
+      assert.equal(overlayAboveSelectBar, true, ".overlay deve ficar acima da .select-bar para borrar todo o fundo");
       await page.clickButton("Excluir 2 gastos", ".dialog");
       await page.waitFor('!document.querySelector(".dialog")');
       await page.waitForText("Excluí 2 gastos selecionados.");
       await page.waitFor('!(document.body?.innerText || "").includes("Padaria")');
       await page.waitForText("Uber");
+
+      // Excluir uma despesa à vista (sem parcelas e sem outros meses) NÃO deve oferecer "Todos os meses"
+      const singleDeleteClicked = await page.evaluate<boolean>(`(() => {
+        const rows = [...document.querySelectorAll(".swipe")];
+        const row = rows.find((el) => (el.textContent || "").includes("Uber"));
+        const btn = row && [...row.querySelectorAll("button")].find((b) => (b.textContent || "").trim() === "Excluir");
+        if (!btn) return false;
+        btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 1 }));
+        return true;
+      })()`);
+      assert.equal(singleDeleteClicked, true);
+      await page.waitForSelector('.dialog[role="alertdialog"]');
+      await page.waitForText("Excluir gasto");
+      assert.equal(await page.evaluate<boolean>('(document.body?.innerText || "").includes("Todos os meses")'), false);
+      await page.clickButton("Cancelar", ".dialog");
+      await page.waitFor('!document.querySelector(".dialog")');
 
       // Também funciona em outra aba (Custo de vida)
       await page.click('nav.nav button[data-key="casa"]');
