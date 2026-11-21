@@ -249,8 +249,8 @@ export function cardsHome(data) {
       money(data.totals.faturaCents),
       [
         onDesktop()
-          ? "Clique num cartão para ver a fatura. Os botões editam ou quitam o cartão. Excluir só quando ele não tiver gastos."
-          : "Toque num cartão para ver a fatura. Dá para editar o cartão. Excluir só quando ele não tiver gastos.",
+          ? "Clique num cartão para ver a fatura. Os botões editam, quitam ou excluem o cartão (a exclusão remove os gastos vinculados após confirmação de 5s)."
+          : "Toque num cartão para ver a fatura. Arraste para editar, quitar ou excluir o cartão (a exclusão remove os gastos vinculados após confirmação de 5s).",
         "O raio-X acima mostra quanto da fatura veio do Custo de vida, de Planejados e de Imprevistos.",
         "Lançamentos feitos no mês mostra os valores que serão pagos na próxima ou nas próximas faturas.",
         data.totals.fixedOnCardCents

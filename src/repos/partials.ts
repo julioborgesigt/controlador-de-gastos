@@ -17,34 +17,36 @@ import { getExpense } from "./expenses-read.ts";
 export async function attachPartials(db: D1Database, ownerId: string, expenses: Expense[]): Promise<Expense[]> {
   const ids = expenses.map((expense) => expense.id);
   if (!ids.length) return expenses;
-  const rows = await db
-    .prepare(
-      `SELECT id, expense_id, amount_cents, payment, card_label, installment, created_at
-       FROM partial_payments WHERE owner_id = ? AND expense_id IN (${sqlMarks(ids)}) ORDER BY created_at`,
-    )
-    .bind(ownerId, ...ids)
-    .all<{
-      id: string;
-      expense_id: string;
-      amount_cents: number;
-      payment: Payment;
-      card_label: string | null;
-      installment: string | null;
-      created_at: string;
-    }>();
   const grouped = new Map<string, PartialPayment[]>();
-  for (const row of rows.results ?? []) {
-    const partial: PartialPayment = {
-      id: row.id,
-      amountCents: row.amount_cents,
-      payment: coercePayment(row.payment),
-      cardLabel: row.card_label,
-      installment: row.installment,
-      createdAt: row.created_at,
-    };
-    const list = grouped.get(row.expense_id) ?? [];
-    list.push(partial);
-    grouped.set(row.expense_id, list);
+  for (const part of chunkIds(ids, 80)) {
+    const rows = await db
+      .prepare(
+        `SELECT id, expense_id, amount_cents, payment, card_label, installment, created_at
+         FROM partial_payments WHERE owner_id = ? AND expense_id IN (${sqlMarks(part)}) ORDER BY created_at`,
+      )
+      .bind(ownerId, ...part)
+      .all<{
+        id: string;
+        expense_id: string;
+        amount_cents: number;
+        payment: Payment;
+        card_label: string | null;
+        installment: string | null;
+        created_at: string;
+      }>();
+    for (const row of rows.results ?? []) {
+      const partial: PartialPayment = {
+        id: row.id,
+        amountCents: row.amount_cents,
+        payment: coercePayment(row.payment),
+        cardLabel: row.card_label,
+        installment: row.installment,
+        createdAt: row.created_at,
+      };
+      const list = grouped.get(row.expense_id) ?? [];
+      list.push(partial);
+      grouped.set(row.expense_id, list);
+    }
   }
   return expenses.map((expense) => ({ ...expense, partials: grouped.get(expense.id) ?? [] }));
 }

@@ -48,7 +48,7 @@ function confirmCopy() {
     return {
       title: "Excluir cartão permanentemente",
       body: count > 0
-        ? `Excluir “${name}” e os ${count} ${count === 1 ? "gasto cadastrado" : "gastos cadastrados"} nele? Esta exclusão é permanente e não poderá ser desfeita.`
+        ? `Excluir “${name}” e os ${count} ${count === 1 ? "gasto cadastrado" : "gastos cadastrados"} nele em todos os meses (incluindo faturas futuras e parcelas)? Esta exclusão é permanente e não poderá ser desfeita.`
         : `Excluir “${name}”? Esta exclusão é permanente e não poderá ser desfeita.`,
       action: "Confirmar exclusão",
       cancel: "Cancelar",

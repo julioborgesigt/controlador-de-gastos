@@ -5,7 +5,7 @@ import {
   isNubankName,
   parseNubankCsv,
 } from "../../shared/nubank-csv.js";
-import { rememberMonth, request } from "../api.js";
+import { clearMonthCache, rememberMonth, request } from "../api.js";
 import { el, on } from "../dom.js";
 import { render, renderSafely, setWorking, state } from "../state.js";
 import { segmented } from "./fields.js";
@@ -161,6 +161,7 @@ export function renderNubankImportSheet(panel, draft) {
           : "Nenhuma parcela futura a projetar",
         parsed.ignoredPayments > 0 ? `${parsed.ignoredPayments} pagamento de fatura ignorado` : "",
         parsed.ignoredCredits > 0 ? `${parsed.ignoredCredits} estorno/crédito ignorado` : "",
+        parsed.invalidRows > 0 ? `${parsed.invalidRows} ${parsed.invalidRows === 1 ? "linha inválida ignorada" : "linhas inválidas ignoradas"}` : "",
       ].filter(Boolean).join(" · ")),
       el("div", { class: "import-sample" }, parsed.items.slice(0, 4).map((item) => el("div", { class: "row-between" }, [
         el("span", {}, item.totalInstallments > 1
@@ -213,16 +214,25 @@ export async function saveNubankImportSheet(draft) {
     throw new Error("Confirme a data de vencimento captada antes de importar.");
   }
   setWorking(true, "Importando fatura...");
-  const data = await request("/api/import/nubank", {
-    method: "POST",
-    body: {
-      csvText: draft.csvText,
-      filename: draft.filename || "",
-      dueDate: draft.dueDate,
-      cardName: draft.cardName || "Nubank",
-      classification: draft.classification === "planejado" ? "planejado" : "imprevisto",
-    },
-  });
+  let data;
+  try {
+    data = await request("/api/import/nubank", {
+      method: "POST",
+      body: {
+        csvText: draft.csvText,
+        filename: draft.filename || "",
+        dueDate: draft.dueDate,
+        cardName: draft.cardName || "Nubank",
+        classification: draft.classification === "planejado" ? "planejado" : "imprevisto",
+      },
+    });
+  } catch (error) {
+    // Limpa o cache local para não exibir estado desatualizado se o cartão/lote parcial já tiver sido gravado
+    clearMonthCache();
+    const detail = error?.message || "Não foi possível importar a fatura.";
+    const code = error?.requestId ? ` (cód. ${String(error.requestId).slice(0, 8)})` : "";
+    throw new Error(`${detail}${code}`);
+  }
   const summary = data.summary || {};
   state.data = data;
   if (data.month?.id) {
@@ -233,13 +243,16 @@ export async function saveNubankImportSheet(draft) {
   const cur = summary.insertedCurrent || 0;
   const fut = summary.insertedFuture || 0;
   const futLabel = fut === 1 ? "1 parcela futura" : `${fut} parcelas futuras`;
+  const invalidNote = summary.invalidRows > 0
+    ? ` (${summary.invalidRows} ${summary.invalidRows === 1 ? "linha inválida ignorada" : "linhas inválidas ignoradas"})`
+    : "";
   const addedTotal = cur + fut;
   if (addedTotal === 0) {
-    state.notice = `Fatura de ${shortMonthLabel(summary.invoiceMonthId)} já estava sincronizada (${summary.syncedExisting || 0} lançamentos conferidos).`;
+    state.notice = `Fatura de ${shortMonthLabel(summary.invoiceMonthId)} já estava sincronizada (${summary.syncedExisting || 0} lançamentos conferidos).${invalidNote}`;
   } else if (summary.syncedExisting > 0) {
-    state.notice = `Fatura sincronizada: ${cur} ${cur === 1 ? "novo" : "novos"} na fatura de ${shortMonthLabel(summary.invoiceMonthId)}${fut ? ` + ${futLabel}` : ""} (${summary.syncedExisting} já existentes mantidos).`;
+    state.notice = `Fatura sincronizada: ${cur} ${cur === 1 ? "novo" : "novos"} na fatura de ${shortMonthLabel(summary.invoiceMonthId)}${fut ? ` + ${futLabel}` : ""} (${summary.syncedExisting} já existentes mantidos).${invalidNote}`;
   } else {
-    state.notice = `Importei ${cur} ${cur === 1 ? "lançamento" : "lançamentos"} na fatura de ${shortMonthLabel(summary.invoiceMonthId)}${fut ? ` e projetei ${fut === 1 ? "1 parcela" : `${fut} parcelas`} nos meses seguintes` : ""}.`;
+    state.notice = `Importei ${cur} ${cur === 1 ? "lançamento" : "lançamentos"} na fatura de ${shortMonthLabel(summary.invoiceMonthId)}${fut ? ` e projetei ${fut === 1 ? "1 parcela" : `${fut} parcelas`} nos meses seguintes` : ""}.${invalidNote}`;
   }
   state.view = "cartoes";
   return "close";

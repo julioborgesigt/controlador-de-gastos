@@ -1,5 +1,5 @@
 import { importNubankCsv, monthPayload } from "../db.ts";
-import { readJson, requireWriter, withAccess, type App } from "../http.ts";
+import { logError, readJson, requireWriter, withAccess, type App } from "../http.ts";
 
 export function registerImportRoutes(app: App): void {
   app.post("/api/import/nubank", async (c) => {
@@ -13,20 +13,42 @@ export function registerImportRoutes(app: App): void {
     const classification = body.classification === "planejado" ? "planejado" : "imprevisto";
 
     if (!csvText.trim()) return c.json({ error: "Envie o conteúdo da planilha CSV do Nubank." }, 400);
-    if (csvText.length > 400_000) return c.json({ error: "Arquivo CSV grande demais." }, 413);
+    if (csvText.length > 400_000) return c.json({ error: "Arquivo CSV grande demais (limite de 400 KB)." }, 413);
 
-    const result = await importNubankCsv(c.env.DB, {
-      ownerId: writer.scope.ownerId,
-      csvText,
-      filename,
-      dueDate,
-      cardName,
-      classification,
-    });
-    if (!result.ok) return c.json({ error: result.error }, 400);
+    let result;
+    try {
+      result = await importNubankCsv(c.env.DB, {
+        ownerId: writer.scope.ownerId,
+        csvText,
+        filename,
+        dueDate,
+        cardName,
+        classification,
+      });
+    } catch (error) {
+      const requestId = logError(c, "nubank_import_write_failed", error);
+      return c.json({
+        error: "Não foi possível gravar todos os lançamentos da fatura no banco de dados. Tente importar o mesmo CSV novamente para sincronizar o que faltou sem duplicar.",
+        stage: "write",
+        requestId,
+      }, 500);
+    }
+    if (!result.ok) return c.json({ error: result.error, stage: "validation" }, 400);
 
-    const payload = await monthPayload(c.env.DB, writer.scope.ownerId, result.invoiceMonthId);
-    if (!payload) return c.json({ error: "Não foi possível carregar o mês importado." }, 500);
+    let payload;
+    try {
+      payload = await monthPayload(c.env.DB, writer.scope.ownerId, result.invoiceMonthId);
+    } catch (error) {
+      const requestId = logError(c, "nubank_import_reload_failed", error);
+      return c.json({
+        error: `A fatura foi importada (${result.insertedCurrent} no mês e ${result.insertedFuture} parcelas futuras), mas houve falha ao recarregar o mês. Atualize a página para ver os lançamentos.`,
+        stage: "reload",
+        requestId,
+      }, 500);
+    }
+    if (!payload) {
+      return c.json({ error: "A fatura foi gravada, mas o mês importado não foi encontrado. Atualize a página.", stage: "reload" }, 500);
+    }
     return c.json({
       ...withAccess(payload, writer.scope),
       summary: {
@@ -40,6 +62,7 @@ export function registerImportRoutes(app: App): void {
         syncedExisting: result.syncedExisting,
         ignoredPayments: result.ignoredPayments,
         ignoredCredits: result.ignoredCredits,
+        invalidRows: result.invalidRows,
         totalCents: result.totalCents,
       },
     });

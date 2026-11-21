@@ -49,6 +49,8 @@ async function requestOnce(path, options) {
     if (!response.ok) {
       const error = new Error(data.error || "Não foi possível concluir.");
       error.status = response.status;
+      if (data.requestId) error.requestId = String(data.requestId);
+      if (data.stage) error.stage = String(data.stage);
       throw error;
     }
     return data;

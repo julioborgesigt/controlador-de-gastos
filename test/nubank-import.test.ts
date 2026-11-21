@@ -310,3 +310,83 @@ test("editar gasto importado do Nubank suporta campos unificados, vínculo a cus
   assert.equal(summary.syncedExisting, 3);
 });
 
+test("excluir cartão apaga gastos entre meses (nov->dez) e reimportar CSV grande com >100 gastos no mês respeita o limite de 100 variáveis do D1", async () => {
+  const env = createTestEnv();
+  const user = createClient(env, "198.51.100.43");
+  assert.equal((await user.request("POST", "/api/register", {
+    cpf: "52998224725",
+    email: "heavy-import@example.com",
+    password: "segredo-forte-123",
+    passwordConfirmation: "segredo-forte-123",
+  })).status, 201);
+  assert.equal((await user.request("POST", "/api/period", {
+    startMonthId: "2026-11",
+    endMonthId: "2027-02",
+  })).status, 200);
+
+  // Cria cartão Nubank e lança um gasto feito em novembro para ser pago na fatura de dezembro
+  const cardRes = await user.request("POST", "/api/cards", { name: "Nubank", dueDay: 5, closingDay: 28 });
+  assert.equal(cardRes.status, 201);
+  const cardId = (cardRes.json.cards as Array<{ id: string }>)[0]!.id;
+
+  const crossSpend = await user.request("POST", "/api/card-spend", {
+    name: "Compra Nov p/ Dez",
+    amountCents: 35000,
+    classification: "planejado",
+    cardLabel: "Nubank",
+    purchaseDate: "2026-11-15",
+    invoiceMonthId: "2026-12",
+    costMonthId: "2026-11",
+  });
+  assert.equal(crossSpend.status, 201);
+
+  // Cria 25 custos de vida em novembro (para somar > 100 gastos em novembro após o CSV de 90 itens!)
+  for (let i = 1; i <= 25; i += 1) {
+    assert.equal((await user.request("POST", "/api/expenses", {
+      monthId: "2026-11",
+      name: `Conta fixa ${i}`,
+      section: "fixed",
+      amountCents: 1000 * i,
+      payment: "pix",
+    })).status, 201);
+  }
+
+  // Exclui o cartão Nubank totalmente e confirma que o lançamento de nov->dez foi excluído nos dois meses
+  const del = await user.request("DELETE", `/api/cards/${cardId}?monthId=2026-11`);
+  assert.equal(del.status, 200);
+  const novAfterDel = await user.request("GET", "/api/months/2026-11");
+  const decAfterDel = await user.request("GET", "/api/months/2026-12");
+  assert.ok(!(novAfterDel.json.expenses as Array<{ name: string }>).some((e) => e.name === "Compra Nov p/ Dez"));
+  assert.ok(!(decAfterDel.json.expenses as Array<{ name: string }>).some((e) => e.name === "Compra Nov p/ Dez"));
+
+  // Importa fatura grande do Nubank: 90 lançamentos em nov/26 (totalizando 115 gastos em nov/26!) + 40 parcelas futuras + 1 linha inválida
+  const lines = ["date,title,amount"];
+  for (let i = 1; i <= 70; i += 1) {
+    lines.push(`2026-10-${String((i % 28) + 1).padStart(2, "0")},Loja ${i},${(10 + i * 0.5).toFixed(2)}`);
+  }
+  for (let i = 1; i <= 20; i += 1) {
+    lines.push(`2026-10-${String((i % 28) + 1).padStart(2, "0")},Parcelado ${i} - Parcela 1/3,50.00`);
+  }
+  lines.push("data-invalida,Linha quebrada,abc");
+
+  const imp = await user.request("POST", "/api/import/nubank", {
+    csvText: lines.join("\n"),
+    filename: "Nubank_2026-11-05.csv",
+    dueDate: "2026-11-05",
+    cardName: "Nubank",
+  });
+  assert.equal(imp.status, 200);
+  const summary = imp.json.summary as Record<string, unknown>;
+  assert.equal(summary.cardCreated, true);
+  assert.equal(summary.insertedCurrent, 90);
+  assert.equal(summary.insertedFuture, 40);
+  assert.equal(summary.invalidRows, 1);
+
+  // Recarrega nov/26 (115 gastos > limite de 100 variáveis do D1) e confirma cartão recriado e todos os 115 gastos presentes
+  const novReloaded = await user.request("GET", "/api/months/2026-11");
+  assert.equal(novReloaded.status, 200);
+  assert.equal((novReloaded.json.cards as Array<{ name: string }>).some((c) => c.name === "Nubank"), true);
+  assert.equal((novReloaded.json.expenses as unknown[]).length, 115);
+});
+
+
