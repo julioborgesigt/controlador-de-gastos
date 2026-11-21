@@ -26,6 +26,8 @@ let sheetGuardBound = false;
 
 let sheetTouchY = 0;
 
+let pendingScrollRestore = null;
+
 export function announceLive(message) {
   if (!liveRegion) return;
   const text = String(message || "").trim();
@@ -177,10 +179,11 @@ function overlayIsOpen() {
   return Boolean(state.sheet || state.confirm || state.accountMenu || state.expenseInfo || state.help || state.costDetail || state.tabIntro);
 }
 
-export function syncOverlayHistory() {
+export function syncOverlayHistory(restoreScrollY = null) {
   if (suppressHistory) return;
   const open = overlayIsOpen();
   if (open && !overlayPushed) {
+    pendingScrollRestore = null;
     history.pushState({ overlay: 1 }, "");
     overlayPushed = true;
     return;
@@ -188,6 +191,7 @@ export function syncOverlayHistory() {
   if (!open && overlayPushed) {
     overlayPushed = false;
     if (history.state && history.state.overlay) {
+      pendingScrollRestore = typeof restoreScrollY === "number" ? restoreScrollY : null;
       suppressHistory = true;
       setTimeout(() => history.back(), 0);
     }
@@ -211,12 +215,15 @@ export function leavePage() {
   state.sheet = null;
   state.accountMenu = false;
   overlayPushed = false;
+  pendingScrollRestore = null;
   suppressHistory = true;
   history.go(-Math.min(history.length, steps));
 }
 
-export function lockPage(scrollY) {
+export function lockPage(scrollY, contentScroll = 0) {
+  pendingScrollRestore = null;
   document.body.dataset.scrollLock = String(scrollY);
+  document.body.dataset.contentScrollLock = String(contentScroll);
   document.body.style.top = `-${scrollY}px`;
   document.documentElement.classList.add("sheet-open");
   document.body.classList.add("sheet-open");
@@ -230,13 +237,14 @@ export function lockPage(scrollY) {
 
 export function unlockPage(scrollY = Number(document.body.dataset.scrollLock || 0)) {
   if (!document.body.classList.contains("sheet-open")) {
-    window.scrollTo(0, scrollY);
+    if (window.scrollY !== scrollY) window.scrollTo(0, scrollY);
     return;
   }
   document.documentElement.classList.remove("sheet-open");
   document.body.classList.remove("sheet-open");
   document.body.style.top = "";
   delete document.body.dataset.scrollLock;
+  delete document.body.dataset.contentScrollLock;
   if (sheetGuardBound) {
     document.removeEventListener("touchstart", rememberSheetTouch);
     document.removeEventListener("touchmove", blockBackgroundScroll);
@@ -330,10 +338,18 @@ export function centerMonthChip() {
 }
 
 export function initHistoryListeners() {
+  if ("scrollRestoration" in history) {
+    try {
+      history.scrollRestoration = "manual";
+    } catch {
+      /* ignora ambientes sem scrollRestoration gravável */
+    }
+  }
   window.addEventListener("popstate", () => {
     if (allowLeave) {
       suppressHistory = false;
       overlayPushed = false;
+      pendingScrollRestore = null;
       state.confirm = null;
       state.expenseInfo = null;
       state.help = null;
@@ -346,6 +362,11 @@ export function initHistoryListeners() {
     }
     if (suppressHistory) {
       suppressHistory = false;
+      const targetY = pendingScrollRestore;
+      pendingScrollRestore = null;
+      if (targetY !== null && !document.body.classList.contains("sheet-open")) {
+        window.scrollTo(0, targetY);
+      }
       return;
     }
     if (overlayPushed) {
