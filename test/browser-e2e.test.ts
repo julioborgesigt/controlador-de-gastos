@@ -224,9 +224,22 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       const swipeOpened = await page.evaluate<boolean>('Boolean(document.querySelector(".swipe.swipe-left"))');
       assert.equal(swipeOpened, true, "arrastar .swipe-front para a esquerda deve revelar as ações");
 
-      // Alterna tema escuro pelo menu da conta
+      // Alterna tema escuro pelo menu da conta e valida organização em seções
       await page.click('header.top button[aria-label="Conta"]');
       await page.waitForSelector('.menu[role="menu"]');
+      const menuCheck = await page.evaluate<{ labels: string[]; dangerTexts: string[]; dangerAlignedLeft: boolean }>(`(() => {
+        const menu = document.querySelector('.menu[role="menu"]');
+        const labels = [...menu.querySelectorAll('.menu-label')].map((el) => el.textContent.trim());
+        const groups = [...menu.querySelectorAll('.menu-group')];
+        const last = groups[groups.length - 1];
+        const dangerButtons = last ? [...last.querySelectorAll('.menu-item-danger')] : [];
+        const dangerTexts = dangerButtons.map((b) => b.textContent.trim());
+        const dangerAlignedLeft = dangerButtons.every((b) => getComputedStyle(b).justifyContent === "flex-start");
+        return { labels, dangerTexts, dangerAlignedLeft };
+      })()`);
+      assert.deepEqual(menuCheck.labels, ["Dados e consultas", "Preferências", "Conta e segurança"]);
+      assert.deepEqual(menuCheck.dangerTexts, ["Resetar meus dados", "Sair"]);
+      assert.equal(menuCheck.dangerAlignedLeft, true);
       await page.clickButton("Usar modo escuro", '.menu[role="menu"]');
       await page.waitFor('document.documentElement.dataset.theme === "dark"');
 
