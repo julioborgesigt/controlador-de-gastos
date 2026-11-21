@@ -554,8 +554,10 @@ export async function patchExpense(expense, patch) {
 
 export function openDeleteExpense(expense) {
   if (!expense?.id) return;
+  const isInstallment = /^\d+\s*\/\s*([2-9]|[1-9]\d+)$/.test(String(expense.installment || "").trim());
+  const existsElsewhere = Boolean(expense.inOtherMonths || isInstallment);
   const cardSurprise = expense.section === "extra" && expense.payment === "card";
-  if (expense.section !== "fixed" && expense.section !== "card" && !cardSurprise) {
+  if (!existsElsewhere || (expense.section !== "fixed" && expense.section !== "card" && !cardSurprise)) {
     state.confirmTarget = expense;
     askConfirm("delete-expense-simple");
     return;
