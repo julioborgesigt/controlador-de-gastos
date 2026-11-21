@@ -626,3 +626,41 @@ test("exclusão em lote de gastos (bulk-delete) e exclusão permanente de cartã
   assert.ok(!(bulkMany.json.expenses as Array<{ name: string }>).some((e) => e.name.startsWith("Lote ")));
 });
 
+test("POST /api/card-spend com classificação Custo de vida vinculado dispensa o campo nome e usa o nome do custo selecionado", async () => {
+  const env = createTestEnv();
+  const user = createClient(env, "198.51.100.77");
+  await registerUser(user, "52998224725", "living-card@example.com");
+  assert.equal((await user.request("POST", "/api/period", { startMonthId: "2026-11", endMonthId: "2027-02" })).status, 200);
+  assert.equal((await user.request("POST", "/api/cards", { name: "Nubank", dueDay: 5, closingDay: 26 })).status, 201);
+
+  const createdLiving = await user.request("POST", "/api/expenses", {
+    monthId: "2026-12",
+    name: "Supermercado",
+    section: "fixed",
+    amountCents: 80000,
+    payment: "card",
+    cardLabel: "Nubank",
+  });
+  assert.equal(createdLiving.status, 201);
+  const living = (createdLiving.json.expenses as Array<{ id: string; name: string; section: string }>).find(
+    (e) => e.name === "Supermercado" && e.section === "fixed",
+  )!;
+
+  const spend = await user.request("POST", "/api/card-spend", {
+    name: "",
+    amountCents: 25000,
+    classification: "casa",
+    cardLabel: "Nubank",
+    invoiceMonthId: "2026-12",
+    costMonthId: "2026-12",
+    purchaseDate: "2026-11-21",
+    linkExpenseId: living.id,
+  });
+  assert.equal(spend.status, 201);
+  const decExpenses = spend.json.expenses as Array<{ name: string; section: string; amountCents: number; partials?: Array<{ amountCents: number }> }>;
+  assert.ok(decExpenses.some((e) => e.section === "card" && e.name === "Supermercado" && e.amountCents === 25000));
+  const updatedLiving = decExpenses.find((e) => e.section === "fixed" && e.name === "Supermercado");
+  assert.equal(updatedLiving?.partials?.[0]?.amountCents, 25000);
+});
+
+

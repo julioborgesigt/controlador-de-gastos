@@ -7,6 +7,18 @@ import { render, renderSafely, setWorking, state } from "../state.js";
 import { cardPayoffPreview, firstCardName } from "../views/card-helpers.js";
 import { applyInvoiceSuggestion, refreshInvoiceChoice } from "./openers.js";
 
+export function formSection(title, children, key = "") {
+  const items = (Array.isArray(children) ? children : [children]).filter(Boolean);
+  if (!items.length) return "";
+  return el("div", {
+    class: "form-section",
+    "data-key": key || undefined,
+  }, [
+    title ? el("p", { class: "form-section-title" }, title) : "",
+    ...items,
+  ]);
+}
+
 export function cardPurchaseFields(draft) {
   if (draft.mode !== "create" || draft.section === "fixed" || (draft.section !== "card" && draft.payment !== "card")) return "";
   return el("div", {}, [
@@ -18,7 +30,7 @@ export function cardPurchaseFields(draft) {
       el("label", {}, "O valor informado é"),
       segmented("amountMode", [["installment", "Da parcela"], ["total", "Da compra toda"]], draft.amountMode || "installment"),
     ]),
-    el("p", { class: "muted", id: "installment-preview" }, installmentPreview(draft)),
+    el("p", { class: "muted form-hint", id: "installment-preview" }, installmentPreview(draft)),
   ]);
 }
 
@@ -410,61 +422,84 @@ export function field(labelText, key, value, mode, placeholder = "") {
   return el("div", { class: "field" }, [el("label", { for: key }, labelText), input]);
 }
 
-export function segmented(key, options, current) {
-  return el("div", { class: "choice" }, options.map(([value, label]) => el("button", {
-    type: "button",
-    class: current === value ? "on" : "",
-    "aria-pressed": current === value ? "true" : "false",
-    "data-segment": key,
-    "data-value": value,
-    onclick: () => {
-      state.sheet[key] = value;
-      if (state.sheet.mode === "card-pay" && key === "billing" && value === "installments") prepareCardInstallments(state.sheet);
-      if (state.sheet.mode === "card-pay" && key === "amountChoice" && value === "same") {
-        state.sheet.chargedAmount = state.sheet.described > 0 ? centsToInput(state.sheet.described) : "";
-        if (state.sheet.billing === "installments") {
-          const solved = solveInstallmentTriple(readInstallmentTriple(state.sheet), "charged", ["count"]);
-          applySolvedInstallments(state.sheet, solved, "charged");
+export function segmented(key, options, current, config = {}) {
+  const shortAll = options.every(([, label]) => String(label).length <= 16);
+  const layout = config.layout || (options.length === 2
+    ? "pair"
+    : options.length === 3 && shortAll
+      ? "triple"
+      : options.length === 4
+        ? "quad"
+        : "wrap");
+  const choiceClass = layout === "triple"
+    ? "choice choice-3"
+    : layout === "quad"
+      ? "choice choice-4"
+      : layout === "pair"
+        ? "choice choice-2"
+        : "choice";
+  const tones = config.tones || null;
+  return el("div", { class: choiceClass }, options.map(([value, label]) => {
+    const tone = tones?.[value] || "";
+    const classes = [current === value ? "on" : "", tone ? `tone-${tone}` : ""].filter(Boolean).join(" ");
+    return el("button", {
+      type: "button",
+      class: classes,
+      "aria-pressed": current === value ? "true" : "false",
+      "data-segment": key,
+      "data-value": value,
+      onclick: () => {
+        state.sheet[key] = value;
+        if (state.sheet.mode === "card-pay" && key === "billing" && value === "installments") prepareCardInstallments(state.sheet);
+        if (state.sheet.mode === "card-pay" && key === "amountChoice" && value === "same") {
+          state.sheet.chargedAmount = state.sheet.described > 0 ? centsToInput(state.sheet.described) : "";
+          if (state.sheet.billing === "installments") {
+            const solved = solveInstallmentTriple(readInstallmentTriple(state.sheet), "charged", ["count"]);
+            applySolvedInstallments(state.sheet, solved, "charged");
+          }
         }
-      }
-      if (key === "section") {
-        if (value === "card") {
-          state.sheet.payment = "card";
+        if (key === "section") {
+          if (value === "card") {
+            state.sheet.payment = "card";
+            state.sheet.onCard = false;
+          }
+          if (value === "extra") state.sheet.onCard = false;
+          if (value === "fixed") state.sheet.payment = state.sheet.onCard ? "card" : "pix";
+        }
+        if (key === "expenseKind") {
+          state.error = "";
+          state.sheet.linkExpenseId = "";
+          state.sheet.linkChoices = null;
+          state.sheet.linkKey = "";
+          state.sheet.linkLoading = "";
+          state.sheet.linkError = "";
+          if (value === "casa" && !state.sheet.costMonthId) {
+            state.sheet.costMonthId = state.sheet.invoiceMonthId || state.monthId;
+          }
+        }
+        if (key === "span") state.sheet.spanChosen = true;
+        if (key === "costKind") state.sheet.variable = value === "variavel";
+        if ((key === "payment" || key === "costKind") && state.sheet.section === "fixed" && state.sheet.mode === "create" && !state.sheet.spanChosen) {
+          const payment = key === "payment" ? value : state.sheet.payment;
+          const kind = key === "costKind" ? value : state.sheet.costKind;
+          state.sheet.span = payment === "card" && kind !== "variavel" ? "month" : "all";
+        }
+        if (key === "billing" && value === "installments" && (state.sheet.mode === "card-spend" || (state.sheet.mode === "edit" && state.sheet.fromCard))) {
+          if (Number(state.sheet.installmentCount) < 2) state.sheet.installmentCount = "2";
+          if (state.sheet.installmentsPaid == null || state.sheet.installmentsPaid === "") state.sheet.installmentsPaid = "0";
+          if (!state.sheet.amountMode) state.sheet.amountMode = "installment";
+        }
+        if (key === "payment" && value === "card") {
+          state.sheet.onCard = state.sheet.section === "fixed" && state.sheet.mode !== "create";
+          if (!state.sheet.cardLabel) state.sheet.cardLabel = firstCardName();
+          if (!state.sheet.invoiceMonthId) state.sheet.invoiceMonthId = state.monthId;
+        }
+        if (key === "payment" && value !== "card" && state.sheet.section === "fixed") {
           state.sheet.onCard = false;
         }
-        if (value === "extra") state.sheet.onCard = false;
-        if (value === "fixed") state.sheet.payment = state.sheet.onCard ? "card" : "pix";
-      }
-      if (key === "expenseKind") {
-        state.sheet.linkExpenseId = "";
-        state.sheet.linkChoices = null;
-        state.sheet.linkKey = "";
-        state.sheet.linkLoading = "";
-        state.sheet.linkError = "";
-        if (value === "casa" && !state.sheet.costMonthId) state.sheet.costMonthId = state.monthId;
-      }
-      if (key === "span") state.sheet.spanChosen = true;
-      if (key === "costKind") state.sheet.variable = value === "variavel";
-      if ((key === "payment" || key === "costKind") && state.sheet.section === "fixed" && state.sheet.mode === "create" && !state.sheet.spanChosen) {
-        const payment = key === "payment" ? value : state.sheet.payment;
-        const kind = key === "costKind" ? value : state.sheet.costKind;
-        state.sheet.span = payment === "card" && kind !== "variavel" ? "month" : "all";
-      }
-      if (key === "billing" && value === "installments" && (state.sheet.mode === "card-spend" || (state.sheet.mode === "edit" && state.sheet.fromCard))) {
-        if (Number(state.sheet.installmentCount) < 2) state.sheet.installmentCount = "2";
-        if (state.sheet.installmentsPaid == null || state.sheet.installmentsPaid === "") state.sheet.installmentsPaid = "0";
-        if (!state.sheet.amountMode) state.sheet.amountMode = "installment";
-      }
-      if (key === "payment" && value === "card") {
-        state.sheet.onCard = state.sheet.section === "fixed" && state.sheet.mode !== "create";
-        if (!state.sheet.cardLabel) state.sheet.cardLabel = firstCardName();
-        if (!state.sheet.invoiceMonthId) state.sheet.invoiceMonthId = state.monthId;
-      }
-      if (key === "payment" && value !== "card" && state.sheet.section === "fixed") {
-        state.sheet.onCard = false;
-      }
-      if (key === "section" && value === "card" && !state.sheet.cardLabel) state.sheet.cardLabel = firstCardName();
-      render();
-    },
-  }, label)));
+        if (key === "section" && value === "card" && !state.sheet.cardLabel) state.sheet.cardLabel = firstCardName();
+        render();
+      },
+    }, tone ? [el("span", { class: "choice-dot", "aria-hidden": "true" }), el("span", {}, label)] : label);
+  }));
 }

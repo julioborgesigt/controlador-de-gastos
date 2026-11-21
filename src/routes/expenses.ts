@@ -42,7 +42,7 @@ export function registerExpenseRoutes(app: App): void {
     if (!writer.ok) return c.json({ error: writer.error }, writer.status);
     const body = await readJson(c);
     const name = typeof body.name === "string" ? body.name.trim() : "";
-    if (!name || name.length > 120) return c.json({ error: "Dê um nome ao gasto, com até 120 caracteres." }, 400);
+    if (name.length > 120) return c.json({ error: "Dê um nome ao gasto, com até 120 caracteres." }, 400);
     if (!isCents(body.amountCents) || body.amountCents <= 0) return c.json({ error: "Informe um valor maior que zero." }, 400);
     const kind = body.classification;
     if (kind !== "casa" && kind !== "imprevisto" && kind !== "planejado") {
@@ -93,7 +93,7 @@ export function registerExpenseRoutes(app: App): void {
         cardLabel: card.cardLabel || "",
         installmentCount: installment.totalCount,
         invoiceMonthId: body.invoiceMonthId,
-        name,
+        name: name || origin.name,
         purchaseDate,
         mode: installment.mode,
         paidCount: installment.paidCount,
@@ -101,6 +101,7 @@ export function registerExpenseRoutes(app: App): void {
       if (!added.ok) return c.json({ error: added.error }, 400);
       return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, origin.monthId), writer.scope), 201);
     }
+    if (!name) return c.json({ error: "Dê um nome ao gasto, com até 120 caracteres." }, 400);
     if (kind === "casa") {
       const livingMonthId = costMonthId || body.invoiceMonthId;
       const created = await createCardSpendWithAnchor(c.env.DB, {
@@ -397,7 +398,13 @@ export function registerExpenseRoutes(app: App): void {
       return c.json({ error: "Escolha Imprevisto, Planejado ou Custo de vida." }, 400);
     }
     if (!isCents(body.amountCents) || body.amountCents <= 0) return c.json({ error: "Informe um valor maior que zero." }, 400);
-    if (typeof body.name !== "string" || !body.name.trim() || body.name.trim().length > 120) {
+    const linkExpenseId = typeof body.linkExpenseId === "string" ? body.linkExpenseId.trim() : undefined;
+    let resolvedName = typeof body.name === "string" ? body.name.trim() : "";
+    if (!resolvedName && track === "casa" && linkExpenseId) {
+      const targetLiving = await getExpense(c.env.DB, writer.scope.ownerId, linkExpenseId);
+      if (targetLiving && targetLiving.section === "fixed") resolvedName = targetLiving.name;
+    }
+    if (!resolvedName || resolvedName.length > 120) {
       return c.json({ error: "Dê um nome ao gasto, com até 120 caracteres." }, 400);
     }
     const cards = await listCards(c.env.DB, writer.scope.ownerId);
@@ -407,7 +414,6 @@ export function registerExpenseRoutes(app: App): void {
     const purchaseDate = typeof body.purchaseDate === "string" ? body.purchaseDate.trim() : undefined;
     const invoiceMonthId = isMonthId(body.invoiceMonthId) ? body.invoiceMonthId : undefined;
     const costMonthId = isMonthId(body.costMonthId) ? body.costMonthId : undefined;
-    const linkExpenseId = typeof body.linkExpenseId === "string" ? body.linkExpenseId.trim() : undefined;
     let installment: string | null | undefined;
     if (body.installment !== undefined) {
       const parsedInst = parseInstallment(body.installment);
@@ -418,7 +424,7 @@ export function registerExpenseRoutes(app: App): void {
       ownerId: writer.scope.ownerId,
       expenseId: current.id,
       track,
-      name: body.name.trim(),
+      name: resolvedName,
       amountCents: body.amountCents,
       cardLabel: card.cardLabel || "",
       note,

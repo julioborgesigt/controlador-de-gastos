@@ -102,6 +102,47 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       await page.waitForText("+ Gasto no crédito");
       await page.clickButton("+ Gasto no crédito");
       await page.waitForSelector("form.sheet");
+
+      // Classificação deve ser o primeiro bloco e NENHUM dos 3 itens pode vir pré-selecionado
+      const initialKindState = await page.evaluate<{
+        selectedCount: number;
+        hasNameInput: boolean;
+        sameRow: boolean;
+      }>(`(() => {
+        const btns = [...document.querySelectorAll('form.sheet [data-segment="expenseKind"]')];
+        const tops = btns.map((b) => Math.round(b.getBoundingClientRect().top));
+        return {
+          selectedCount: btns.filter((b) => b.classList.contains("on") || b.getAttribute("aria-pressed") === "true").length,
+          hasNameInput: Boolean(document.querySelector('form.sheet input[name="name"]')),
+          sameRow: btns.length === 3 && Math.max(...tops) - Math.min(...tops) <= 4,
+        };
+      })()`);
+      assert.equal(initialKindState.selectedCount, 0, "nenhuma classificação pode vir pré-selecionada");
+      assert.equal(initialKindState.hasNameInput, false, "campo nome não deve aparecer antes de escolher classificação");
+      assert.equal(initialKindState.sameRow, true, "os 3 botões de classificação devem ficar alinhados na mesma linha");
+
+      // Tentar lançar sem escolher classificação deve exibir validação e manter o sheet aberto
+      await page.click('form.sheet button[type="submit"]');
+      await page.waitForText("Escolha a classificação.");
+
+      // Selecionar "Custo de vida" NÃO deve exibir o campo Nome, e sim a lista de custos previstos
+      await page.click('form.sheet [data-segment="expenseKind"][data-value="casa"]');
+      await page.waitForSelector('form.sheet select[id="linkExpenseId"]');
+      const livingLayout = await page.evaluate<{
+        hasNameInput: boolean;
+        dateHeight: number;
+        invoiceHeight: number;
+      }>(`(() => ({
+        hasNameInput: Boolean(document.querySelector('form.sheet input[name="name"]')),
+        dateHeight: Math.round(document.querySelector('form.sheet #purchaseDate').getBoundingClientRect().height),
+        invoiceHeight: Math.round(document.querySelector('form.sheet #invoiceMonthId').getBoundingClientRect().height),
+      }))()`);
+      assert.equal(livingLayout.hasNameInput, false, "campo nome não deve aparecer para Custo de vida");
+      assert.ok(Math.abs(livingLayout.dateHeight - livingLayout.invoiceHeight) <= 2, "Data da compra e Entra na fatura devem ter a mesma altura");
+
+      // Selecionar "Planejado" libera o campo Nome para lançar compra parcelada
+      await page.click('form.sheet [data-segment="expenseKind"][data-value="planejado"]');
+      await page.waitForSelector('form.sheet input[name="name"]');
       await page.fill('form.sheet input[name="name"]', "Notebook");
       await page.fill('form.sheet input[name="amount"]', "600,00");
       await page.clickButton("Parcelado", "form.sheet");
@@ -443,6 +484,8 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       const addCardSpend = async (name: string, amount: string) => {
         await page.clickButton("+ Gasto no crédito");
         await page.waitForSelector("form.sheet");
+        await page.click('form.sheet [data-segment="expenseKind"][data-value="imprevisto"]');
+        await page.waitForSelector('form.sheet input[name="name"]');
         if (name === "Café") {
           const selectionPolicy = await page.evaluate<{ body: string; input: string }>(`(() => ({
             body: getComputedStyle(document.body).userSelect,
@@ -718,6 +761,105 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
         Math.abs(cardScrollAfterSave - cardScrollBefore) <= 10,
         `rolagem após salvar edição de cartão deveria ficar perto de ${cardScrollBefore}, ficou em ${cardScrollAfterSave}`,
       );
+
+      assert.deepEqual(page.errors, []);
+    } finally {
+      await page.close();
+      await server.close();
+    }
+  });
+
+  test("gasto no crédito sugere mês pela data de fechamento + data da compra e lança custo de vida pela lista sem campo nome", { timeout: 30_000 }, async () => {
+    const server = await startAppServer();
+    const page = await browser!.newPage(server.baseUrl);
+    try {
+      await completeOnboarding(page);
+
+      // Cadastra um cartão que fecha dia 26 e vence dia 5 (ciclo que vira o mês) + um custo de vida em dez/2026
+      await page.evaluate(`(async () => {
+        const cardRes = await fetch("/api/cards", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: "Inter Black", dueDay: 5, closingDay: 26 }),
+        });
+        if (!cardRes.ok) throw new Error("Falha ao criar Inter Black");
+        const expRes = await fetch("/api/expenses", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            monthId: "2026-12",
+            name: "Energia Elétrica",
+            section: "fixed",
+            amountCents: 32000,
+            payment: "card",
+            cardLabel: "Inter Black",
+          }),
+        });
+        if (!expRes.ok) throw new Error("Falha ao criar Energia Elétrica");
+      })()`);
+
+      await page.goto(server.baseUrl);
+      await page.waitForSelector('nav.nav button[data-key="cartoes"]');
+      await page.click('nav.nav button[data-key="cartoes"]');
+      await dismissTabIntroIfOpen(page);
+      await page.waitForText("+ Gasto no crédito");
+      await page.clickButton("+ Gasto no crédito");
+      await page.waitForSelector("form.sheet");
+
+      // Escolhe Planejado e seleciona o cartão Inter Black (fecha dia 26, vence dia 5)
+      await page.click('form.sheet [data-segment="expenseKind"][data-value="planejado"]');
+      await page.waitForSelector('form.sheet select[id="cardLabel"]');
+      await page.selectOption('form.sheet select[id="cardLabel"]', "Inter Black");
+
+      const setPurchaseDate = async (iso: string) => {
+        await page.evaluate(`(() => {
+          const input = document.querySelector('form.sheet #purchaseDate');
+          input.value = ${JSON.stringify(iso)};
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new Event("change", { bubbles: true }));
+        })()`);
+      };
+
+      // Compra em 21/11 (antes do fechamento dia 26, vence dia 5 do mês seguinte) -> Dezembro 2026
+      await setPurchaseDate("2026-11-21");
+      const nov21 = await page.evaluate<{ invoice: string; budgetText: string }>(`(() => ({
+        invoice: document.querySelector('form.sheet #invoiceMonthId')?.value || "",
+        budgetText: document.querySelector('form.sheet #budget-month-label')?.textContent || "",
+      }))()`);
+      assert.equal(nov21.invoice, "2026-12");
+      assert.ok(nov21.budgetText.includes("Dezembro 2026"), `esperava Dezembro 2026, recebeu: ${nov21.budgetText}`);
+
+      // Compra em 27/11 (após fechamento dia 26, vence dia 5 do mês seguinte) -> Janeiro 2027
+      await setPurchaseDate("2026-11-27");
+      const nov27 = await page.evaluate<{ invoice: string; budgetText: string }>(`(() => ({
+        invoice: document.querySelector('form.sheet #invoiceMonthId')?.value || "",
+        budgetText: document.querySelector('form.sheet #budget-month-label')?.textContent || "",
+      }))()`);
+      assert.equal(nov27.invoice, "2027-01");
+      assert.ok(nov27.budgetText.includes("Janeiro 2027"), `esperava Janeiro 2027, recebeu: ${nov27.budgetText}`);
+
+      // Volta para 21/11 (Dezembro 2026) e muda classificação para Custo de vida: campo nome some e lista carrega Energia Elétrica
+      await setPurchaseDate("2026-11-21");
+      await page.click('form.sheet [data-segment="expenseKind"][data-value="casa"]');
+      await page.waitForSelector('form.sheet #linkExpenseId');
+      await page.waitFor(`(() => {
+        const opts = [...document.querySelectorAll('form.sheet #linkExpenseId option')];
+        return opts.some((opt) => (opt.textContent || "").includes("Energia Elétrica"));
+      })()`);
+      assert.equal(await page.evaluate<boolean>('Boolean(document.querySelector(\'form.sheet input[name="name"]\'))'), false);
+
+      const livingId = await page.evaluate<string>(`(() => {
+        const opt = [...document.querySelectorAll('form.sheet #linkExpenseId option')]
+          .find((o) => (o.textContent || "").includes("Energia Elétrica"));
+        return opt?.value || "";
+      })()`);
+      assert.ok(livingId, "Energia Elétrica deve estar disponível na lista de custos de vida de Dezembro 2026");
+
+      await page.selectOption('form.sheet #linkExpenseId', livingId);
+      await page.fill('form.sheet input[name="amount"]', "150,00");
+      await page.click('form.sheet button[type="submit"]');
+      await page.waitFor('!document.querySelector("form.sheet")');
+      await page.waitForText("Vinculei ao custo de vida de Dezembro 2026");
 
       assert.deepEqual(page.errors, []);
     } finally {

@@ -2,7 +2,7 @@ import { isPlannedNote, money } from "../../format.js";
 import { ensureLinkChoices } from "../api.js";
 import { titleWithHelp } from "../dialogs/info.js";
 import { el, historyWhen, monthName, on } from "../dom.js";
-import { field, segmented } from "../sheets/fields.js";
+import { field, formSection, segmented } from "../sheets/fields.js";
 import { closeSheet, livingLinkSelect, livingLinkStatus, paintLivingLinks } from "../sheets/openers.js";
 import { editable, render, state } from "../state.js";
 
@@ -113,26 +113,34 @@ export function cashSpendFields(draft) {
   const link = livingLinkSelect(draft);
   return [
     el("h2", {}, "Lançar à vista"),
-    field("Valor", "amount", draft.amount, "decimal"),
-    el("div", { class: "field" }, [
-      el("label", {}, "Classificação"),
-      segmented("expenseKind", [
-        ["casa", "Custo de vida"],
-        ["imprevisto", "Imprevisto"],
-        ["planejado", "Planejado"],
-      ], draft.expenseKind || "casa"),
-    ]),
-    el("div", { class: "field" }, [el("label", { for: "invoiceMonthId" }, "Mês"), monthSelect]),
-    draft.expenseKind === "casa"
-      ? el("div", { class: "field" }, [
-        el("label", { id: "link-label", for: "linkExpenseId" }, `Custo de vida de ${monthName(draft.invoiceMonthId) || "este mês"}`),
-        link,
-        el("p", { class: "muted link-status", id: "link-status" }, livingLinkStatus(draft)),
-      ])
-      : field("Nome", "name", draft.name, "text"),
-    draft.expenseKind === "casa"
-      ? ""
-      : el("p", { class: "muted" }, "Este valor cria o imprevisto ou o planejado e já fica pago no Pix."),
+    formSection("Classificação", [
+      el("div", { class: "field" }, [
+        segmented("expenseKind", [
+          ["casa", "Custo de vida"],
+          ["planejado", "Planejado"],
+          ["imprevisto", "Imprevisto"],
+        ], draft.expenseKind || "casa", {
+          layout: "triple",
+          tones: { casa: "fixed", planejado: "planned", imprevisto: "extra" },
+        }),
+      ]),
+    ], "cash-spend-kind"),
+    formSection("Detalhes do lançamento", [
+      el("div", { class: "pair" }, [
+        field("Valor", "amount", draft.amount, "decimal", "0,00"),
+        el("div", { class: "field" }, [el("label", { for: "invoiceMonthId" }, "Mês"), monthSelect]),
+      ]),
+      draft.expenseKind === "casa"
+        ? el("div", { class: "field" }, [
+          el("label", { id: "link-label", for: "linkExpenseId" }, `Custo de vida de ${monthName(draft.invoiceMonthId) || "este mês"}`),
+          link,
+          el("p", { class: "muted form-hint link-status", id: "link-status" }, livingLinkStatus(draft)),
+        ])
+        : field("Nome", "name", draft.name, "text", draft.expenseKind === "planejado" ? "Ex.: Presente, viagem..." : "Ex.: Farmácia, reparo..."),
+      draft.expenseKind === "casa"
+        ? ""
+        : el("p", { class: "muted form-hint" }, "Este valor cria o imprevisto ou o planejado e já fica pago no Pix."),
+    ], "cash-spend-details"),
     el("div", { class: "actions" }, [
       el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
       el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Lançando..." : "Lançar"),

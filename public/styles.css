@@ -1042,24 +1042,27 @@ select:disabled { opacity: 0.72; }
 
 .pair {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px 10px;
-  margin-bottom: 10px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 10px;
+  margin-bottom: 12px;
 }
 
-.pair .field { margin-bottom: 0; }
+.pair .field { margin-bottom: 0; min-width: 0; }
 
 .pair label {
-  margin-bottom: 4px;
-  font-size: 12px;
-  line-height: 1.2;
+  margin-bottom: 6px;
+  font-size: 12.5px;
+  line-height: 1.25;
 }
 
-.pair input {
-  padding: 4px 8px;
+.pair input,
+.pair select {
+  height: 46px;
+  min-height: 46px;
+  padding: 0 9px;
   border-radius: 10px;
-  font-size: 15px;
-  line-height: 1.15;
+  font-size: 14px;
+  line-height: 1.2;
 }
 
 .choice { gap: 8px; flex-wrap: wrap; }
@@ -2752,4 +2755,344 @@ html[data-theme="dark"] .card-manage.open {
     font-size: 17px;
   }
 }
+
+/* ---- Formulários (sheets): hierarquia visual unificada ---- */
+
+.sheet {
+  border-radius: 20px 20px 0 0;
+}
+
+.sheet-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 3;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--card);
+  color: var(--muted);
+  display: grid;
+  place-items: center;
+  font-size: 20px;
+  line-height: 1;
+  padding: 0;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.sheet-close:hover,
+.sheet-close:focus-visible {
+  background: color-mix(in srgb, var(--ink) 7%, var(--card));
+  border-color: color-mix(in srgb, var(--ink) 24%, var(--line));
+  color: var(--ink);
+}
+
+.sheet h2 {
+  margin: 4px 0 14px;
+  padding-right: 42px;
+  font-size: 21px;
+  line-height: 1.2;
+}
+
+.sheet > .muted {
+  margin: -6px 0 14px;
+  font-size: 13.5px;
+  line-height: 1.45;
+}
+
+.sheet label {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.sheet input,
+.sheet select,
+.sheet textarea {
+  border-radius: 10px;
+  background: var(--card);
+  transition: border-color 140ms ease, box-shadow 140ms ease, background-color 140ms ease;
+}
+
+.sheet input:not([type="checkbox"]):not([type="file"]),
+.sheet select {
+  min-height: 46px;
+}
+
+.sheet input:focus,
+.sheet select:focus,
+.sheet textarea:focus {
+  border-color: var(--ink);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 10%, transparent);
+}
+
+.form-section {
+  background: color-mix(in srgb, var(--paper) 72%, var(--card));
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 13px 14px 14px;
+  margin-bottom: 12px;
+}
+
+.form-section-title {
+  margin: 0 0 10px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.055em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.form-section > .field:last-child,
+.form-section > .pair:last-child,
+.form-section > div:last-child > .field:last-child {
+  margin-bottom: 0;
+}
+
+.form-section > p:not(.form-section-title):not(.form-hint) {
+  margin: 0 0 10px;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.form-section > p:last-child {
+  margin-bottom: 0;
+}
+
+.form-section .field {
+  margin-bottom: 12px;
+}
+
+.form-section .field > .muted:not(.form-hint) {
+  margin: 6px 0 0;
+  font-size: 12.5px;
+  line-height: 1.42;
+}
+
+.form-hint {
+  margin: 8px 0 0;
+  padding: 9px 11px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--ink) 4%, var(--card));
+  border: 1px solid color-mix(in srgb, var(--line) 85%, transparent);
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.42;
+}
+
+.form-hint.link-status {
+  min-height: 0;
+}
+
+.form-empty-step {
+  border: 1px dashed color-mix(in srgb, var(--ink) 22%, var(--line));
+  background: color-mix(in srgb, var(--paper) 65%, var(--card));
+  border-radius: 14px;
+  padding: 16px 14px;
+  margin-bottom: 12px;
+  text-align: center;
+}
+
+.form-empty-step strong {
+  display: block;
+  font-size: 14.5px;
+  font-weight: 650;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.form-empty-step p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.42;
+}
+
+.form-budget-field {
+  margin-top: 12px;
+  margin-bottom: 0;
+}
+
+.form-inline-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
+.form-inline-btn {
+  min-height: 30px;
+  padding: 2px 8px;
+  font-size: 12.5px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--navy) 8%, transparent);
+}
+
+.choice.choice-2,
+.choice.choice-3,
+.choice.choice-4 {
+  display: grid;
+  align-items: stretch;
+}
+
+.choice.choice-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.choice.choice-3 {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.choice.choice-4 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.choice button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 44px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 14px;
+  line-height: 1.2;
+  text-align: center;
+  background: var(--card);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.03);
+}
+
+.choice.choice-3 button {
+  flex: none;
+  padding: 9px 6px;
+  font-size: 13px;
+  gap: 5px;
+}
+
+.choice.choice-2 button,
+.choice.choice-4 button {
+  flex: none;
+}
+
+.choice button.on {
+  box-shadow: 0 2px 8px rgba(16, 24, 40, 0.14);
+}
+
+.choice-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--muted);
+}
+
+.choice button.tone-fixed .choice-dot { background: #1f4e8a; }
+.choice button.tone-planned .choice-dot { background: #0f6e56; }
+.choice button.tone-extra .choice-dot { background: #7e22ce; }
+
+.choice button.on.tone-fixed .choice-dot { background: #93c5fd; }
+.choice button.on.tone-planned .choice-dot { background: #5eead4; }
+.choice button.on.tone-extra .choice-dot { background: #d8b4fe; }
+
+.sheet > .actions {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+
+.sheet .partial-list {
+  margin: 0;
+}
+
+html[data-theme="dark"] .sheet-close {
+  background: #232a33;
+  border-color: var(--line);
+}
+
+html[data-theme="dark"] .form-section {
+  background: #161b22;
+  border-color: var(--line);
+}
+
+html[data-theme="dark"] .form-empty-step {
+  background: #161b22;
+  border-color: #3e4756;
+}
+
+html[data-theme="dark"] .form-hint {
+  background: #1f252e;
+  border-color: var(--line);
+}
+
+html[data-theme="dark"] .form-inline-btn {
+  background: color-mix(in srgb, var(--navy) 14%, transparent);
+}
+
+html[data-theme="dark"] .sheet input:focus,
+html[data-theme="dark"] .sheet select:focus,
+html[data-theme="dark"] .sheet textarea:focus {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ink) 16%, transparent);
+}
+
+html[data-theme="dark"] .choice button.tone-fixed .choice-dot { background: #7aa7e8; }
+html[data-theme="dark"] .choice button.tone-planned .choice-dot { background: #5dceb0; }
+html[data-theme="dark"] .choice button.tone-extra .choice-dot { background: #c084fc; }
+
+html[data-theme="dark"] .choice button.on.tone-fixed .choice-dot { background: #1f4e8a; }
+html[data-theme="dark"] .choice button.on.tone-planned .choice-dot { background: #0f6e56; }
+html[data-theme="dark"] .choice button.on.tone-extra .choice-dot { background: #7e22ce; }
+
+@media (min-width: 1100px) {
+  .sheet {
+    border-radius: 18px;
+  }
+
+  .sheet-close {
+    top: 18px;
+    right: 20px;
+  }
+
+  .sheet input:not([type="checkbox"]):not([type="file"]),
+  .sheet select,
+  .pair input,
+  .pair select {
+    height: var(--control-h);
+    min-height: var(--control-h);
+    padding: 0 12px;
+    border-radius: var(--control-radius);
+    font-size: var(--control-font);
+  }
+
+  .choice button {
+    min-height: var(--control-h);
+    border-radius: var(--control-radius);
+    font-size: var(--control-font);
+  }
+
+  .choice.choice-3 button {
+    font-size: 13.5px;
+    padding: 8px 10px;
+  }
+
+  .form-section {
+    padding: 15px 16px 16px;
+  }
+
+  .form-inline-btn {
+    min-height: 28px;
+    font-size: 12.5px;
+  }
+}
+
 

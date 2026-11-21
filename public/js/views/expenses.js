@@ -130,7 +130,7 @@ export function sectionList(data, section) {
       el("button", {
         class: "primary",
         type: "button",
-        onclick: () => openCardExpense("", kind),
+        onclick: () => openCardExpense(),
       }, "+ Lançar no cartão"),
       el("button", {
         class: "secondary",
