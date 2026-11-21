@@ -112,12 +112,26 @@ export async function saveSheet(event) {
           : `Lancei em ${place} de ${cost}, na fatura de ${invoice}.`;
     } else if (draft.fromCard && draft.mode === "edit") {
       if (!draft.name.trim()) throw new Error("Dê um nome ao gasto.");
-      const amountCents = parseMoney(draft.amount || "");
+      let amountCents = parseMoney(draft.amount || "");
       if (amountCents === null || amountCents <= 0) throw new Error("Informe um valor maior que zero.");
       if (!["imprevisto", "planejado", "casa"].includes(draft.expenseKind)) {
-        throw new Error("Escolha a tarja: Imprevisto, Planejado ou Custo de vida.");
+        throw new Error("Escolha a classificação: Custo de vida, Planejado ou Imprevisto.");
       }
       if (!String(draft.cardLabel || "").trim()) throw new Error("Escolha o cartão deste gasto.");
+      if (!draft.invoiceMonthId) throw new Error("Escolha o mês da fatura.");
+      const parcelado = draft.billing === "installments";
+      const installmentCount = parcelado ? Number(draft.installmentCount) : 1;
+      const installmentsPaid = parcelado ? Number(draft.installmentsPaid) : 0;
+      const amountMode = parcelado && draft.amountMode === "total" ? "total" : "installment";
+      if (parcelado && (!Number.isInteger(installmentCount) || installmentCount < 2 || installmentCount > 48 || !Number.isInteger(installmentsPaid) || installmentsPaid < 0 || installmentsPaid >= installmentCount)) {
+        throw new Error("Informe de 2 a 48 parcelas. As já pagas precisam ser menores que o total.");
+      }
+      if (parcelado && amountMode === "total") {
+        const per = Math.floor(amountCents / installmentCount);
+        if (per <= 0) throw new Error("O valor total não cobre todas as parcelas.");
+        amountCents = per;
+      }
+      const installment = parcelado ? `${installmentsPaid + 1}/${installmentCount}` : null;
       setWorking(true, "Salvando...");
       state.data = await request(`/api/expenses/${draft.id}/classification`, {
         method: "POST",
@@ -126,14 +140,25 @@ export async function saveSheet(event) {
           name: draft.name.trim(),
           amountCents,
           cardLabel: draft.cardLabel,
-          note: draft.note,
+          note: draft.note || "",
+          purchaseDate: draft.purchaseDate || "",
+          invoiceMonthId: draft.invoiceMonthId,
+          costMonthId: draft.costMonthId || draft.invoiceMonthId,
+          linkExpenseId: draft.expenseKind === "casa" ? (draft.linkExpenseId || "") : "",
+          installment,
         },
       });
+      if (state.data?.month?.id) {
+        state.monthId = state.data.month.id;
+        sessionStorage.setItem("monthId", state.monthId);
+      }
       rememberMonth(state.data);
       const moved = draft.expenseKind === "casa" ? "Custo de vida" : draft.expenseKind === "planejado" ? "Planejado" : "Imprevisto";
-      state.notice = draft.expenseKind === draft.originalKind
-        ? "Gasto atualizado."
-        : `Gasto atualizado. A tarja agora é ${moved}.`;
+      state.notice = draft.expenseKind === "casa" && draft.linkExpenseId
+        ? "Gasto atualizado e vinculado ao custo de vida."
+        : draft.expenseKind === draft.originalKind
+          ? "Gasto atualizado."
+          : `Gasto atualizado. A classificação agora é ${moved}.`;
     } else {
       if (draft.cardExpense && draft.mode === "create") {
         draft.section = "card";

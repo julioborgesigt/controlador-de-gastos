@@ -368,8 +368,8 @@ export function cardSelect(draft) {
   select.value = current;
   on(select, "change", (event) => {
     state.sheet.cardLabel = event.currentTarget.value;
-    if (state.sheet.mode === "card-spend") {
-      state.sheet.invoiceTouched = false;
+    if (state.sheet.mode === "card-spend" || (state.sheet.mode === "edit" && state.sheet.fromCard)) {
+      if (state.sheet.mode === "card-spend") state.sheet.invoiceTouched = false;
       applyInvoiceSuggestion(state.sheet);
       if (!refreshInvoiceChoice(state.sheet)) render();
       return;
@@ -450,7 +450,7 @@ export function segmented(key, options, current) {
         const kind = key === "costKind" ? value : state.sheet.costKind;
         state.sheet.span = payment === "card" && kind !== "variavel" ? "month" : "all";
       }
-      if (key === "billing" && value === "installments" && state.sheet.mode === "card-spend") {
+      if (key === "billing" && value === "installments" && (state.sheet.mode === "card-spend" || (state.sheet.mode === "edit" && state.sheet.fromCard))) {
         if (Number(state.sheet.installmentCount) < 2) state.sheet.installmentCount = "2";
         if (state.sheet.installmentsPaid == null || state.sheet.installmentsPaid === "") state.sheet.installmentsPaid = "0";
         if (!state.sheet.amountMode) state.sheet.amountMode = "installment";

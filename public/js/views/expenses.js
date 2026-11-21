@@ -242,7 +242,10 @@ export function expenseRow(expense, section, options = {}) {
   if (expense.installment) meta.push(expense.installment);
   const partials = expense.partials || [];
   const edit = () => {
-    if (editable()) openEdit(expense, { cardExpense: lockedCard, fromCard: section === "card" && !systemCardLine(expense) });
+    if (editable()) openEdit(expense, {
+      cardExpense: lockedCard,
+      fromCard: (section === "card" || (section === "extra" && expense.payment === "card")) && !systemCardLine(expense),
+    });
   };
   const mirror = cardMirror(expense, section);
   const forecast = section === "fixed" && !onInvoice && !expense.paid && !partials.length;

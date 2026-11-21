@@ -183,3 +183,130 @@ test("POST /api/import/nubank cria cartão, projeta parcelas nos meses seguintes
   const janAfter = await alice.request("GET", "/api/months/2027-01");
   assert.equal((janAfter.json.expenses as unknown[]).length, 1);
 });
+
+test("editar gasto importado do Nubank suporta campos unificados, vínculo a custo de vida e mantém sincronização idempotente", async () => {
+  const env = createTestEnv();
+  const bob = createClient(env, "198.51.100.42");
+  assert.equal((await bob.request("POST", "/api/register", {
+    cpf: "52998224725",
+    email: "bob-edit-nubank@example.com",
+    password: "segredo-forte-123",
+    passwordConfirmation: "segredo-forte-123",
+  })).status, 201);
+  assert.equal((await bob.request("POST", "/api/period", {
+    startMonthId: "2026-11",
+    endMonthId: "2027-01",
+  })).status, 200);
+
+  const csv = [
+    "date,title,amount",
+    "2026-10-16,Farmacia Central - Parcela 1/2,74.37",
+    "2026-10-20,Google Garena,25.99",
+  ].join("\n");
+
+  const imp = await bob.request("POST", "/api/import/nubank", {
+    csvText: csv,
+    filename: "Nubank_2026-11-05.csv",
+    dueDate: "2026-11-05",
+    cardName: "Nubank",
+  });
+  assert.equal(imp.status, 200);
+
+  // Cria um Custo de vida previsto em novembro para vincular o gasto importado
+  const livingRes = await bob.request("POST", "/api/expenses", {
+    monthId: "2026-11",
+    name: "Farmácia Mensal",
+    section: "fixed",
+    amountCents: 20000,
+    payment: "card",
+    onCard: false,
+    cardLabel: "Nubank",
+    note: "",
+    installment: null,
+    paid: false,
+  });
+  assert.equal(livingRes.status, 201);
+
+  const novBefore = await bob.request("GET", "/api/months/2026-11");
+  const expenses = novBefore.json.expenses as Array<{
+    id: string;
+    name: string;
+    section: string;
+    amountCents: number;
+    installment: string | null;
+    note: string | null;
+    partials?: Array<{ amountCents: number; payment: string; cardLabel: string | null }>;
+  }>;
+  const living = expenses.find((item) => item.name === "Farmácia Mensal" && item.section === "fixed");
+  const farmacia = expenses.find((item) => item.name === "Farmacia Central" && item.section === "card");
+  const garena = expenses.find((item) => item.name === "Google Garena" && item.section === "card");
+  assert.ok(living && farmacia && garena);
+
+  // 1) Vincula o gasto importado da Farmácia ao Custo de vida previsto, mantendo parcela e data da compra
+  const editLink = await bob.request("POST", `/api/expenses/${farmacia.id}/classification`, {
+    classification: "casa",
+    name: "Farmacia Central",
+    amountCents: 7437,
+    cardLabel: "Nubank",
+    note: "Remédio",
+    purchaseDate: "2026-10-16",
+    invoiceMonthId: "2026-11",
+    costMonthId: "2026-11",
+    linkExpenseId: living.id,
+    installment: "1/2",
+  });
+  assert.equal(editLink.status, 200);
+
+  const novAfterLink = await bob.request("GET", "/api/months/2026-11");
+  const afterExpenses = novAfterLink.json.expenses as typeof expenses;
+  const updatedLiving = afterExpenses.find((item) => item.id === living.id);
+  const updatedFarmacia = afterExpenses.find((item) => item.id === farmacia.id);
+  assert.ok(updatedLiving && updatedFarmacia);
+  assert.equal(updatedLiving.partials?.length, 1);
+  assert.equal(updatedLiving.partials?.[0]?.amountCents, 7437);
+  assert.equal(updatedLiving.partials?.[0]?.cardLabel, "Nubank");
+  assert.ok((updatedFarmacia.note || "").includes(`origem:${living.id}`));
+  assert.ok((updatedFarmacia.note || "").includes("compra:2026-10-16"));
+  assert.ok((updatedFarmacia.note || "").includes("Remédio"));
+  assert.equal(updatedFarmacia.installment, "1/2");
+
+  // 2) Reclassifica Google Garena para Planejado, move para fatura de dez/2026 e define parcelamento 1/2
+  const editMove = await bob.request("POST", `/api/expenses/${garena.id}/classification`, {
+    classification: "planejado",
+    name: "Google Garena VIP",
+    amountCents: 2599,
+    cardLabel: "Nubank",
+    note: "Presente",
+    purchaseDate: "2026-10-21",
+    invoiceMonthId: "2026-12",
+    costMonthId: "2026-11",
+    linkExpenseId: "",
+    installment: "1/2",
+  });
+  assert.equal(editMove.status, 200);
+  assert.equal((editMove.json.month as { id: string }).id, "2026-12");
+
+  const decAfterMove = await bob.request("GET", "/api/months/2026-12");
+  const decItems = decAfterMove.json.expenses as typeof expenses;
+  const movedGarena = decItems.find((item) => item.id === garena.id);
+  assert.ok(movedGarena);
+  assert.equal(movedGarena.name, "Google Garena VIP");
+  assert.equal(movedGarena.installment, "1/2");
+  assert.ok((movedGarena.note || "").includes("tipo:planejado"));
+  assert.ok((movedGarena.note || "").includes("compra:2026-10-21"));
+  assert.ok((movedGarena.note || "").includes("ref:2026-11"));
+
+  // 3) Reimporta a mesma planilha CSV: import_key foi preservado, zero duplicatas!
+  const reimp = await bob.request("POST", "/api/import/nubank", {
+    csvText: csv,
+    filename: "Nubank_2026-11-05.csv",
+    dueDate: "2026-11-05",
+    cardName: "Nubank",
+  });
+  assert.equal(reimp.status, 200);
+  const summary = reimp.json.summary as Record<string, unknown>;
+  assert.equal(summary.insertedCurrent, 0);
+  assert.equal(summary.insertedFuture, 0);
+  assert.equal(summary.syncedExisting, 3);
+});
+

@@ -10,6 +10,7 @@ import {
   seriesIdFrom,
   visibleNote,
 } from "../../format.js";
+import { noteMarker, referenceMonthFrom } from "../../shared/note-markers.js";
 import { ensureLinkChoices, knownLinks, linkMonthId } from "../api.js";
 import { el, localToday, monthName, on } from "../dom.js";
 import { render, state } from "../state.js";
@@ -132,7 +133,11 @@ export function paintLivingLinks(draft) {
   if (!select || !status || state.sheet !== draft) return false;
   const waiting = Boolean(draft.linkLoading);
   const links = waiting ? [] : (knownLinks(draft) || []);
-  const blank = draft.mode === "cash-spend" ? "Escolha o custo" : "Criar um custo novo";
+  const blank = draft.mode === "cash-spend"
+    ? "Escolha o custo"
+    : draft.mode === "edit"
+      ? "Sem vínculo (custo próprio)"
+      : "Criar um custo novo";
   select.replaceChildren(
     el("option", { value: "" }, waiting ? "Carregando..." : blank),
     ...links.map((expense) => el("option", {
@@ -160,7 +165,11 @@ export function paintLivingLinks(draft) {
 export function livingLinkSelect(draft) {
   const waiting = Boolean(draft.linkLoading);
   const links = waiting ? [] : (knownLinks(draft) || []);
-  const blank = draft.mode === "cash-spend" ? "Escolha o custo" : "Criar um custo novo";
+  const blank = draft.mode === "cash-spend"
+    ? "Escolha o custo"
+    : draft.mode === "edit"
+      ? "Sem vínculo (custo próprio)"
+      : "Criar um custo novo";
   const link = el("select", {
     id: "linkExpenseId",
     disabled: waiting ? "" : null,
@@ -210,7 +219,8 @@ export function refreshInvoiceChoice(draft) {
   return true;
 }
 
-export function cardSpendFields(draft) {
+export function cardSpendFields(draft, { onDelete = null } = {}) {
+  const editing = draft.mode === "edit";
   const months = state.data?.months || [];
   if (draft.expenseKind === "casa") {
     if (!draft.costMonthId) draft.costMonthId = state.monthId;
@@ -245,7 +255,7 @@ export function cardSpendFields(draft) {
   const costLabel = monthName(draft.costMonthId || state.monthId) || "este mês";
   const showBudgetMonth = draft.expenseKind === "casa" || draft.showCostMonth || draft.costTouched;
   return [
-    el("h2", {}, "Gasto no crédito"),
+    el("h2", {}, editing ? "Editar gasto no crédito" : "Gasto no crédito"),
     field("Nome", "name", draft.name, "text"),
     field(amountName, "amount", draft.amount, "decimal"),
     el("div", { class: "field" }, [
@@ -302,15 +312,23 @@ export function cardSpendFields(draft) {
         el("p", { class: "muted link-status", id: "link-status" }, livingLinkStatus(draft)),
       ])
       : "",
+    editing ? field("Observação", "note", draft.note || "", "text", "Opcional") : "",
     el("div", { class: "actions" }, [
       el("button", { class: "secondary", type: "button", onclick: closeSheet }, "Cancelar"),
-      el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? "Lançando..." : "Lançar"),
+      el("button", { class: "primary", type: "submit", disabled: state.busy ? "" : null }, state.busy ? (editing ? "Salvando..." : "Lançando...") : (editing ? "Salvar" : "Lançar")),
     ]),
+    editing && onDelete ? el("button", { class: "danger", type: "button", onclick: onDelete }, "Excluir gasto") : "",
   ];
 }
 
 export function openEdit(expense, options = {}) {
   const parts = installmentDraft(expense.installment);
+  const purchaseDate = noteMarker(expense.note, "compra:") || "";
+  const refMonth = referenceMonthFrom(expense.note) || (purchaseDate ? purchaseDate.slice(0, 7) : "");
+  const knownMonths = state.data?.months || [];
+  const costMonthId = refMonth && knownMonths.some((month) => month.id === refMonth) ? refMonth : expense.monthId;
+  const fromCard = Boolean(options.fromCard);
+  const track = fromCard ? (cardTrack(expense) || "imprevisto") : (isPlannedNote(expense.note) ? "planejado" : "imprevisto");
   state.sheet = {
     mode: "edit",
     cardExpense: Boolean(options.cardExpense),
@@ -326,11 +344,20 @@ export function openEdit(expense, options = {}) {
     variable: isVariableNote(expense.note),
     costKind: isVariableNote(expense.note) ? "variavel" : "fixo",
     invoiceTiming: invoiceShift(expense.note),
-    fromCard: Boolean(options.fromCard),
-    expenseKind: options.fromCard ? cardTrack(expense) : (isPlannedNote(expense.note) ? "planejado" : "imprevisto"),
-    originalKind: options.fromCard ? cardTrack(expense) : "",
+    fromCard,
+    expenseKind: track,
+    originalKind: fromCard ? track : "",
     originId: originIdFrom(expense.note),
     partialId: partialIdFrom(expense.note),
+    linkExpenseId: originIdFrom(expense.note) || "",
+    purchaseDate,
+    invoiceMonthId: expense.monthId,
+    invoiceTouched: true,
+    suggestedMonthId: "",
+    costMonthId,
+    costTouched: Boolean(refMonth && costMonthId !== expense.monthId),
+    showCostMonth: Boolean(refMonth && costMonthId !== expense.monthId),
+    billing: Number(parts.installmentCount) > 1 ? "installments" : "once",
     installment: expense.installment || "",
     installmentCount: parts.installmentCount,
     installmentsPaid: parts.installmentsPaid,
@@ -344,6 +371,7 @@ export function openEdit(expense, options = {}) {
     monthId: expense.monthId,
     editScope: "month",
   };
+  if (fromCard) applyInvoiceSuggestion(state.sheet);
   state.error = "";
   render();
 }

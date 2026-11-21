@@ -351,8 +351,12 @@ function rememberLinkChoices(draft, monthId, expenses) {
   if (draft.linkExpenseId && !draft.linkChoices.some((expense) => expense.id === draft.linkExpenseId)) draft.linkExpenseId = "";
 }
 
+function isCardSpendDraft(draft) {
+  return draft?.mode === "card-spend" || (draft?.mode === "edit" && Boolean(draft?.fromCard));
+}
+
 export function linkMonthId(draft) {
-  if (draft.mode === "card-spend") return draft.costMonthId || state.monthId;
+  if (isCardSpendDraft(draft)) return draft.costMonthId || state.monthId;
   return draft.invoiceMonthId;
 }
 
@@ -362,7 +366,7 @@ function linkCacheKey(draft, monthId = linkMonthId(draft)) {
 
 export function knownLinks(draft) {
   const monthId = linkMonthId(draft);
-  if (!monthId || (draft.mode === "card-spend" && draft.expenseKind !== "casa")) return [];
+  if (!monthId || (isCardSpendDraft(draft) && draft.expenseKind !== "casa")) return [];
   if (monthId === state.monthId) return livingCostsForInvoice(monthId, draft.expenseKind || "casa");
   if (draft.linkKey === linkCacheKey(draft, monthId) && Array.isArray(draft.linkChoices)) return draft.linkChoices;
   return null;
@@ -370,7 +374,7 @@ export function knownLinks(draft) {
 
 export function ensureLinkChoices(draft) {
   const monthId = linkMonthId(draft);
-  if (!monthId || (draft.mode === "card-spend" && draft.expenseKind !== "casa")) return;
+  if (!monthId || (isCardSpendDraft(draft) && draft.expenseKind !== "casa")) return;
   if (monthId === state.monthId) {
     draft.linkLoading = "";
     draft.linkError = "";
