@@ -867,4 +867,125 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       await server.close();
     }
   });
+
+  test("filtros cumulativos de ordenação na fatura vêm pré-selecionados e reordenam lançamentos", { timeout: 35_000 }, async () => {
+    const server = await startAppServer();
+    const page = await browser!.newPage(server.baseUrl);
+    try {
+      await completeOnboarding(page);
+
+      // Popula gastos variados na fatura de novembro/2026 do Nubank via API real para validar parcelas pagas, pendentes, data e valor
+      await page.evaluate(`(async () => {
+        const items = [
+          { name: "Notebook", amountCents: 50000, purchaseDate: "2026-02-10", installmentCount: 12, installmentsPaid: 9, amountMode: "installment" },
+          { name: "Geladeira", amountCents: 35000, purchaseDate: "2026-02-25", installmentCount: 12, installmentsPaid: 9, amountMode: "installment" },
+          { name: "Curso Online", amountCents: 12000, purchaseDate: "2026-08-15", installmentCount: 10, installmentsPaid: 2, amountMode: "installment" },
+          { name: "Mercado", amountCents: 80000, purchaseDate: "2026-11-18" },
+          { name: "Farmácia", amountCents: 9000, purchaseDate: "2026-11-05" },
+        ];
+        for (const item of items) {
+          const res = await fetch("/api/card-spend", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              classification: "planejado",
+              invoiceMonthId: "2026-11",
+              cardLabel: "Nubank",
+              ...item,
+            }),
+          });
+          if (!res.ok) throw new Error("Falha ao criar " + item.name + ": " + await res.text());
+        }
+      })()`);
+
+      await page.goto(server.baseUrl);
+      await page.waitForSelector('nav.nav button[data-key="cartoes"]');
+      await page.click('nav.nav button[data-key="cartoes"]');
+      await dismissTabIntroIfOpen(page);
+      const rowVisible = await page.evaluate<boolean>('Boolean(document.querySelector(".card-manage .item-main"))');
+      if (!rowVisible) {
+        await page.clickButton("Faturas a serem pagas");
+      }
+      await page.waitForSelector(".card-manage .item-main");
+      await page.click(".card-manage .item-main");
+      await page.waitForSelector(".invoice-sort-bar");
+
+      const readTitles = () => page.evaluate<string[]>(`(() =>
+        [...document.querySelectorAll(".list article.item strong")].map((el) => (el.textContent || "").trim())
+      )()`);
+
+      const readActiveSorts = () => page.evaluate<Array<{ key: string; dir: string; rank: string }>>(`(() =>
+        [...document.querySelectorAll(".invoice-sort-bar .sort-chip.on")].map((el) => ({
+          key: el.getAttribute("data-sort-key") || "",
+          dir: el.getAttribute("data-sort-dir") || "",
+          rank: (el.querySelector(".sort-chip-rank")?.textContent || "").trim(),
+        }))
+      )()`);
+
+      // Padrão pré-selecionado: 1º Parcelas pagas (↓) + 2º Data da compra (↓)
+      assert.deepEqual(await readActiveSorts(), [
+        { key: "paid", dir: "desc", rank: "1" },
+        { key: "date", dir: "desc", rank: "2" },
+      ]);
+      assert.deepEqual(await readTitles(), [
+        "25/02 Geladeira",
+        "10/02 Notebook",
+        "15/08 Curso Online",
+        "18/11 Mercado",
+        "05/11 Farmácia",
+      ]);
+
+      // Remove os dois critérios padrão e combina cumulativamente: 1º Parcelas pendentes (↓) + 2º Valor (↓)
+      await page.click('.sort-chip[data-sort-key="paid"] .sort-chip-remove');
+      await page.click('.sort-chip[data-sort-key="date"] .sort-chip-remove');
+      await page.click('button.sort-chip[data-sort-key="remaining"]');
+      await page.click('button.sort-chip[data-sort-key="amount"]');
+
+      assert.deepEqual(await readActiveSorts(), [
+        { key: "remaining", dir: "desc", rank: "1" },
+        { key: "amount", dir: "desc", rank: "2" },
+      ]);
+      // Pendentes: Curso Online (7), Notebook (2, R$ 500), Geladeira (2, R$ 350), Mercado (0, R$ 800), Farmácia (0, R$ 90)
+      assert.deepEqual(await readTitles(), [
+        "15/08 Curso Online",
+        "10/02 Notebook",
+        "25/02 Geladeira",
+        "18/11 Mercado",
+        "05/11 Farmácia",
+      ]);
+
+      // Inverte direção de Valor para menor → maior mantendo Parcelas pendentes como 1º critério
+      await page.click('.sort-chip[data-sort-key="amount"] .sort-chip-main');
+      assert.deepEqual(await readActiveSorts(), [
+        { key: "remaining", dir: "desc", rank: "1" },
+        { key: "amount", dir: "asc", rank: "2" },
+      ]);
+      assert.deepEqual(await readTitles(), [
+        "15/08 Curso Online",
+        "25/02 Geladeira",
+        "10/02 Notebook",
+        "05/11 Farmácia",
+        "18/11 Mercado",
+      ]);
+
+      // Restaura o padrão pelo botão "Padrão"
+      await page.clickButton("Padrão", ".invoice-sort-bar");
+      assert.deepEqual(await readActiveSorts(), [
+        { key: "paid", dir: "desc", rank: "1" },
+        { key: "date", dir: "desc", rank: "2" },
+      ]);
+      assert.deepEqual(await readTitles(), [
+        "25/02 Geladeira",
+        "10/02 Notebook",
+        "15/08 Curso Online",
+        "18/11 Mercado",
+        "05/11 Farmácia",
+      ]);
+
+      assert.deepEqual(page.errors, []);
+    } finally {
+      await page.close();
+      await server.close();
+    }
+  });
 });
