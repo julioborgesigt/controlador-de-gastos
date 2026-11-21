@@ -293,9 +293,30 @@ export function expenseRow(expense, section, options = {}) {
   }
   const finalizedLiving = section === "fixed" && expense.paid && !onInvoice;
   const shownAmount = finalizedLiving ? livingBalance(expense).spent : expense.amountCents;
-  const front = el("article", { class: `item${tone}` }, [
+  const canSelect = editable();
+  const selecting = canSelect && state.selectedExpenses.size > 0;
+  const selected = selecting && state.selectedExpenses.has(expense.id);
+  if (canSelect) state.selectableIds.push(expense.id);
+  const front = el("article", {
+    class: `item${tone}${selecting ? " selectable" : ""}${selected ? " selected" : ""}`,
+    "data-expense-id": expense.id,
+    "data-patch-replace": selecting ? "1" : undefined,
+  }, [
+    selecting ? selectCheck(selected) : "",
     el("div", { class: "item-copy" }, [
-      el("button", { type: "button", class: "item-main", onclick: () => openExpenseInfo(expense, section) }, [
+      el("button", {
+        type: "button",
+        class: "item-main",
+        "aria-pressed": selecting ? (selected ? "true" : "false") : undefined,
+        onclick: () => {
+          if (Date.now() < ignoreLongPressClickUntil) return;
+          if (state.selectedExpenses.size > 0 && canSelect) {
+            toggleExpenseSelection(expense.id);
+            return;
+          }
+          openExpenseInfo(expense, section);
+        },
+      }, [
         el("strong", {}, section === "card" || expense.section === "card" ? cardChargeTitle(expense) : expense.name),
         ...meta.filter(Boolean).map((line) => el("small", {}, line)),
       ]),
@@ -307,7 +328,17 @@ export function expenseRow(expense, section, options = {}) {
       el("span", { class: `amount${onInvoice && section === "card" ? " aside" : ""}` }, shownAmount === 0 && !finalizedLiving ? "—" : money(shownAmount)),
     ]),
   ]);
-  if (!editable()) return front;
+  if (!canSelect) return front;
+  if (selecting) {
+    front.addEventListener("click", (event) => {
+      if (Date.now() < ignoreLongPressClickUntil) return;
+      if (event.target.closest("button.item-main")) return;
+      toggleExpenseSelection(expense.id);
+    });
+    front.addEventListener("contextmenu", (event) => event.preventDefault());
+    return front;
+  }
+  attachLongPress(front, expense.id);
   const informational = section === "extra";
   const cardSection = section === "card";
   const onCardHere = section === "fixed" && expense.onCard;
@@ -350,6 +381,147 @@ export function expenseRow(expense, section, options = {}) {
       { label: "Excluir", tone: "delete", run: () => openDeleteExpense(expense) },
     ],
   });
+}
+
+const LONG_PRESS_MS = 450;
+let longPressTimer = 0;
+let ignoreLongPressClickUntil = 0;
+
+function cancelLongPress() {
+  if (!longPressTimer) return;
+  clearTimeout(longPressTimer);
+  longPressTimer = 0;
+}
+
+function attachLongPress(node, expenseId) {
+  let startX = 0;
+  let startY = 0;
+  let armed = false;
+  node.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 && event.pointerType !== "touch") return;
+    if (state.selectedExpenses.size > 0) return;
+    cancelLongPress();
+    startX = event.clientX;
+    startY = event.clientY;
+    armed = true;
+    longPressTimer = setTimeout(() => {
+      longPressTimer = 0;
+      armed = false;
+      ignoreLongPressClickUntil = Date.now() + 650;
+      state.selectedExpenses.add(expenseId);
+      try {
+        if (navigator.userActivation?.hasBeenActive) navigator.vibrate?.(15);
+      } catch { /* sem vibração disponível */ }
+      render();
+    }, LONG_PRESS_MS);
+  });
+  node.addEventListener("pointermove", (event) => {
+    if (!armed) return;
+    if (Math.abs(event.clientX - startX) > 10 || Math.abs(event.clientY - startY) > 10) {
+      armed = false;
+      cancelLongPress();
+    }
+  });
+  const end = () => {
+    armed = false;
+    cancelLongPress();
+  };
+  node.addEventListener("pointerup", end);
+  node.addEventListener("pointercancel", end);
+  node.addEventListener("pointerleave", end);
+  node.addEventListener("contextmenu", (event) => {
+    if (armed || state.selectedExpenses.size > 0) event.preventDefault();
+  });
+}
+
+function selectCheck(checked) {
+  const box = el("span", { class: `select-check${checked ? " on" : ""}`, "aria-hidden": "true" });
+  if (checked) {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("width", "14");
+    svg.setAttribute("height", "14");
+    svg.setAttribute("fill", "none");
+    svg.setAttribute("stroke", "currentColor");
+    svg.setAttribute("stroke-width", "3");
+    svg.setAttribute("stroke-linecap", "round");
+    svg.setAttribute("stroke-linejoin", "round");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "M5 13l4 4L19 7");
+    svg.append(path);
+    box.append(svg);
+  }
+  return box;
+}
+
+export function clearExpenseSelection() {
+  cancelLongPress();
+  if (!state.selectedExpenses.size) return;
+  state.selectedExpenses.clear();
+  render();
+}
+
+export function toggleExpenseSelection(expenseId) {
+  if (state.selectedExpenses.has(expenseId)) state.selectedExpenses.delete(expenseId);
+  else state.selectedExpenses.add(expenseId);
+  render();
+}
+
+export function selectionBar() {
+  const count = state.selectedExpenses.size;
+  if (!count || !editable()) return "";
+  const visible = [...new Set(state.selectableIds || [])];
+  const allSelected = visible.length > 0 && visible.every((id) => state.selectedExpenses.has(id));
+  return el("div", { class: "select-bar", role: "region", "aria-label": "Seleção múltipla de gastos", "data-key": "select-bar" }, [
+    el("span", { class: "select-bar-count" }, count === 1 ? "1 selecionado" : `${count} selecionados`),
+    el("div", { class: "select-bar-actions" }, [
+      visible.length > 1
+        ? el("button", {
+          type: "button",
+          class: "secondary",
+          onclick: () => {
+            if (allSelected) state.selectedExpenses.clear();
+            else for (const id of visible) state.selectedExpenses.add(id);
+            render();
+          },
+        }, allSelected ? "Desmarcar" : "Todos")
+        : "",
+      el("button", {
+        type: "button",
+        class: "secondary",
+        onclick: clearExpenseSelection,
+      }, "Cancelar"),
+      el("button", {
+        type: "button",
+        class: "danger",
+        disabled: state.busy ? "" : null,
+        onclick: () => askConfirm("delete-expenses-bulk"),
+      }, `Excluir (${count})`),
+    ]),
+  ]);
+}
+
+export async function deleteSelectedExpenses() {
+  const ids = [...state.selectedExpenses];
+  if (!ids.length) return;
+  state.error = "";
+  setWorking(true, "Excluindo...");
+  try {
+    const data = await request("/api/expenses/bulk-delete", {
+      method: "POST",
+      body: { ids, monthId: state.monthId },
+    });
+    state.selectedExpenses.clear();
+    state.data = data;
+    rememberMonth(data);
+    const removed = Number(data?.deletedCount || ids.length);
+    state.notice = removed === 1 ? "Excluí 1 gasto selecionado." : `Excluí ${removed} gastos selecionados.`;
+  } catch (error) {
+    state.error = messageOf(error);
+  } finally {
+    setWorking(false);
+    renderSafely();
+  }
 }
 
 export async function patchExpense(expense, patch) {

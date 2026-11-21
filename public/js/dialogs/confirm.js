@@ -6,7 +6,7 @@ import { executeReset, settle } from "../setup.js";
 import { saveSheet } from "../sheets/save.js";
 import { render, state } from "../state.js";
 import { removeCard, undoCardPayment } from "../views/card-helpers.js";
-import { deleteExpenseNow, patchExpense } from "../views/expenses.js";
+import { deleteExpenseNow, deleteSelectedExpenses, patchExpense } from "../views/expenses.js";
 import { reopenLivingExpense } from "./expense-info.js";
 
 export function askConfirm(kind) {
@@ -44,10 +44,24 @@ function confirmCopy() {
   }
   if (state.confirm === "delete-card") {
     const name = state.confirmCard?.name || "este cartão";
+    const count = Number(state.confirmCard?.expenseCount || 0);
     return {
-      title: "Excluir cartão",
-      body: `Excluir “${name}”? Só dá para excluir um cartão que não tem gastos lançados.`,
-      action: "Excluir",
+      title: "Excluir cartão permanentemente",
+      body: count > 0
+        ? `Excluir “${name}” e os ${count} ${count === 1 ? "gasto cadastrado" : "gastos cadastrados"} nele? Esta exclusão é permanente e não poderá ser desfeita.`
+        : `Excluir “${name}”? Esta exclusão é permanente e não poderá ser desfeita.`,
+      action: "Confirmar exclusão",
+      cancel: "Cancelar",
+    };
+  }
+  if (state.confirm === "delete-expenses-bulk") {
+    const count = state.selectedExpenses?.size || 0;
+    return {
+      title: count === 1 ? "Excluir 1 gasto" : `Excluir ${count} gastos`,
+      body: count === 1
+        ? `Excluir o gasto selecionado em ${month}? Esta exclusão é permanente.`
+        : `Excluir os ${count} gastos selecionados em ${month}? Esta exclusão é permanente.`,
+      action: count === 1 ? "Excluir 1 gasto" : `Excluir ${count} gastos`,
       cancel: "Cancelar",
     };
   }
@@ -136,14 +150,19 @@ function confirmCopy() {
   };
 }
 
+function hasCountdown(kind) {
+  return kind === "reset" || kind === "delete-card";
+}
+
 export function confirmDialog() {
   const copy = confirmCopy();
-  const wait = state.confirm === "reset" ? resetSecondsLeft() : 0;
+  const wait = hasCountdown(state.confirm) ? resetSecondsLeft() : 0;
   const destructive = state.confirm === "reset"
     || state.confirm === "delete-card"
     || state.confirm === "remove-passkey"
     || state.confirm === "remove-share"
-    || state.confirm === "delete-expense-simple";
+    || state.confirm === "delete-expense-simple"
+    || state.confirm === "delete-expenses-bulk";
   const overlay = el("div", {
     class: "overlay center",
     "data-key": "confirm",
@@ -182,12 +201,12 @@ function resetSecondsLeft() {
 
 export function pulseResetConfirm() {
   clearTimeout(state.resetTimer);
-  if (state.confirm !== "reset") return;
+  if (!hasCountdown(state.confirm)) return;
   if (resetSecondsLeft() <= 0) return;
   const left = resetSecondsLeft();
   const delay = state.resetReadyAt - Date.now() - (left - 1) * 1000;
   state.resetTimer = setTimeout(() => {
-    if (state.confirm !== "reset") return;
+    if (!hasCountdown(state.confirm)) return;
     render();
     pulseResetConfirm();
   }, Math.max(200, delay));
@@ -196,7 +215,7 @@ export function pulseResetConfirm() {
 async function runConfirm() {
   const kind = state.confirm;
   const target = state.confirmTarget;
-  if (kind === "reset" && resetSecondsLeft() > 0) return;
+  if (hasCountdown(kind) && resetSecondsLeft() > 0) return;
   clearTimeout(state.resetTimer);
   state.confirm = null;
   state.confirmTarget = null;
@@ -214,6 +233,10 @@ async function runConfirm() {
   }
   if (kind === "delete-card") {
     await removeCard(state.confirmCard);
+    return;
+  }
+  if (kind === "delete-expenses-bulk") {
+    await deleteSelectedExpenses();
     return;
   }
   if (kind === "remove-passkey") {

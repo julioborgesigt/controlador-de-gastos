@@ -1,5 +1,5 @@
-import { cardKey, cardOpenExpenses, expenseCountForCard, planCardPayoff } from "../domain.ts";
-import { EXPENSE_META_SET_SQL, expenseMetaParams, nextSorts, prepareInsertExpense, runStatements, type CardAccount } from "./core.ts";
+import { cardDeletionEffects, cardKey, cardOpenExpenses, expenseCountForCard, planCardPayoff } from "../domain.ts";
+import { EXPENSE_META_SET_SQL, chunkIds, expenseMetaParams, nextSorts, prepareInsertExpense, runStatements, sqlMarks, type CardAccount } from "./core.ts";
 import { listExpenses } from "./expenses-read.ts";
 
 export async function listCards(db: D1Database, ownerId: string): Promise<CardAccount[]> {
@@ -81,15 +81,93 @@ export async function deleteCard(
   db: D1Database,
   ownerId: string,
   cardId: string,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; deletedExpenses: number } | { ok: false; error: string }> {
   const cards = await listCards(db, ownerId);
   const current = cards.find((card) => card.id === cardId);
   if (!current) return { ok: false, error: "Cartão não encontrado." };
-  if (current.expenseCount > 0) {
-    return { ok: false, error: "Este cartão tem gastos lançados. A exclusão só fica disponível quando não houver nenhum." };
+
+  const targetKey = cardKey(current.name);
+  const allRows = await db
+    .prepare("SELECT id, section, card_label, on_card, note, origin_expense_id FROM expenses WHERE owner_id = ?")
+    .bind(ownerId)
+    .all<{
+      id: string;
+      section: string;
+      card_label: string | null;
+      on_card: number;
+      note: string | null;
+      origin_expense_id: string | null;
+    }>();
+  const rows = allRows.results ?? [];
+  const matching = rows.filter((row) => cardKey(row.card_label) === targetKey);
+  const deleteIds = new Set<string>(
+    matching.filter((row) => row.section === "card" || row.section === "extra").map((row) => row.id),
+  );
+  const extraIds = new Set<string>(
+    matching.filter((row) => row.section === "extra").map((row) => row.id),
+  );
+  if (extraIds.size > 0) {
+    for (const row of rows) {
+      if (row.section === "card" && row.origin_expense_id && extraIds.has(row.origin_expense_id)) {
+        deleteIds.add(row.id);
+      }
+    }
   }
-  await db.prepare("DELETE FROM cards WHERE owner_id = ? AND id = ?").bind(ownerId, cardId).run();
-  return { ok: true };
+  const fixedIds = matching.filter((row) => row.section === "fixed").map((row) => row.id);
+  const deletedRows = rows.filter((row) => deleteIds.has(row.id));
+  const remainingNotes = rows.filter((row) => !deleteIds.has(row.id) && row.note).map((row) => row.note as string);
+  const deletedNotes = deletedRows.map((row) => row.note);
+  const effects = cardDeletionEffects(deletedNotes, remainingNotes);
+
+  const partialResult = await db
+    .prepare("SELECT id, expense_id, card_label FROM partial_payments WHERE owner_id = ?")
+    .bind(ownerId)
+    .all<{ id: string; expense_id: string; card_label: string | null }>();
+  const dropPartialSet = new Set<string>(effects.dropPartialIds);
+  for (const row of partialResult.results ?? []) {
+    if (cardKey(row.card_label) === targetKey) dropPartialSet.add(row.id);
+  }
+  const affectedFixedFromPartials = new Set<string>();
+  for (const row of partialResult.results ?? []) {
+    if (dropPartialSet.has(row.id) && !deleteIds.has(row.expense_id)) {
+      affectedFixedFromPartials.add(row.expense_id);
+    }
+  }
+
+  const statements: D1PreparedStatement[] = [];
+  for (const part of chunkIds([...deleteIds])) {
+    statements.push(
+      db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
+    );
+  }
+  for (const part of chunkIds([...dropPartialSet])) {
+    statements.push(
+      db.prepare(`DELETE FROM expenses WHERE owner_id = ? AND partial_id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
+      db.prepare(`DELETE FROM partial_payments WHERE owner_id = ? AND id IN (${sqlMarks(part)})`).bind(ownerId, ...part),
+    );
+  }
+  const resetFixedIds = [...new Set([...fixedIds, ...effects.resetOriginIds.filter((id) => !deleteIds.has(id))])];
+  for (const part of chunkIds(resetFixedIds)) {
+    statements.push(
+      db
+        .prepare(
+          `UPDATE expenses
+           SET payment = 'pix', on_card = 0, card_label = NULL, paid = CASE WHEN on_card = 1 THEN 0 ELSE paid END
+           WHERE owner_id = ? AND section = 'fixed' AND id IN (${sqlMarks(part)})`,
+        )
+        .bind(ownerId, ...part),
+    );
+  }
+  for (const part of chunkIds([...affectedFixedFromPartials])) {
+    statements.push(
+      db
+        .prepare(`UPDATE expenses SET paid = 0 WHERE owner_id = ? AND section = 'fixed' AND id IN (${sqlMarks(part)})`)
+        .bind(ownerId, ...part),
+    );
+  }
+  statements.push(db.prepare("DELETE FROM cards WHERE owner_id = ? AND id = ?").bind(ownerId, cardId));
+  await runStatements(db, statements);
+  return { ok: true, deletedExpenses: deleteIds.size };
 }
 
 export async function createCard(

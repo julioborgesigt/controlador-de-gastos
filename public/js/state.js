@@ -43,6 +43,8 @@ export const state = {
   overviewLoading: false,
   overviewError: "",
   overviewFilter: { year: "", q: "", card: "", track: "" },
+  selectedExpenses: new Set(),
+  selectableIds: [],
 };
 
 export const monthStore = new Map();

@@ -119,6 +119,26 @@ export async function deleteMatchingExpenses(
   return { ok: true, monthId: current.monthId, count: ids.length };
 }
 
+export async function deleteExpensesBatch(
+  db: D1Database,
+  ownerId: string,
+  expenseIds: string[],
+  fallbackMonthId = "",
+): Promise<{ ok: true; monthId: string; count: number } | { ok: false; error: string }> {
+  const uniqueIds = [...new Set(expenseIds.map((id) => String(id || "").trim()).filter(Boolean))];
+  if (!uniqueIds.length) return { ok: false, error: "Selecione pelo menos um gasto para excluir." };
+  let deleted = 0;
+  let monthId = fallbackMonthId;
+  for (const id of uniqueIds) {
+    const removed = await deleteMatchingExpenses(db, ownerId, id, "month");
+    if (!removed.ok) continue;
+    deleted += removed.count;
+    if (!monthId) monthId = removed.monthId;
+  }
+  if (!deleted) return { ok: false, error: "Nenhum dos gastos selecionados foi encontrado." };
+  return { ok: true, monthId, count: deleted };
+}
+
 export async function applySeriesEdit(
   db: D1Database,
   input: {

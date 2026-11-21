@@ -15,6 +15,7 @@ import {
   addLivingCardPartial,
   applySeriesEdit,
   createCardSpendWithAnchor,
+  deleteExpensesBatch,
   deleteMatchingExpenses,
   expenseMetaParams,
   getExpense,
@@ -439,5 +440,23 @@ export function registerExpenseRoutes(app: App): void {
     const removed = await deleteMatchingExpenses(c.env.DB, writer.scope.ownerId, c.req.param("id"), scope);
     if (!removed.ok) return c.json({ error: removed.error }, 404);
     return c.json(withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, removed.monthId), writer.scope));
+  });
+
+  app.post("/api/expenses/bulk-delete", async (c) => {
+    const writer = await requireWriter(c);
+    if (!writer.ok) return c.json({ error: writer.error }, writer.status);
+    const body = await readJson(c);
+    const ids = Array.isArray(body.ids)
+      ? body.ids.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      : [];
+    if (!ids.length) return c.json({ error: "Selecione pelo menos um gasto para excluir." }, 400);
+    if (ids.length > 200) return c.json({ error: "Selecione no máximo 200 gastos por vez." }, 400);
+    const fallbackMonthId = isMonthId(body.monthId) ? body.monthId : "";
+    const removed = await deleteExpensesBatch(c.env.DB, writer.scope.ownerId, ids, fallbackMonthId);
+    if (!removed.ok) return c.json({ error: removed.error }, 404);
+    return c.json({
+      ...withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, removed.monthId), writer.scope),
+      deletedCount: removed.count,
+    });
   });
 }

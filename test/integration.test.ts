@@ -306,10 +306,6 @@ test("fluxo financeiro completo: receita, cartões, gastos entre meses, parciais
   const decExpenses = decMonth.json.expenses as Array<{ id: string; name: string; section: string; amountCents: number; installment: string | null }>;
   assert.ok(decExpenses.some((e) => e.name === "Oficina" && e.section === "card" && e.amountCents === 25000 && e.installment === "1/2"));
 
-  // Cartão em uso não pode ser excluído
-  const deleteBusyCard = await user.request("DELETE", `/api/cards/${cardId}`);
-  assert.equal(deleteBusyCard.status, 409);
-
   // 5. Reclassificação de gasto no cartão (imprevisto -> planejado)
   const directCard = await user.request("POST", "/api/card-spend", {
     name: "Livro",
@@ -488,3 +484,100 @@ test("metadados relacionais indexados: escrita, busca /purchases, exclusão por 
     track: "planejado",
   });
 });
+
+test("exclusão em lote de gastos (bulk-delete) e exclusão permanente de cartão mesmo com gastos vinculados", async () => {
+  const env = createTestEnv();
+  const user = createClient(env, "198.51.100.88");
+  assert.equal((await user.request("POST", "/api/register", {
+    cpf: "52998224725",
+    email: "bulk-delete@teste.com",
+    password: "segredo-forte-123",
+    passwordConfirmation: "segredo-forte-123",
+  })).status, 201);
+  assert.equal((await user.request("POST", "/api/period", { startMonthId: "2026-11", endMonthId: "2026-12" })).status, 200);
+
+  const cardRes = await user.request("POST", "/api/cards", { name: "Nubank", dueDay: 10, closingDay: 2 });
+  assert.equal(cardRes.status, 201);
+  const cardId = (cardRes.json.cards as Array<{ id: string; name: string }>)[0]!.id;
+
+  // Cria 2 custos de vida (um no Pix, um previsto no Nubank) + 3 gastos no cartão
+  const fixed1 = await user.request("POST", "/api/expenses", {
+    monthId: "2026-11",
+    name: "Água",
+    section: "fixed",
+    amountCents: 10000,
+    payment: "pix",
+  });
+  assert.equal(fixed1.status, 201);
+  const fixed2 = await user.request("POST", "/api/expenses", {
+    monthId: "2026-11",
+    name: "Mercado",
+    section: "fixed",
+    amountCents: 50000,
+    payment: "card",
+    cardLabel: "Nubank",
+  });
+  assert.equal(fixed2.status, 201);
+
+  for (const [name, amountCents] of [["Café", 1500], ["Padaria", 2500], ["Farmácia", 8000]] as const) {
+    assert.equal((await user.request("POST", "/api/card-spend", {
+      name,
+      amountCents,
+      classification: "imprevisto",
+      cardLabel: "Nubank",
+      invoiceMonthId: "2026-11",
+      costMonthId: "2026-11",
+    })).status, 201);
+  }
+
+  const novBefore = await user.request("GET", "/api/months/2026-11");
+  const all = novBefore.json.expenses as Array<{ id: string; name: string; section: string; cardLabel: string | null }>;
+  const agua = all.find((e) => e.name === "Água")!;
+  const mercado = all.find((e) => e.name === "Mercado")!;
+  const cafe = all.find((e) => e.name === "Café")!;
+  const padaria = all.find((e) => e.name === "Padaria")!;
+  const farmacia = all.find((e) => e.name === "Farmácia")!;
+  assert.ok(agua && mercado && cafe && padaria && farmacia);
+
+  // Vincula um pagamento parcial no cartão Nubank ao Custo de vida Mercado
+  const partialRes = await user.request("POST", `/api/expenses/${mercado.id}/partials`, {
+    amountCents: 12000,
+    payment: "card",
+    cardLabel: "Nubank",
+    invoiceMonthId: "2026-11",
+  });
+  assert.equal(partialRes.status, 201);
+
+  // 1) Exclui em lote (bulk-delete): Café + Padaria + Água
+  const bulk = await user.request("POST", "/api/expenses/bulk-delete", {
+    ids: [cafe.id, padaria.id, agua.id],
+    monthId: "2026-11",
+  });
+  assert.equal(bulk.status, 200);
+  assert.equal(bulk.json.deletedCount, 3);
+  const afterBulk = bulk.json.expenses as typeof all;
+  assert.ok(!afterBulk.some((e) => e.id === cafe.id || e.id === padaria.id || e.id === agua.id));
+  assert.ok(afterBulk.some((e) => e.id === farmacia.id));
+
+  // 2) Exclui o cartão Nubank mesmo ainda contendo gastos (Farmácia + parcial de Mercado)
+  const delCard = await user.request("DELETE", `/api/cards/${cardId}?monthId=2026-11`);
+  assert.equal(delCard.status, 200);
+  assert.equal((delCard.json.cards as unknown[]).length, 0);
+  assert.ok(Number(delCard.json.deletedExpenses) >= 2);
+  const afterCard = delCard.json.expenses as Array<{
+    id: string;
+    name: string;
+    section: string;
+    payment: string;
+    cardLabel: string | null;
+    partials?: unknown[];
+  }>;
+  assert.ok(!afterCard.some((e) => e.id === farmacia.id));
+  // O custo de vida Mercado permanece salvo, desvinculado do cartão excluído e sem parciais órfãs
+  const mercadoAfter = afterCard.find((e) => e.id === mercado.id);
+  assert.ok(mercadoAfter);
+  assert.equal(mercadoAfter.payment, "pix");
+  assert.equal(mercadoAfter.cardLabel, null);
+  assert.equal((mercadoAfter.partials || []).length, 0);
+});
+

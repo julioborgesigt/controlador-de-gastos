@@ -417,4 +417,135 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       await server.close();
     }
   });
+
+  test("seleção múltipla por pressão longa para exclusão e exclusão de cartão com gastos após timer de 5s", { timeout: 35_000 }, async () => {
+    const server = await startAppServer();
+    const page = await browser!.newPage(server.baseUrl);
+    try {
+      await completeOnboarding(page);
+
+      // Vai para Cartões de crédito (Nubank já existe do onboarding) e abre o detalhe do cartão
+      await page.click('nav.nav button[data-key="cartoes"]');
+      await dismissTabIntroIfOpen(page);
+      const initialRowVisible = await page.evaluate<boolean>('Boolean(document.querySelector(".card-manage .item-main"))');
+      if (!initialRowVisible) {
+        await page.clickButton("Faturas a serem pagas");
+      }
+      await page.waitForSelector(".card-manage .item-main");
+      await page.click(".card-manage .item-main");
+
+      const addCardSpend = async (name: string, amount: string) => {
+        await page.clickButton("+ Gasto no crédito");
+        await page.waitForSelector("form.sheet");
+        await page.fill('form.sheet input[name="name"]', name);
+        await page.fill('form.sheet input[name="amount"]', amount);
+        await page.selectOption("#invoiceMonthId", "2026-11");
+        await page.click('form.sheet button[type="submit"]');
+        await page.waitFor('!document.querySelector("form.sheet")');
+      };
+
+      await addCardSpend("Café", "15,00");
+      await addCardSpend("Padaria", "25,00");
+      await addCardSpend("Uber", "40,00");
+      await page.waitForText("Café");
+      await page.waitForText("Padaria");
+      await page.waitForText("Uber");
+
+      // Aperta e segura em "Café" (~500ms) para ativar seleção múltipla
+      await page.evaluate(`(() => {
+        const card = [...document.querySelectorAll("article.item")].find((el) => (el.textContent || "").includes("Café"));
+        if (!card) throw new Error("Café não encontrado");
+        card.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerType: "touch", clientX: 60, clientY: 60 }));
+      })()`);
+      await page.waitForSelector(".select-bar");
+      await page.waitForText("1 selecionado");
+
+      // Solta o dedo e aguarda cooldown de click fantasma, depois toca em "Padaria" para somar 2 selecionados
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      await page.evaluate(`(() => {
+        const card = [...document.querySelectorAll("article.item.selectable")].find((el) => (el.textContent || "").includes("Padaria"));
+        if (!card) throw new Error("Padaria não encontrada");
+        card.querySelector("button.item-main").click();
+      })()`);
+      await page.waitForText("2 selecionados");
+
+      // Exclui os 2 gastos selecionados com confirmação
+      await page.clickButton("Excluir (2)", ".select-bar");
+      await page.waitForSelector('.dialog[role="alertdialog"]');
+      await page.waitForText("Excluir 2 gastos");
+      await page.clickButton("Excluir 2 gastos", ".dialog");
+      await page.waitFor('!document.querySelector(".dialog")');
+      await page.waitForText("Excluí 2 gastos selecionados.");
+      await page.waitFor('!(document.body?.innerText || "").includes("Padaria")');
+      await page.waitForText("Uber");
+
+      // Também funciona em outra aba (Custo de vida)
+      await page.click('nav.nav button[data-key="casa"]');
+      await dismissTabIntroIfOpen(page);
+      for (const [name, amount] of [["Água", "80,00"], ["Luz", "120,00"]]) {
+        await page.clickButton("Adicionar custo");
+        await page.waitForSelector("form.sheet");
+        await page.fill('form.sheet input[name="name"]', name);
+        await page.fill('form.sheet input[name="amount"]', amount);
+        await page.click('form.sheet button[type="submit"]');
+        await page.waitFor('!document.querySelector("form.sheet")');
+      }
+      await page.waitForText("Água");
+      await page.waitForText("Luz");
+      await page.evaluate(`(() => {
+        const card = [...document.querySelectorAll("article.item")].find((el) => (el.textContent || "").includes("Água"));
+        card.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerType: "touch", clientX: 60, clientY: 60 }));
+      })()`);
+      await page.waitForSelector(".select-bar");
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      await page.clickButton("Todos", ".select-bar");
+      await page.waitForText("2 selecionados");
+      await page.clickButton("Excluir (2)", ".select-bar");
+      await page.waitForSelector('.dialog[role="alertdialog"]');
+      await page.clickButton("Excluir 2 gastos", ".dialog");
+      await page.waitFor('!document.querySelector(".dialog")');
+      await page.waitForText("Excluí 2 gastos selecionados.");
+
+      // Volta em Cartões de crédito e exclui o cartão Nubank mesmo contendo o gasto "Uber", aguardando o timer de 5s
+      await page.click('nav.nav button[data-key="cartoes"]');
+      const rowVisible = await page.evaluate<boolean>('Boolean(document.querySelector(".card-manage .item-main"))');
+      if (!rowVisible) {
+        await page.clickButton("Faturas a serem pagas");
+      }
+      await page.waitForSelector(".card-swipe");
+      const deleteTriggered = await page.evaluate<boolean>(`(() => {
+        const btn = [...document.querySelectorAll(".card-swipe .swipe-trail button")]
+          .find((b) => (b.textContent || "").trim() === "Excluir");
+        if (!btn || btn.disabled) return false;
+        btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 1 }));
+        return true;
+      })()`);
+      assert.equal(deleteTriggered, true, "botão Excluir do cartão com gastos deve estar habilitado");
+      await page.waitForSelector('.dialog[role="alertdialog"]');
+      await page.waitForText("Excluir cartão permanentemente");
+      await page.waitForText("permanente");
+
+      // Botão de confirmação inicia desabilitado com contagem regressiva de 5s
+      const initialDisabled = await page.evaluate<boolean>(`(() => {
+        const btn = document.querySelector('.dialog button.danger');
+        return Boolean(btn && btn.disabled && /Confirmar em \\ds/.test(btn.textContent || ""));
+      })()`);
+      assert.equal(initialDisabled, true, "botão deve começar bloqueado com timer de 5s");
+
+      // Aguarda o timer de 5s liberar o botão e confirma a exclusão permanente
+      await page.waitFor(`(() => {
+        const btn = document.querySelector('.dialog button.danger');
+        return Boolean(btn && !btn.disabled && (btn.textContent || "").includes("Confirmar exclusão"));
+      })()`, 8_000);
+      await page.clickButton("Confirmar exclusão", ".dialog");
+      await page.waitFor('!document.querySelector(".dialog")');
+      await page.waitForText("excluído permanentemente");
+      assert.equal(await page.evaluate<boolean>('Boolean(document.querySelector(".card-manage"))'), false);
+
+      assert.deepEqual(page.errors, []);
+    } finally {
+      await page.close();
+      await server.close();
+    }
+  });
 });
