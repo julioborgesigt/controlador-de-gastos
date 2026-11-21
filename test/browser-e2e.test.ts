@@ -584,4 +584,145 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       await server.close();
     }
   });
+
+  test("mantém a posição de rolagem ao cancelar ou salvar edição de gasto e de cartão", { timeout: 30_000 }, async () => {
+    const server = await startAppServer();
+    const page = await browser!.newPage(server.baseUrl);
+    try {
+      await completeOnboarding(page);
+
+      // Cria gastos e cartões suficientes para garantir rolagem vertical real no viewport mobile
+      await page.evaluate(`(async () => {
+        for (let i = 1; i <= 14; i += 1) {
+          const res = await fetch("/api/expenses", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              monthId: "2026-11",
+              name: "Custo " + String(i).padStart(2, "0"),
+              section: "fixed",
+              amountCents: 10000 + i * 100,
+              payment: "pix",
+            }),
+          });
+          if (!res.ok) throw new Error("Falha ao criar custo " + i);
+        }
+        for (let i = 1; i <= 8; i += 1) {
+          const res = await fetch("/api/cards", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              name: "Cartão Extra " + i,
+              dueDay: 10 + i,
+              closingDay: 3 + i,
+            }),
+          });
+          if (!res.ok) throw new Error("Falha ao criar cartão " + i);
+        }
+      })()`);
+
+      await page.goto(server.baseUrl);
+      await page.waitForSelector('nav.nav button[data-key="casa"]');
+      await page.click('nav.nav button[data-key="casa"]');
+      await dismissTabIntroIfOpen(page);
+      await page.waitForText("Custo 14");
+
+      // Rola até o fim da lista de gastos
+      const expenseScrollBefore = await page.evaluate<number>(`(() => {
+        window.scrollTo(0, document.documentElement.scrollHeight);
+        return window.scrollY;
+      })()`);
+      assert.ok(expenseScrollBefore > 200, `esperava rolagem > 200px em Custo de vida, obteve ${expenseScrollBefore}`);
+
+      const triggerExpenseEdit = async () => {
+        const opened = await page.evaluate<boolean>(`(() => {
+          const row = [...document.querySelectorAll(".swipe")].find((el) => (el.textContent || "").includes("Custo 14"));
+          const btn = row && [...row.querySelectorAll(".swipe-trail button")].find((b) => (b.textContent || "").trim() === "Editar");
+          if (!btn) return false;
+          btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 1 }));
+          return true;
+        })()`);
+        assert.equal(opened, true, "deve acionar Editar do Custo 14");
+        await page.waitForSelector("form.sheet");
+      };
+
+      // Abre edição do último gasto e CANCELA — página não pode subir ao topo após history.back()
+      await triggerExpenseEdit();
+      await page.clickButton("Cancelar", "form.sheet");
+      await page.waitFor('!document.querySelector("form.sheet")');
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const expenseScrollAfterCancel = await page.evaluate<number>("window.scrollY");
+      assert.ok(
+        Math.abs(expenseScrollAfterCancel - expenseScrollBefore) <= 10,
+        `rolagem após cancelar edição de gasto deveria ficar perto de ${expenseScrollBefore}, ficou em ${expenseScrollAfterCancel}`,
+      );
+
+      // Abre edição do último gasto e SALVA — página também deve permanecer na mesma altura
+      await triggerExpenseEdit();
+      await page.waitForSelector("form.sheet");
+      await page.fill('form.sheet input[name="name"]', "Custo 14 Editado");
+      await page.click('form.sheet button[type="submit"]');
+      await page.waitFor('!document.querySelector("form.sheet")');
+      await page.waitForText("Custo 14 Editado");
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const expenseScrollAfterSave = await page.evaluate<number>("window.scrollY");
+      assert.ok(
+        Math.abs(expenseScrollAfterSave - expenseScrollBefore) <= 10,
+        `rolagem após salvar edição de gasto deveria ficar perto de ${expenseScrollBefore}, ficou em ${expenseScrollAfterSave}`,
+      );
+
+      // Vai para Cartões de crédito e testa cancelar e salvar edição de um cartão lá embaixo
+      await page.click('nav.nav button[data-key="cartoes"]');
+      await dismissTabIntroIfOpen(page);
+      const cardsExpanded = await page.evaluate<boolean>('Boolean(document.querySelector(".card-manage .item-main"))');
+      if (!cardsExpanded) {
+        await page.clickButton("Faturas a serem pagas");
+      }
+      await page.waitForText("Cartão Extra 8");
+      const cardScrollBefore = await page.evaluate<number>(`(() => {
+        window.scrollTo(0, document.documentElement.scrollHeight);
+        return window.scrollY;
+      })()`);
+      assert.ok(cardScrollBefore > 200, `esperava rolagem > 200px em Cartões, obteve ${cardScrollBefore}`);
+
+      const triggerCardEdit = async () => {
+        const opened = await page.evaluate<boolean>(`(() => {
+          const row = [...document.querySelectorAll(".card-swipe")].find((el) => (el.textContent || "").includes("Cartão Extra 8"));
+          const btn = row && [...row.querySelectorAll(".swipe-trail button")].find((b) => (b.textContent || "").trim() === "Editar");
+          if (!btn) return false;
+          btn.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, pointerId: 1 }));
+          return true;
+        })()`);
+        assert.equal(opened, true, "deve acionar Editar do Cartão Extra 8");
+        await page.waitForSelector("form.sheet");
+      };
+
+      await triggerCardEdit();
+      await page.clickButton("Cancelar", "form.sheet");
+      await page.waitFor('!document.querySelector("form.sheet")');
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const cardScrollAfterCancel = await page.evaluate<number>("window.scrollY");
+      assert.ok(
+        Math.abs(cardScrollAfterCancel - cardScrollBefore) <= 10,
+        `rolagem após cancelar edição de cartão deveria ficar perto de ${cardScrollBefore}, ficou em ${cardScrollAfterCancel}`,
+      );
+
+      await triggerCardEdit();
+      await page.fill('form.sheet input[name="name"]', "Cartão Extra 8 Editado");
+      await page.click('form.sheet button[type="submit"]');
+      await page.waitFor('!document.querySelector("form.sheet")');
+      await page.waitForText("Cartão Extra 8 Editado");
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      const cardScrollAfterSave = await page.evaluate<number>("window.scrollY");
+      assert.ok(
+        Math.abs(cardScrollAfterSave - cardScrollBefore) <= 10,
+        `rolagem após salvar edição de cartão deveria ficar perto de ${cardScrollBefore}, ficou em ${cardScrollAfterSave}`,
+      );
+
+      assert.deepEqual(page.errors, []);
+    } finally {
+      await page.close();
+      await server.close();
+    }
+  });
 });

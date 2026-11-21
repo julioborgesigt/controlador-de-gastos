@@ -111,10 +111,13 @@ export async function boot() {
 
 function renderApp() {
   const focusBefore = captureFocusSnapshot();
-  const lockedScroll = document.body.classList.contains("sheet-open")
+  const isSheetLocked = document.body.classList.contains("sheet-open");
+  const lockedScroll = isSheetLocked
     ? Number(document.body.dataset.scrollLock || 0)
     : window.scrollY;
-  const contentScroll = document.querySelector(".content")?.scrollTop || 0;
+  const contentScroll = isSheetLocked && document.body.dataset.contentScrollLock !== undefined
+    ? Number(document.body.dataset.contentScrollLock || 0)
+    : (document.querySelector(".content")?.scrollTop || 0);
   const sheetScroll = document.querySelector(".sheet")?.scrollTop || 0;
   const viewKey = `${state.authed}:${state.monthId}:${state.view}:${state.cardFocus || ""}:${state.summaryFocus || ""}`;
   const keepPlace = state.viewKey === viewKey;
@@ -125,14 +128,14 @@ function renderApp() {
     patchChildren(root, [bootMark()]);
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
-    syncOverlayHistory();
+    syncOverlayHistory(0);
     return;
   }
   if (state.authed && !state.data && !state.needsPeriod && !state.choosing) {
     patchChildren(root, [bootMark(true)]);
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
-    syncOverlayHistory();
+    syncOverlayHistory(0);
     return;
   }
   if (!state.authed) {
@@ -140,7 +143,7 @@ function renderApp() {
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
-    syncOverlayHistory();
+    syncOverlayHistory(0);
     return;
   }
   if (state.needsPeriod || state.setupGuide) {
@@ -148,7 +151,7 @@ function renderApp() {
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
-    syncOverlayHistory();
+    syncOverlayHistory(0);
     return;
   }
   if (state.devicePrompt) {
@@ -156,7 +159,7 @@ function renderApp() {
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
-    syncOverlayHistory();
+    syncOverlayHistory(0);
     return;
   }
   if (state.choosing) {
@@ -164,7 +167,7 @@ function renderApp() {
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);
     applyFocusAfterRender(focusBefore, false);
-    syncOverlayHistory();
+    syncOverlayHistory(0);
     return;
   }
   const nextNodes = [shell()];
@@ -177,17 +180,25 @@ function renderApp() {
   patchChildren(root, nextNodes);
   const nextSheet = document.querySelector(".sheet");
   if (nextSheet) nextSheet.scrollTop = sheetScroll;
-  if (state.sheet || state.confirm || state.expenseInfo || state.help || state.costDetail || state.tabIntro) lockPage(keepPlace ? lockedScroll : 0);
-  else unlockPage(keepPlace ? lockedScroll : 0);
+  const targetScroll = keepPlace ? lockedScroll : 0;
+  const targetContentScroll = keepPlace ? contentScroll : 0;
+  const hasModal = Boolean(state.sheet || state.confirm || state.expenseInfo || state.help || state.costDetail || state.tabIntro);
+  if (hasModal) {
+    // Registra o estado do overlay no histórico ANTES de fixar o body, evitando que o navegador salve scrollY=0.
+    syncOverlayHistory();
+    lockPage(targetScroll, targetContentScroll);
+  } else {
+    unlockPage(targetScroll);
+  }
   state.viewKey = viewKey;
   const nextContent = document.querySelector(".content");
   if (nextContent) {
-    if (keepPlace && onDesktop()) nextContent.scrollTop = contentScroll;
+    if (keepPlace && onDesktop()) nextContent.scrollTop = targetContentScroll;
     else if (!keepPlace) nextContent.scrollTop = 0;
   }
   applyFocusAfterRender(focusBefore, true);
   queueMicrotask(centerMonthChip);
-  syncOverlayHistory();
+  if (!hasModal) syncOverlayHistory(targetScroll);
 }
 
 function shell() {
