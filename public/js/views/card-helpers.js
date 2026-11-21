@@ -87,20 +87,6 @@ export function cardManageRow(card, amount, expenses) {
   });
 }
 
-export function cardTools(card) {
-  const blocked = Number(card.expenseCount) > 0;
-  return el("div", { class: "item-actions" }, [
-    el("button", { type: "button", class: "linkish", onclick: () => openEditCard(card) }, "Editar"),
-    el("button", {
-      type: "button",
-      class: "linkish danger",
-      disabled: blocked ? "" : null,
-      title: blocked ? "Este cartão tem gastos lançados." : "Excluir cartão",
-      onclick: () => askDeleteCard(card),
-    }, "Excluir"),
-  ]);
-}
-
 function openEditCard(card) {
   state.error = "";
   state.sheet = { mode: "card", id: card.id, name: card.name, dueDay: card.dueDay ? String(card.dueDay) : "", closingDay: card.closingDay ? String(card.closingDay) : "", previousName: card.name };
