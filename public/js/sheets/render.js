@@ -29,7 +29,6 @@ export function sheet() {
   on(panel, "submit", saveSheet);
   attachSheetDrag(panel);
   if (state.error) panel.append(el("p", { class: "error", "data-key": "sheet-error" }, state.error));
-  if (state.notice) panel.append(el("p", { class: "note", "data-key": "sheet-notice" }, state.notice));
   if (!renderAccountSheet(panel, draft) && !renderPaymentSheet(panel, draft)) {
   if (draft.fromCard && draft.mode === "edit") {
     panel.append(...cardSpendFields(draft, { onDelete: () => openDeleteExpense(draft) }).filter(Boolean));

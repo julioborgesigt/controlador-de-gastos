@@ -4,6 +4,20 @@ export const root = document.querySelector("#app");
 
 export const liveRegion = document.querySelector("#live-region");
 
+export const TOAST_MS = 3000;
+
+let noticeText = "";
+let noticeSeq = 0;
+let noticeTimer = 0;
+
+export function dismissNotice() {
+  clearTimeout(noticeTimer);
+  noticeTimer = 0;
+  if (!noticeText) return;
+  noticeText = "";
+  renderSafely();
+}
+
 export const state = {
   booting: true,
   needsSetup: false,
@@ -19,7 +33,28 @@ export const state = {
   extraFilter: "all",
   data: null,
   error: "",
-  notice: "",
+  get notice() {
+    return noticeText;
+  },
+  set notice(value) {
+    clearTimeout(noticeTimer);
+    noticeTimer = 0;
+    const next = String(value || "").trim();
+    noticeText = next;
+    if (next) {
+      noticeSeq += 1;
+      const token = noticeSeq;
+      noticeTimer = setTimeout(() => {
+        if (noticeSeq !== token) return;
+        noticeTimer = 0;
+        noticeText = "";
+        renderSafely();
+      }, TOAST_MS);
+    }
+  },
+  get noticeSeq() {
+    return noticeSeq;
+  },
   busy: false,
   bootProgress: 0.12,
   showEmpty: false,
