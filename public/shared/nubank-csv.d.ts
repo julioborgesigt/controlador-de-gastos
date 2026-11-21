@@ -47,15 +47,26 @@ export type ParsedNubankCsv =
 
 export declare function parseNubankCsv(text: string, filename?: string): ParsedNubankCsv;
 
+export declare function alignInstallmentPurchaseDate(
+  purchaseDate: string,
+  invoiceMonthId: string,
+  currentInstallment: number,
+): string;
+
+export declare function normalizeNubankTextKey(value: string | null | undefined): string;
+
 export type ScheduledNubankEntry = {
   monthId: string;
   isCurrentInvoice: boolean;
   purchaseDate: string;
+  firstInvoiceMonthId: string;
   name: string;
+  normName: string;
   amountCents: number;
   installment: string | null;
   seriesId: string;
   importKey: string;
+  occurrence: number;
 };
 
 export declare function buildNubankSchedule(

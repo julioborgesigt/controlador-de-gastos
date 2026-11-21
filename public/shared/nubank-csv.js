@@ -268,7 +268,10 @@ export function parseNubankCsv(text, filename = "") {
     }
     const parsedTitle = parseInstallmentTitle(rawTitle);
     const normName = normalizeTextKey(parsedTitle.name);
-    const occKey = `${purchaseDate}|${normName}|${amountCents}|${parsedTitle.currentInstallment}/${parsedTitle.totalInstallments}`;
+    const isInstallment = parsedTitle.totalInstallments > 1;
+    const occKey = isInstallment
+      ? `${normName}|${amountCents}|${parsedTitle.currentInstallment}/${parsedTitle.totalInstallments}`
+      : `${purchaseDate}|${normName}|${amountCents}|1/1`;
     const occurrence = (occurrenceCounts.get(occKey) || 0) + 1;
     occurrenceCounts.set(occKey, occurrence);
 
@@ -311,30 +314,77 @@ export function parseNubankCsv(text, filename = "") {
   };
 }
 
+function monthDiff(fromMonthId, toMonthId) {
+  const from = /^(\d{4})-(\d{2})$/.exec(String(fromMonthId || ""));
+  const to = /^(\d{4})-(\d{2})$/.exec(String(toMonthId || ""));
+  if (!from || !to) return 0;
+  return (Number(to[1]) - Number(from[1])) * 12 + (Number(to[2]) - Number(from[2]));
+}
+
+function shiftIsoDateMonths(isoDate, deltaMonths) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(isoDate || ""));
+  if (!match || !deltaMonths) return String(isoDate || "");
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const probe = new Date(Date.UTC(year, month - 1 + deltaMonths, 1));
+  const targetYear = probe.getUTCFullYear();
+  const targetMonth = probe.getUTCMonth() + 1;
+  const lastDay = new Date(Date.UTC(targetYear, targetMonth, 0)).getUTCDate();
+  const clampedDay = Math.min(day, lastDay);
+  return `${targetYear}-${String(targetMonth).padStart(2, "0")}-${String(clampedDay).padStart(2, "0")}`;
+}
+
+export function alignInstallmentPurchaseDate(purchaseDate, invoiceMonthId, currentInstallment) {
+  const paidBefore = Math.max(0, Number(currentInstallment || 1) - 1);
+  if (paidBefore <= 0) return String(purchaseDate || "");
+  const diff = monthDiff(String(purchaseDate || "").slice(0, 7), invoiceMonthId);
+  // Quando o Nubank exporta a data de lançamento da parcela atual (ex.: 28/09 na parcela 9/12 de nov/26
+  // e 29/10 na parcela 10/12 de dez/26), recuamos pela quantidade de parcelas já pagas para alinhar à 1ª parcela.
+  if (diff < paidBefore) {
+    return shiftIsoDateMonths(purchaseDate, -paidBefore);
+  }
+  return String(purchaseDate || "");
+}
+
+export function normalizeNubankTextKey(value) {
+  return normalizeTextKey(value);
+}
+
 export function buildNubankSchedule(items, invoiceMonthId, cardLabel) {
   const cardNorm = normalizeTextKey(cardLabel || "nubank") || "nubank";
   const entries = [];
   for (const item of items) {
+    const isInstallment = item.totalInstallments > 1;
     const remaining = Math.max(1, item.totalInstallments - item.currentInstallment + 1);
-    const seriesId = item.totalInstallments > 1
-      ? `nb-ser:${cardNorm}:${item.purchaseDate}:${item.normName}:${item.amountCents}:${item.totalInstallments}:${item.occurrence}`
+    const firstInvoiceMonthId = isInstallment
+      ? addMonths(invoiceMonthId, -(item.currentInstallment - 1))
+      : invoiceMonthId;
+    const alignedPurchaseDate = isInstallment
+      ? alignInstallmentPurchaseDate(item.purchaseDate, invoiceMonthId, item.currentInstallment)
+      : item.purchaseDate;
+    const seriesId = isInstallment
+      ? `nb-ser:${cardNorm}:${firstInvoiceMonthId}:${item.normName}:${item.amountCents}:${item.totalInstallments}:${item.occurrence}`
       : "";
     for (let offset = 0; offset < remaining; offset += 1) {
       const partNumber = item.currentInstallment + offset;
       const monthId = addMonths(invoiceMonthId, offset);
-      const installment = item.totalInstallments > 1 ? `${partNumber}/${item.totalInstallments}` : null;
-      const importKey = item.totalInstallments > 1
-        ? `nb:p:${cardNorm}:${item.purchaseDate}:${item.normName}:${item.amountCents}:${partNumber}/${item.totalInstallments}:${item.occurrence}`
+      const installment = isInstallment ? `${partNumber}/${item.totalInstallments}` : null;
+      const importKey = isInstallment
+        ? `nb:p:${cardNorm}:${firstInvoiceMonthId}:${item.normName}:${item.amountCents}:${partNumber}/${item.totalInstallments}:${item.occurrence}`
         : `nb:s:${cardNorm}:${invoiceMonthId}:${item.purchaseDate}:${item.normName}:${item.amountCents}:${item.occurrence}`;
       entries.push({
         monthId,
         isCurrentInvoice: offset === 0,
-        purchaseDate: item.purchaseDate,
+        purchaseDate: alignedPurchaseDate,
+        firstInvoiceMonthId,
         name: item.name,
+        normName: item.normName,
         amountCents: item.amountCents,
         installment,
         seriesId,
         importKey,
+        occurrence: item.occurrence,
       });
     }
   }
