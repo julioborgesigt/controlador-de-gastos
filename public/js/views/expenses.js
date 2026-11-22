@@ -15,7 +15,7 @@ import {
   referenceMonthFrom,
   shortMonthLabel,
 } from "../../format.js";
-import { rememberMonth, request } from "../api.js";
+import { clearMonthCache, rememberMonth, request } from "../api.js";
 import { askConfirm } from "../dialogs/confirm.js";
 import {
   cardPartialCents,
@@ -472,6 +472,33 @@ export function toggleExpenseSelection(expenseId) {
   render();
 }
 
+export function startBulkDeleteExpenses() {
+  const selectedIds = [...state.selectedExpenses];
+  if (!selectedIds.length) return;
+  const byId = new Map((state.data?.expenses || []).map((expense) => [expense.id, expense]));
+  const visibleOrder = [...new Set(state.selectableIds || [])];
+  const orderedIds = [
+    ...visibleOrder.filter((id) => state.selectedExpenses.has(id)),
+    ...selectedIds.filter((id) => !visibleOrder.includes(id)),
+  ];
+  const allItems = orderedIds.map((id) => byId.get(id)).filter(Boolean);
+  const withFuture = allItems.filter((expense) => Number(expense.futureInstallmentCount || 0) > 0);
+  if (!withFuture.length) {
+    state.bulkDeleteFlow = null;
+    askConfirm("delete-expenses-bulk");
+    return;
+  }
+  state.bulkDeleteFlow = {
+    step: "alert",
+    index: 0,
+    allIds: orderedIds,
+    allItems,
+    withFuture,
+    decisions: {},
+  };
+  askConfirm("delete-expenses-bulk-installments");
+}
+
 export function selectionBar() {
   const count = state.selectedExpenses.size;
   if (!count || !editable()) return "";
@@ -500,27 +527,38 @@ export function selectionBar() {
         type: "button",
         class: "danger",
         disabled: state.busy ? "" : null,
-        onclick: () => askConfirm("delete-expenses-bulk"),
+        onclick: startBulkDeleteExpenses,
       }, `Excluir (${count})`),
     ]),
   ]);
 }
 
-export async function deleteSelectedExpenses() {
+export async function deleteSelectedExpenses(forwardIds = []) {
   const ids = [...state.selectedExpenses];
   if (!ids.length) return;
+  const cleanForwardIds = Array.isArray(forwardIds)
+    ? forwardIds.filter((id) => state.selectedExpenses.has(id))
+    : [];
   state.error = "";
   setWorking(true, "Excluindo...");
   try {
     const data = await request("/api/expenses/bulk-delete", {
       method: "POST",
-      body: { ids, monthId: state.monthId },
+      body: { ids, forwardIds: cleanForwardIds, monthId: state.monthId },
     });
     state.selectedExpenses.clear();
+    state.bulkDeleteFlow = null;
+    if (cleanForwardIds.length > 0) clearMonthCache();
     state.data = data;
     rememberMonth(data);
     const removed = Number(data?.deletedCount || ids.length);
-    state.notice = removed === 1 ? "Excluí 1 gasto selecionado." : `Excluí ${removed} gastos selecionados.`;
+    const futureRemoved = Number(data?.futureDeletedCount || 0);
+    const currentRemoved = Math.max(1, removed - futureRemoved);
+    state.notice = futureRemoved > 0
+      ? `Excluí ${currentRemoved} ${currentRemoved === 1 ? "gasto" : "gastos"} deste mês e ${futureRemoved} ${futureRemoved === 1 ? "parcela seguinte" : "parcelas seguintes"}.`
+      : removed === 1
+        ? "Excluí 1 gasto selecionado."
+        : `Excluí ${removed} gastos selecionados.`;
   } catch (error) {
     state.error = messageOf(error);
   } finally {
@@ -574,6 +612,8 @@ export function openDeleteExpense(expense) {
     name: expense.name,
     section: expense.section,
     scope: cardSurprise ? "forward" : "month",
+    futureInstallmentCount: Number(expense.futureInstallmentCount || 0),
+    futureMonthIds: Array.isArray(expense.futureMonthIds) ? expense.futureMonthIds : [],
   };
   state.error = "";
   render();
@@ -586,6 +626,7 @@ export async function deleteExpenseNow(expense, scope = "month") {
     const query = scope === "month" ? "" : `?scope=${scope}`;
     state.data = await request(`/api/expenses/${expense.id}${query}`, { method: "DELETE" });
     if (state.sheet?.id === expense.id || state.sheet?.mode === "delete-expense") state.sheet = null;
+    if (scope !== "month") clearMonthCache();
     state.notice = scope === "series"
       ? `Excluí “${expense.name}” de todos os meses.`
       : scope === "forward"

@@ -663,4 +663,89 @@ test("POST /api/card-spend com classificação Custo de vida vinculado dispensa 
   assert.equal(updatedLiving?.partials?.[0]?.amountCents, 25000);
 });
 
+test("monthPayload informa parcelas futuras de cartão e bulk-delete exclui parcelas seguintes apenas dos itens escolhidos", async () => {
+  const env = createTestEnv();
+  const user = createClient(env, "198.51.100.78");
+  await registerUser(user, "52998224725", "bulk-forward@example.com");
+  assert.equal((await user.request("POST", "/api/period", { startMonthId: "2026-11", endMonthId: "2027-02" })).status, 200);
+  assert.equal((await user.request("POST", "/api/cards", { name: "Nubank", dueDay: 5, closingDay: 26 })).status, 201);
+
+  assert.equal((await user.request("POST", "/api/card-spend", {
+    name: "Notebook",
+    amountCents: 30000,
+    classification: "planejado",
+    cardLabel: "Nubank",
+    invoiceMonthId: "2026-11",
+    purchaseDate: "2026-11-02",
+    installmentCount: 3,
+    installmentsPaid: 0,
+    amountMode: "installment",
+  })).status, 201);
+
+  assert.equal((await user.request("POST", "/api/card-spend", {
+    name: "Curso",
+    amountCents: 15000,
+    classification: "planejado",
+    cardLabel: "Nubank",
+    invoiceMonthId: "2026-11",
+    purchaseDate: "2026-11-03",
+    installmentCount: 2,
+    installmentsPaid: 0,
+    amountMode: "installment",
+  })).status, 201);
+
+  assert.equal((await user.request("POST", "/api/card-spend", {
+    name: "Café",
+    amountCents: 2000,
+    classification: "imprevisto",
+    cardLabel: "Nubank",
+    invoiceMonthId: "2026-11",
+    purchaseDate: "2026-11-04",
+  })).status, 201);
+
+  const nov = await user.request("GET", "/api/months/2026-11");
+  const novExpenses = nov.json.expenses as Array<{
+    id: string;
+    name: string;
+    futureInstallmentCount?: number;
+    futureMonthIds?: string[];
+  }>;
+  const notebook = novExpenses.find((e) => e.name === "Notebook")!;
+  const curso = novExpenses.find((e) => e.name === "Curso")!;
+  const cafe = novExpenses.find((e) => e.name === "Café")!;
+
+  assert.equal(notebook.futureInstallmentCount, 2);
+  assert.deepEqual(notebook.futureMonthIds, ["2026-12", "2027-01"]);
+  assert.equal(curso.futureInstallmentCount, 1);
+  assert.deepEqual(curso.futureMonthIds, ["2026-12"]);
+  assert.equal(cafe.futureInstallmentCount, 0);
+  assert.deepEqual(cafe.futureMonthIds, []);
+
+  // Na última parcela (jan/27), Notebook 3/3 não deve acusar parcelas futuras
+  const janBefore = await user.request("GET", "/api/months/2027-01");
+  const janNotebook = (janBefore.json.expenses as Array<{ name: string; futureInstallmentCount?: number }>)
+    .find((e) => e.name === "Notebook");
+  assert.equal(janNotebook?.futureInstallmentCount, 0);
+
+  // Exclui os 3 em lote em nov/26, mas pede exclusão das parcelas seguintes SOMENTE para Notebook
+  const bulk = await user.request("POST", "/api/expenses/bulk-delete", {
+    ids: [notebook.id, curso.id, cafe.id],
+    forwardIds: [notebook.id],
+    monthId: "2026-11",
+  });
+  assert.equal(bulk.status, 200);
+  assert.equal(bulk.json.deletedCount, 5);
+  assert.equal(bulk.json.futureDeletedCount, 2);
+  assert.equal((bulk.json.expenses as unknown[]).length, 0);
+
+  // Dezembro mantém Curso (2/2) e remove Notebook (2/3)
+  const decAfter = await user.request("GET", "/api/months/2026-12");
+  const decNames = (decAfter.json.expenses as Array<{ name: string }>).map((e) => e.name);
+  assert.deepEqual(decNames, ["Curso"]);
+
+  // Janeiro remove Notebook (3/3)
+  const janAfter = await user.request("GET", "/api/months/2027-01");
+  assert.equal((janAfter.json.expenses as unknown[]).length, 0);
+});
+
 

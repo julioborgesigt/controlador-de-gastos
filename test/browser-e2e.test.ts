@@ -1064,4 +1064,104 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       await server.close();
     }
   });
+
+  test("exclusão em lote no cartão alerta itens com parcelas futuras e pergunta um a um se deseja excluir as próximas", { timeout: 35_000 }, async () => {
+    const server = await startAppServer();
+    const page = await browser!.newPage(server.baseUrl);
+    try {
+      await completeOnboarding(page);
+
+      // Cria 2 compras parceladas (Notebook 1/3 e Curso 1/2) e 1 à vista (Café) em nov/2026 no Nubank
+      await page.evaluate(`(async () => {
+        const items = [
+          { name: "Notebook", amountCents: 30000, classification: "planejado", purchaseDate: "2026-11-02", installmentCount: 3, installmentsPaid: 0, amountMode: "installment" },
+          { name: "Curso", amountCents: 15000, classification: "planejado", purchaseDate: "2026-11-03", installmentCount: 2, installmentsPaid: 0, amountMode: "installment" },
+          { name: "Café", amountCents: 2000, classification: "planejado", purchaseDate: "2026-11-04" },
+        ];
+        for (const item of items) {
+          const res = await fetch("/api/card-spend", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ invoiceMonthId: "2026-11", cardLabel: "Nubank", ...item }),
+          });
+          if (!res.ok) throw new Error("Falha ao criar " + item.name + ": " + await res.text());
+        }
+      })()`);
+
+      await page.goto(server.baseUrl);
+      await page.waitForSelector('nav.nav button[data-key="cartoes"]');
+      await page.click('nav.nav button[data-key="cartoes"]');
+      await dismissTabIntroIfOpen(page);
+      const rowVisible = await page.evaluate<boolean>('Boolean(document.querySelector(".card-manage .item-main"))');
+      if (!rowVisible) {
+        await page.clickButton("Faturas a serem pagas");
+      }
+      await page.waitForSelector(".card-manage .item-main");
+      await page.click(".card-manage .item-main");
+      await page.waitForText("Notebook");
+      await page.waitForText("Curso");
+      await page.waitForText("Café");
+
+      // Ativa seleção múltipla via pressão longa e seleciona todos os 3 itens
+      await page.evaluate(`(() => {
+        const card = [...document.querySelectorAll("article.item")].find((el) => (el.textContent || "").includes("Notebook"));
+        if (!card) throw new Error("Notebook não encontrado");
+        card.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0, pointerType: "touch", clientX: 60, clientY: 60 }));
+      })()`);
+      await page.waitForSelector(".select-bar");
+      await new Promise((resolve) => setTimeout(resolve, 650));
+      await page.clickButton("Todos", ".select-bar");
+      await page.waitForText("3 selecionados");
+
+      // Clica em Excluir (3) -> deve abrir o alerta listando os 2 itens com parcelas futuras (Notebook e Curso), sem listar Café
+      await page.clickButton("Excluir (3)", ".select-bar");
+      await page.waitForSelector('.dialog[data-bulk-step="alert"]');
+      const alertText = await page.evaluate<string>('document.querySelector(".dialog")?.innerText || ""');
+      assert.ok(alertText.includes("Parcelas nos próximos meses"), `esperava alerta de parcelas futuras, recebeu: ${alertText}`);
+      assert.ok(alertText.includes("Notebook"), "alerta deve citar Notebook");
+      assert.ok(alertText.includes("Curso"), "alerta deve citar Curso");
+      assert.equal(alertText.includes("Café"), false, "alerta não deve listar item à vista sem parcelas futuras");
+
+      // Avança para perguntas um a um: exclui futuras de Notebook, mantém futuras de Curso
+      await page.clickButton("Revisar um a um", ".dialog");
+      for (let i = 0; i < 2; i += 1) {
+        await page.waitForSelector('.dialog[data-bulk-step="ask"]');
+        const focusTitle = await page.evaluate<string>('document.querySelector(".bulk-future-focus strong")?.textContent || ""');
+        if (focusTitle.includes("Notebook")) {
+          await page.clickButton("Excluir também as próximas", ".dialog");
+        } else if (focusTitle.includes("Curso")) {
+          await page.clickButton("Somente este mês", ".dialog");
+        } else {
+          throw new Error(`Item inesperado no passo ${i + 1}: ${focusTitle}`);
+        }
+      }
+
+      // Resumo final confirma decisões antes de excluir
+      await page.waitForSelector('.dialog[data-bulk-step="summary"]');
+      const summaryText = await page.evaluate<string>('document.querySelector(".dialog")?.innerText || ""');
+      assert.ok(summaryText.includes("Este mês + 2 seguintes"), `resumo deveria mostrar +2 seguintes para Notebook: ${summaryText}`);
+      assert.ok(summaryText.includes("Somente este mês"), `resumo deveria mostrar Somente este mês para Curso: ${summaryText}`);
+      assert.ok(summaryText.includes("+ 1 outro valor selecionado"), `resumo deveria mencionar Café: ${summaryText}`);
+
+      await page.clickButton("Confirmar exclusão", ".dialog");
+      await page.waitFor('!document.querySelector(".dialog")');
+      await page.waitForText("Excluí 3 gastos deste mês e 2 parcelas seguintes.");
+      await page.waitForText("Nenhum gasto neste cartão neste mês.");
+
+      // Confirma em Dezembro/2026: Curso (2/2) permanece, Notebook (2/3) foi excluído
+      await page.click('div.months button[data-key="2026-12"]');
+      await page.waitForText("Curso");
+      const decBody = await page.evaluate<string>('document.body?.innerText || ""');
+      assert.equal(decBody.includes("Notebook"), false, "Notebook 2/3 deveria ter sido excluído de dez/2026");
+
+      // Confirma em Janeiro/2027: Notebook (3/3) também foi excluído
+      await page.click('div.months button[data-key="2027-01"]');
+      await page.waitForText("Nenhum gasto neste cartão neste mês.");
+
+      assert.deepEqual(page.errors, []);
+    } finally {
+      await page.close();
+      await server.close();
+    }
+  });
 });
