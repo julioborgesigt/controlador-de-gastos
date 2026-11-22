@@ -257,9 +257,18 @@ export function setWorking(active, label = "Salvando...") {
   document.body.classList.toggle("is-working", active);
   document.body.setAttribute("aria-busy", active ? "true" : "false");
   const current = document.querySelector("#working");
+  const backdrop = document.querySelector("#working-backdrop");
   if (!active) {
     current?.remove();
+    backdrop?.remove();
     return;
+  }
+  if (!backdrop) {
+    document.body.append(el("div", {
+      id: "working-backdrop",
+      class: "working-backdrop",
+      "aria-hidden": "true",
+    }));
   }
   if (current) {
     const text = current.querySelector(".working-label");
