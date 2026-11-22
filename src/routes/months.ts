@@ -1,6 +1,8 @@
 import {
   applyBaseIncome,
   getMonth,
+  getSetting,
+  lastCsvImportBatchKey,
   listCardPurchasesInMonth,
   listMonths,
   monthPayload,
@@ -73,7 +75,10 @@ export function registerMonthRoutes(app: App): void {
     if (!scope) return c.json({ error: AUTH_ERROR }, 401);
     const monthId = c.req.param("id");
     if (!(await getMonth(c.env.DB, scope.ownerId, monthId))) return c.json({ error: "Mês não encontrado." }, 404);
-    const items = await listCardPurchasesInMonth(c.env.DB, scope.ownerId, monthId);
+    const [items, lastBatchId] = await Promise.all([
+      listCardPurchasesInMonth(c.env.DB, scope.ownerId, monthId),
+      getSetting(c.env.DB, lastCsvImportBatchKey(scope.ownerId)),
+    ]);
     const totalCents = items.reduce((sum, item) => sum + item.amountCents, 0);
     return c.json({
       monthId,
@@ -88,6 +93,7 @@ export function registerMonthRoutes(app: App): void {
         installment: item.installment,
         section: item.section,
         payment: item.payment,
+        recentlyImported: Boolean(lastBatchId && item.importBatchId === lastBatchId),
       })),
     });
   });

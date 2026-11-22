@@ -3301,4 +3301,46 @@ html[data-theme="dark"] .invoice-sort-action:focus-visible {
   }
 }
 
+/* Destaque para valores recém-adicionados na última sincronização de CSV */
+.item.csv-new {
+  background: #fffbeb;
+  box-shadow: inset 4px 0 0 #d97706;
+}
+
+.item.csv-new .amount:not(.aside) {
+  color: #92400e;
+}
+
+.item.csv-new.selected {
+  border-color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 5%, var(--card));
+}
+
+.badge.csv-new {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #f59e0b66;
+  white-space: nowrap;
+}
+
+html[data-theme="dark"] .item.csv-new {
+  background: #2b2213;
+  box-shadow: inset 4px 0 0 #f59e0b;
+}
+
+html[data-theme="dark"] .item.csv-new .amount:not(.aside) {
+  color: #fcd34d;
+}
+
+html[data-theme="dark"] .item.csv-new.selected {
+  border-color: #7aa7e8;
+  background: #1d2838;
+}
+
+html[data-theme="dark"] .badge.csv-new {
+  background: #3d2c12;
+  color: #fde68a;
+  border-color: #f59e0b55;
+}
+
 

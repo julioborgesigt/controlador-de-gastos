@@ -15,6 +15,7 @@ import {
   EXPENSE_META_SET_SQL,
   chunkIds,
   expenseMetaParams,
+  lastCsvImportBatchKey,
   nextSorts,
   prepareInsertExpense,
   runStatements,
@@ -257,6 +258,7 @@ export async function importNubankCsv(
   if (toInsert.length > 0) {
     const usedSorts = await nextSorts(db, input.ownerId, toInsert.map((entry) => entry.monthId));
     const createdAt = new Date().toISOString();
+    const importBatchId = crypto.randomUUID();
     const planned = input.classification === "planejado";
     const baseTrack = planned ? noteWithPlanned("", true) : "tipo:imprevisto";
 
@@ -286,11 +288,20 @@ export async function importNubankCsv(
           sortOrder: sort,
           createdAt,
           importKey: entry.importKey,
+          importBatchId,
         }),
       );
       if (entry.isCurrentInvoice) insertedCurrent += 1;
       else insertedFuture += 1;
     }
+
+    // Só avança o lote em destaque quando chegam novos valores nesta sincronização;
+    // reimportações sem novos lançamentos preservam o destaque da sincronização anterior.
+    statements.push(
+      db
+        .prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value")
+        .bind(lastCsvImportBatchKey(input.ownerId), importBatchId),
+    );
   }
 
   if (statements.length > 0) {

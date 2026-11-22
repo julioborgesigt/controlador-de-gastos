@@ -255,13 +255,21 @@ export function purchaseDetail(data) {
     children.push(el("div", { class: "list" }, group.rows.map((item) => {
       const source = cardSourceLabel(item);
       const sourceClass = source === "Planejado" ? "badge source-planned" : source === "Imprevisto" ? "badge source-extra" : "badge source-fixed";
-      return el("article", { class: "item" }, [
+      const recentlyImported = Boolean(item.recentlyImported);
+      const itemBadges = [
+        recentlyImported ? el("span", { class: "badge csv-new" }, "Novo no CSV") : "",
+        source ? el("span", { class: sourceClass }, source) : "",
+      ].filter(Boolean);
+      return el("article", {
+        class: `item${recentlyImported ? " csv-new" : ""}`,
+        "data-csv-new": recentlyImported ? "1" : undefined,
+      }, [
         el("div", { class: "item-copy" }, [
           el("strong", {}, cardChargeTitle(item)),
           ...[item.cardLabel || "Sem cartão", "Crédito"].filter(Boolean).map((line) => el("small", {}, line)),
         ]),
         el("div", { class: "item-end" }, [
-          source ? el("div", { class: "badges" }, [el("span", { class: sourceClass }, source)]) : "",
+          itemBadges.length ? el("div", { class: "badges" }, itemBadges) : "",
           el("span", { class: "amount" }, money(item.amountCents)),
         ]),
       ]);

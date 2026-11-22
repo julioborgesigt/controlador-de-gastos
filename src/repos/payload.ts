@@ -107,8 +107,10 @@ export async function monthPayload(db: D1Database, ownerId: string, monthId: str
     attachPartials(db, ownerId, rawExpenses),
     livingInvoiceCharges(db, ownerId, fixedIds),
   ]);
+  const lastBatchId = ownerSettings.lastCsvImportBatchId;
   const expensesWithCharges = expenses.map((expense) => ({
     ...expense,
+    recentlyImported: Boolean(lastBatchId && expense.importBatchId === lastBatchId),
     charges: charges.get(expense.id) ?? [],
     inOtherMonths: existsInOtherMonth(expense, otherRefs),
   }));

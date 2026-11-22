@@ -240,6 +240,7 @@ export async function saveNubankImportSheet(draft) {
     throw new Error(`${detail}${code}`);
   }
   const summary = data.summary || {};
+  clearMonthCache();
   state.data = data;
   if (data.month?.id) {
     state.monthId = data.month.id;

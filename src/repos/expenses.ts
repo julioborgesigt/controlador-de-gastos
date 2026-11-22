@@ -18,7 +18,7 @@ import {
   type Payment,
   type Section,
 } from "../domain.ts";
-import { EXPENSE_META_SET_SQL, baseIncomeKey, chunkIds, expenseMetaParams, getSetting, nextSorts, prepareInsertExpense, runStatements, sqlMarks, themeKey } from "./core.ts";
+import { EXPENSE_META_SET_SQL, baseIncomeKey, chunkIds, expenseMetaParams, getSetting, lastCsvImportBatchKey, nextSorts, prepareInsertExpense, runStatements, sqlMarks, themeKey } from "./core.ts";
 import { ensureMonths, listMonths } from "./months.ts";
 import { getExpense, listFixedExpenses, listSectionExpenses } from "./expenses-read.ts";
 import { deletePartialsForExpenses } from "./partials.ts";
@@ -389,7 +389,11 @@ export async function resetOwnerData(
       db.prepare("DELETE FROM income_extras WHERE owner_id = ?").bind(ownerId),
       db.prepare("DELETE FROM months WHERE owner_id = ?").bind(ownerId),
       db.prepare("DELETE FROM cards WHERE owner_id = ?").bind(ownerId),
-      db.prepare("DELETE FROM settings WHERE key = ? OR key = ?").bind(baseIncomeKey(ownerId), themeKey(ownerId)),
+      db.prepare("DELETE FROM settings WHERE key IN (?, ?, ?)").bind(
+        baseIncomeKey(ownerId),
+        themeKey(ownerId),
+        lastCsvImportBatchKey(ownerId),
+      ),
     ]);
     return { ok: true, ids: [], wiped: true };
   }
