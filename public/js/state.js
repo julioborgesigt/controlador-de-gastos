@@ -145,6 +145,7 @@ export const state = {
   periodDraft: null,
   confirmReset: null,
   confirmTarget: null,
+  bulkDeleteFlow: null,
   resetReadyAt: 0,
   resetTimer: 0,
   offline: false,

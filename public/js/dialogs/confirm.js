@@ -1,3 +1,4 @@
+import { cardChargeTitle, money, shortMonthLabel } from "../../format.js";
 import { leavePage } from "../a11y.js";
 import { executeRemoveShare, logout } from "../account.js";
 import { executeRemovePasskey } from "../auth.js";
@@ -8,6 +9,18 @@ import { render, state } from "../state.js";
 import { removeCard, undoCardPayment } from "../views/card-helpers.js";
 import { deleteExpenseNow, deleteSelectedExpenses, patchExpense } from "../views/expenses.js";
 import { reopenLivingExpense } from "./expense-info.js";
+
+function formatFutureMonths(monthIds) {
+  const list = Array.isArray(monthIds) ? monthIds.filter(Boolean) : [];
+  if (!list.length) return "";
+  if (list.length <= 3) return list.map(shortMonthLabel).join(", ");
+  return `${shortMonthLabel(list[0])} a ${shortMonthLabel(list[list.length - 1])}`;
+}
+
+function futureCountLabel(count, months) {
+  const base = count === 1 ? "+1 parcela nos próximos meses" : `+${count} parcelas nos próximos meses`;
+  return months ? `${base} (${months})` : base;
+}
 
 export function askConfirm(kind) {
   state.accountMenu = false;
@@ -154,7 +167,179 @@ function hasCountdown(kind) {
   return kind === "reset" || kind === "delete-card";
 }
 
+function bulkInstallmentDialog() {
+  const flow = state.bulkDeleteFlow;
+  if (!flow || !Array.isArray(flow.withFuture) || !flow.withFuture.length) return null;
+  const month = state.data?.month?.label || "este mês";
+  const totalSelected = flow.allItems.length;
+  const futureItems = flow.withFuture;
+  const othersCount = Math.max(0, totalSelected - futureItems.length);
+  const content = [
+    el("button", {
+      class: "dialog-close",
+      type: "button",
+      "aria-label": "Fechar",
+      onclick: closeConfirm,
+    }, "×"),
+  ];
+
+  if (flow.step === "alert") {
+    const intro = totalSelected === 1
+      ? "O valor selecionado possui parcelas lançadas nos próximos meses:"
+      : futureItems.length === 1
+        ? `Dos ${totalSelected} valores selecionados, 1 possui parcelas lançadas nos próximos meses:`
+        : `Dos ${totalSelected} valores selecionados, ${futureItems.length} possuem parcelas lançadas nos próximos meses:`;
+    content.push(
+      el("span", { class: "bulk-future-pill warn" }, "Atenção · Parcelas futuras"),
+      el("h2", { id: "confirm-title" }, "Parcelas nos próximos meses"),
+      el("p", {}, intro),
+      el("div", { class: "bulk-future-list" }, futureItems.map((item) => {
+        const count = Number(item.futureInstallmentCount || 0);
+        const months = formatFutureMonths(item.futureMonthIds);
+        return el("div", { class: "bulk-future-row" }, [
+          el("div", { class: "bulk-future-copy" }, [
+            el("strong", {}, cardChargeTitle(item)),
+            el("small", {}, `${item.installment ? `Parcela ${item.installment} · ` : ""}${money(item.amountCents)}`),
+          ]),
+          el("span", { class: "badge cross-month" }, count === 1 ? `+1 parcela${months ? ` (${months})` : ""}` : `+${count} parcelas${months ? ` (${months})` : ""}`),
+        ]);
+      })),
+      el("p", { class: "muted bulk-future-note" }, "Vamos perguntar um a um se você deseja excluir também as parcelas dos meses seguintes."),
+      el("div", { class: "actions" }, [
+        el("button", { class: "secondary", type: "button", onclick: closeConfirm }, "Cancelar"),
+        el("button", {
+          class: "primary",
+          type: "button",
+          onclick: () => {
+            flow.step = "ask";
+            flow.index = 0;
+            render();
+          },
+        }, "Revisar um a um"),
+      ]),
+    );
+  } else if (flow.step === "ask") {
+    const idx = Math.min(Math.max(0, Number(flow.index || 0)), futureItems.length - 1);
+    const item = futureItems[idx];
+    const count = Number(item.futureInstallmentCount || 0);
+    const months = formatFutureMonths(item.futureMonthIds);
+    const choose = (decision) => {
+      flow.decisions[item.id] = decision;
+      if (idx + 1 < futureItems.length) {
+        flow.index = idx + 1;
+      } else {
+        flow.step = "summary";
+      }
+      render();
+    };
+    content.push(
+      el("span", { class: "bulk-future-pill" }, `Parcelado ${idx + 1} de ${futureItems.length}`),
+      el("h2", { id: "confirm-title" }, "Excluir parcelas seguintes?"),
+      el("div", { class: "bulk-future-focus" }, [
+        el("strong", {}, cardChargeTitle(item)),
+        el("small", {}, `${item.installment ? `Parcela ${item.installment} · ` : ""}${money(item.amountCents)}`),
+        el("span", { class: "badge cross-month" }, futureCountLabel(count, months)),
+      ]),
+      el("p", {}, `Deseja excluir também ${count === 1 ? "a parcela do próximo mês" : `as ${count} parcelas dos meses seguintes`} de “${item.name}”, ou apagar somente em ${month}?`),
+      el("div", { class: "bulk-future-choices" }, [
+        el("button", {
+          class: "secondary",
+          type: "button",
+          onclick: () => choose("month"),
+        }, "Somente este mês"),
+        el("button", {
+          class: "danger",
+          type: "button",
+          onclick: () => choose("forward"),
+        }, "Excluir também as próximas"),
+      ]),
+      el("div", { class: "bulk-future-foot" }, [
+        el("button", {
+          class: "linkish",
+          type: "button",
+          onclick: () => {
+            if (idx > 0) flow.index = idx - 1;
+            else flow.step = "alert";
+            render();
+          },
+        }, "Voltar"),
+        el("button", { class: "linkish", type: "button", onclick: closeConfirm }, "Cancelar"),
+      ]),
+    );
+  } else {
+    const forwardIds = futureItems.filter((item) => flow.decisions[item.id] === "forward").map((item) => item.id);
+    content.push(
+      el("span", { class: "bulk-future-pill" }, "Confirmação final"),
+      el("h2", { id: "confirm-title" }, "Resumo da exclusão"),
+      el("p", {}, `Confira o que será excluído antes de confirmar (esta ação é permanente):`),
+      el("div", { class: "bulk-future-list" }, futureItems.map((item) => {
+        const includeFuture = flow.decisions[item.id] === "forward";
+        const count = Number(item.futureInstallmentCount || 0);
+        return el("div", { class: "bulk-future-row" }, [
+          el("div", { class: "bulk-future-copy" }, [
+            el("strong", {}, cardChargeTitle(item)),
+            el("small", {}, `${item.installment ? `Parcela ${item.installment} · ` : ""}${money(item.amountCents)}`),
+          ]),
+          el("span", {
+            class: includeFuture ? "bulk-scope-tag forward" : "bulk-scope-tag month",
+          }, includeFuture
+            ? `Este mês + ${count} ${count === 1 ? "seguinte" : "seguintes"}`
+            : "Somente este mês"),
+        ]);
+      })),
+      othersCount > 0
+        ? el("p", { class: "muted bulk-future-note" }, `+ ${othersCount} ${othersCount === 1 ? "outro valor selecionado" : "outros valores selecionados"} (somente em ${month}).`)
+        : "",
+      el("div", { class: "actions" }, [
+        el("button", {
+          class: "secondary",
+          type: "button",
+          onclick: () => {
+            flow.step = "ask";
+            flow.index = futureItems.length - 1;
+            render();
+          },
+        }, "Voltar"),
+        el("button", {
+          class: "danger",
+          type: "button",
+          disabled: state.busy ? "" : null,
+          onclick: async () => {
+            state.confirm = null;
+            state.confirmTarget = null;
+            state.bulkDeleteFlow = null;
+            render();
+            await deleteSelectedExpenses(forwardIds);
+          },
+        }, "Confirmar exclusão"),
+      ]),
+    );
+  }
+
+  return el("div", {
+    class: "overlay center",
+    "data-key": "confirm",
+    role: "presentation",
+    onclick: (event) => {
+      if (event.target === event.currentTarget) closeConfirm();
+    },
+  }, [
+    el("div", {
+      class: "dialog bulk-future-dialog",
+      role: "alertdialog",
+      "aria-modal": "true",
+      "aria-labelledby": "confirm-title",
+      "data-bulk-step": flow.step,
+      tabindex: "-1",
+    }, content),
+  ]);
+}
+
 export function confirmDialog() {
+  if (state.confirm === "delete-expenses-bulk-installments") {
+    const stepped = bulkInstallmentDialog();
+    if (stepped) return stepped;
+  }
   const copy = confirmCopy();
   const wait = hasCountdown(state.confirm) ? resetSecondsLeft() : 0;
   const destructive = state.confirm === "reset"
@@ -192,6 +377,7 @@ export function closeConfirm() {
   clearTimeout(state.resetTimer);
   state.confirm = null;
   state.confirmTarget = null;
+  state.bulkDeleteFlow = null;
   render();
 }
 

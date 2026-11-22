@@ -457,12 +457,16 @@ export function registerExpenseRoutes(app: App): void {
       : [];
     if (!ids.length) return c.json({ error: "Selecione pelo menos um gasto para excluir." }, 400);
     if (ids.length > 200) return c.json({ error: "Selecione no máximo 200 gastos por vez." }, 400);
+    const forwardIds = Array.isArray(body.forwardIds)
+      ? body.forwardIds.filter((id): id is string => typeof id === "string" && id.trim().length > 0)
+      : [];
     const fallbackMonthId = isMonthId(body.monthId) ? body.monthId : "";
-    const removed = await deleteExpensesBatch(c.env.DB, writer.scope.ownerId, ids, fallbackMonthId);
+    const removed = await deleteExpensesBatch(c.env.DB, writer.scope.ownerId, ids, fallbackMonthId, forwardIds);
     if (!removed.ok) return c.json({ error: removed.error }, 404);
     return c.json({
       ...withAccess(await monthPayload(c.env.DB, writer.scope.ownerId, removed.monthId), writer.scope),
       deletedCount: removed.count,
+      futureDeletedCount: removed.futureCount,
     });
   });
 }

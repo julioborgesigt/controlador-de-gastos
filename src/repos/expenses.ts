@@ -124,26 +124,92 @@ export async function deleteExpensesBatch(
   ownerId: string,
   expenseIds: string[],
   fallbackMonthId = "",
-): Promise<{ ok: true; monthId: string; count: number } | { ok: false; error: string }> {
+  forwardExpenseIds: string[] = [],
+): Promise<{ ok: true; monthId: string; count: number; futureCount: number } | { ok: false; error: string }> {
   const uniqueIds = [...new Set(expenseIds.map((id) => String(id || "").trim()).filter(Boolean))];
   if (!uniqueIds.length) return { ok: false, error: "Selecione pelo menos um gasto para excluir." };
 
-  const selected: Array<{ id: string; month_id: string; section: string; note: string | null }> = [];
+  const selected: Array<{
+    id: string;
+    month_id: string;
+    section: string;
+    note: string | null;
+    payment: string;
+    name: string;
+    card_label: string | null;
+    created_at: string;
+  }> = [];
   for (const part of chunkIds(uniqueIds, 80)) {
     const res = await db
-      .prepare(`SELECT id, month_id, section, note FROM expenses WHERE owner_id = ? AND id IN (${sqlMarks(part)})`)
+      .prepare(`SELECT id, month_id, section, note, payment, name, card_label, created_at FROM expenses WHERE owner_id = ? AND id IN (${sqlMarks(part)})`)
       .bind(ownerId, ...part)
-      .all<{ id: string; month_id: string; section: string; note: string | null }>();
+      .all<{
+        id: string;
+        month_id: string;
+        section: string;
+        note: string | null;
+        payment: string;
+        name: string;
+        card_label: string | null;
+        created_at: string;
+      }>();
     selected.push(...(res.results ?? []));
   }
   if (!selected.length) return { ok: false, error: "Nenhum dos gastos selecionados foi encontrado." };
 
-  const ids = selected.map((item) => item.id);
+  const selectedById = new Map(selected.map((row) => [row.id, row]));
+  const forwardSet = new Set(
+    forwardExpenseIds
+      .map((id) => String(id || "").trim())
+      .filter((id) => selectedById.has(id)),
+  );
+  let futureCount = 0;
+
+  if (forwardSet.size > 0) {
+    const sections = new Set<Section>();
+    for (const id of forwardSet) {
+      const row = selectedById.get(id);
+      if (!row) continue;
+      if (row.section === "card" || row.section === "fixed" || (row.section === "extra" && row.payment === "card")) {
+        sections.add(row.section as Section);
+      }
+    }
+    const pools = new Map<Section, Awaited<ReturnType<typeof listSectionExpenses>>>();
+    for (const section of sections) {
+      pools.set(section, await listSectionExpenses(db, ownerId, section));
+    }
+    for (const id of forwardSet) {
+      const row = selectedById.get(id);
+      if (!row) continue;
+      const pool = pools.get(row.section as Section);
+      if (!pool) continue;
+      const expandedIds = expenseDeleteTargets(pool, row.id, "forward");
+      for (const targetId of expandedIds) {
+        if (selectedById.has(targetId)) continue;
+        const match = pool.find((item) => item.id === targetId);
+        if (!match) continue;
+        selectedById.set(match.id, {
+          id: match.id,
+          month_id: match.monthId,
+          section: match.section,
+          note: match.note,
+          payment: match.payment,
+          name: match.name,
+          card_label: match.cardLabel,
+          created_at: match.createdAt || "",
+        });
+        futureCount += 1;
+      }
+    }
+  }
+
+  const allTargets = [...selectedById.values()];
+  const ids = allTargets.map((item) => item.id);
   const idSet = new Set(ids);
   const monthId = fallbackMonthId || selected[0]!.month_id;
-  const extraIds = selected.filter((item) => item.section === "extra").map((item) => item.id);
-  const fixedIds = selected.filter((item) => item.section === "fixed").map((item) => item.id);
-  const deletedNotes = selected.map((item) => item.note);
+  const extraIds = allTargets.filter((item) => item.section === "extra").map((item) => item.id);
+  const fixedIds = allTargets.filter((item) => item.section === "fixed").map((item) => item.id);
+  const deletedNotes = allTargets.map((item) => item.note);
 
   const deleteStatements: D1PreparedStatement[] = [];
   for (const part of chunkIds(extraIds, 80)) {
@@ -215,7 +281,7 @@ export async function deleteExpensesBatch(
     }
     if (cleanupStatements.length) await runStatements(db, cleanupStatements);
   }
-  return { ok: true, monthId, count: ids.length };
+  return { ok: true, monthId, count: ids.length, futureCount };
 }
 
 export async function applySeriesEdit(

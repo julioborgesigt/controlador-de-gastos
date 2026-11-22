@@ -1,4 +1,4 @@
-import { money, nextMonthId } from "../../format.js";
+import { money, nextMonthId, shortMonthLabel } from "../../format.js";
 import { paymentEntries, paymentEntryLine, removePartial, undoPayments } from "../dialogs/expense-info.js";
 import { el, monthName, on } from "../dom.js";
 import { state } from "../state.js";
@@ -15,28 +15,46 @@ import {
 } from "./fields.js";
 import { closeSheet } from "./openers.js";
 
+function formatFutureMonthsShort(monthIds) {
+  const list = Array.isArray(monthIds) ? monthIds.filter(Boolean) : [];
+  if (!list.length) return "";
+  if (list.length <= 3) return list.map(shortMonthLabel).join(", ");
+  return `${shortMonthLabel(list[0])} a ${shortMonthLabel(list[list.length - 1])}`;
+}
+
 export function renderPaymentSheet(panel, draft) {
   if (draft.mode === "delete-expense") {
     const living = draft.section === "fixed";
     const futureCard = draft.section === "extra";
+    const futureCount = Number(draft.futureInstallmentCount || 0);
+    const futureMonths = formatFutureMonthsShort(draft.futureMonthIds);
+    const cardWithFuture = draft.section === "card" && futureCount > 0;
     panel.append(
       el("h2", {}, futureCard ? "Excluir imprevisto do cartão" : "Excluir despesa"),
       el("p", { class: "muted" }, futureCard
         ? `“${draft.name}” está na fatura. Dá para tirar só desta fatura ou também de todas as faturas seguintes.`
         : living
         ? `“${draft.name}” é um custo de vida. Dá para tirar só deste mês ou de todos os meses em que esta conta existe.`
+        : cardWithFuture
+        ? `“${draft.name}” possui parcelas nos próximos meses. Escolha se deseja excluir só desta fatura ou também das parcelas seguintes.`
         : `“${draft.name}” está no cartão. Dá para tirar só desta fatura ou de todos os meses em que esta despesa aparece.`),
+      futureCount > 0
+        ? el("div", { class: "bulk-future-alert" }, [
+          el("strong", {}, futureCount === 1 ? "Atenção: +1 parcela nos próximos meses" : `Atenção: +${futureCount} parcelas nos próximos meses`),
+          futureMonths ? el("small", {}, `Parcelas futuras em ${futureMonths}.`) : "",
+        ])
+        : "",
       formSection("Alcance", [
         el("div", { class: "field" }, [
           el("label", {}, "Excluir de"),
           segmented("scope", futureCard
             ? [["month", "Só este mês"], ["forward", "Este mês e os seguintes"]]
+            : cardWithFuture
+            ? [["month", "Só este mês"], ["forward", "Este mês e os seguintes"], ["series", "Todos os meses"]]
             : [["month", "Só este mês"], ["series", "Todos os meses"]], draft.scope || "month"),
         ]),
-        el("p", { class: "muted form-hint" }, futureCard
-          ? (draft.scope === "forward"
-            ? "Some desta fatura e de todas as faturas seguintes. As faturas anteriores continuam."
-            : "As outras faturas continuam com este imprevisto.")
+        el("p", { class: "muted form-hint" }, draft.scope === "forward"
+          ? "Some desta fatura e de todas as parcelas seguintes. As faturas anteriores continuam."
           : draft.scope === "series"
           ? (living
             ? "A conta some de todos os meses. O valor que já estava na fatura desses meses também sai."

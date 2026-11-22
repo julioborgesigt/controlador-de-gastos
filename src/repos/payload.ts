@@ -34,11 +34,13 @@ async function livingInvoiceCharges(
 
 type OtherMonthRef = {
   id: string;
+  monthId: string;
   section: Section;
   name: string;
   payment: string;
   cardLabel: string | null;
   note: string | null;
+  installment: string | null;
   createdAt: string | null;
 };
 
@@ -48,24 +50,28 @@ async function listOtherMonthRefs(
   monthId: string,
 ): Promise<OtherMonthRef[]> {
   const result = await db
-    .prepare("SELECT id, section, name, payment, card_label, note, created_at FROM expenses WHERE owner_id = ? AND month_id != ?")
+    .prepare("SELECT id, month_id, section, name, payment, card_label, note, installment, created_at FROM expenses WHERE owner_id = ? AND month_id != ?")
     .bind(ownerId, monthId)
     .all<{
       id: string;
+      month_id: string;
       section: Section;
       name: string;
       payment: string;
       card_label: string | null;
       note: string | null;
+      installment: string | null;
       created_at: string | null;
     }>();
   return (result.results ?? []).map((row) => ({
     id: row.id,
+    monthId: row.month_id,
     section: row.section,
     name: row.name,
     payment: row.payment,
     cardLabel: row.card_label,
     note: row.note,
+    installment: row.installment ?? null,
     createdAt: row.created_at,
   }));
 }
@@ -91,6 +97,37 @@ function existsInOtherMonth(
   });
 }
 
+function futureCardInstallments(
+  expense: {
+    id: string;
+    monthId: string;
+    section: Section;
+    name: string;
+    payment: string;
+    cardLabel: string | null;
+    note: string | null;
+    installment?: string | null;
+    createdAt?: string | null;
+  },
+  others: ReadonlyArray<OtherMonthRef>,
+): { count: number; monthIds: string[] } {
+  const cardSurprise = expense.section === "extra" && expense.payment === "card";
+  if (expense.section !== "card" && !cardSurprise) return { count: 0, monthIds: [] };
+  const matching = others.filter((other) => {
+    if (other.section !== expense.section) return false;
+    if (other.monthId <= expense.monthId) return false;
+    if (cardSurprise && other.payment !== "card") return false;
+    return sameAccount(expense, other);
+  });
+  if (!matching.length) return { count: 0, monthIds: [] };
+  const hasInstallment = Boolean(expense.installment || matching.some((item) => Boolean(item.installment)));
+  if (!hasInstallment) return { count: 0, monthIds: [] };
+  return {
+    count: matching.length,
+    monthIds: [...new Set(matching.map((item) => item.monthId))].sort(),
+  };
+}
+
 export async function monthPayload(db: D1Database, ownerId: string, monthId: string) {
   const month = await getMonth(db, ownerId, monthId);
   if (!month) return null;
@@ -108,12 +145,17 @@ export async function monthPayload(db: D1Database, ownerId: string, monthId: str
     livingInvoiceCharges(db, ownerId, fixedIds),
   ]);
   const lastBatchId = ownerSettings.lastCsvImportBatchId;
-  const expensesWithCharges = expenses.map((expense) => ({
-    ...expense,
-    recentlyImported: Boolean(lastBatchId && expense.importBatchId === lastBatchId),
-    charges: charges.get(expense.id) ?? [],
-    inOtherMonths: existsInOtherMonth(expense, otherRefs),
-  }));
+  const expensesWithCharges = expenses.map((expense) => {
+    const future = futureCardInstallments(expense, otherRefs);
+    return {
+      ...expense,
+      recentlyImported: Boolean(lastBatchId && expense.importBatchId === lastBatchId),
+      charges: charges.get(expense.id) ?? [],
+      inOtherMonths: existsInOtherMonth(expense, otherRefs),
+      futureInstallmentCount: future.count,
+      futureMonthIds: future.monthIds,
+    };
+  });
   const extraIncomeCents = incomeExtras
     .filter((extra) => extra.monthId === monthId)
     .reduce((sum, extra) => sum + extra.amountCents, 0);

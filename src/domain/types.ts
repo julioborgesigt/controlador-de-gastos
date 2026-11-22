@@ -31,6 +31,8 @@ export type Expense = {
   createdAt?: string;
   importBatchId?: string | null;
   recentlyImported?: boolean;
+  futureInstallmentCount?: number;
+  futureMonthIds?: string[];
   partials?: PartialPayment[];
 };
 
