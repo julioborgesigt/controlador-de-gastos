@@ -54,19 +54,54 @@ export function cardPresetsBlock(currentName, onPick) {
   ]);
 }
 
-export function nubankSuggestionBanner({ onImport = null, compact = false } = {}) {
+const NUBANK_CARD_TIP_DISMISSED_KEY = "nubankCardTipDismissed:v1";
+let nubankCardTipDismissedMemory = false;
+
+export function isNubankCardTipDismissed() {
+  if (nubankCardTipDismissedMemory) return true;
+  try {
+    return typeof localStorage !== "undefined" && localStorage.getItem(NUBANK_CARD_TIP_DISMISSED_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
+export function dismissNubankCardTip() {
+  nubankCardTipDismissedMemory = true;
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(NUBANK_CARD_TIP_DISMISSED_KEY, "1");
+    }
+  } catch {
+    /* segue apenas nesta sessão */
+  }
+}
+
+export function nubankSuggestionBanner({ onImport = null, onDismiss = null, compact = false } = {}) {
+  const hasActions = Boolean(onImport || onDismiss);
   return el("div", { class: "nubank-tip", "data-key": "nubank-tip" }, [
     el("strong", {}, "Importe sua fatura do Nubank em CSV"),
     el("p", { class: "muted" }, NUBANK_EXPORT_HINT),
     !compact
       ? el("p", { class: "muted" }, "O sistema lê a data de vencimento, lança as compras e projeta automaticamente as parcelas nos meses seguintes.")
       : "",
-    onImport
-      ? el("button", {
-        type: "button",
-        class: "secondary",
-        onclick: onImport,
-      }, "Importar CSV do Nubank")
+    hasActions
+      ? el("div", { class: "nubank-tip-actions" }, [
+        onImport
+          ? el("button", {
+            type: "button",
+            class: "secondary",
+            onclick: onImport,
+          }, "Importar CSV do Nubank")
+          : "",
+        onDismiss
+          ? el("button", {
+            type: "button",
+            class: "linkish nubank-tip-dismiss",
+            onclick: onDismiss,
+          }, "Não exibir mais")
+          : "",
+      ])
       : "",
   ]);
 }

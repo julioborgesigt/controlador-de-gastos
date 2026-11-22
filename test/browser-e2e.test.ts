@@ -43,11 +43,17 @@ async function completeOnboarding(page: BrowserPage) {
   await page.waitForText("Cadastrar este dispositivo?");
   await page.clickButton("Agora não");
 
-  // Guia inicial após setup (se aparecer) ou direto no shell
-  await page.waitFor('Boolean(document.querySelector(".shell") || document.body.innerText.includes("Começar"))');
-  const hasGuide = await page.evaluate<boolean>('Boolean(!document.querySelector(".shell") && document.body.innerText.includes("Começar"))');
+  // Guia inicial ("Cada aba tem um papel") e tela separada do Nubank (quando cadastrado)
+  await page.waitFor('Boolean(document.querySelector(".shell") || document.body.innerText.includes("Cada aba tem um papel"))');
+  const hasGuide = await page.evaluate<boolean>('Boolean(!document.querySelector(".shell") && document.body.innerText.includes("Cada aba tem um papel"))');
   if (hasGuide) {
-    await page.clickButton("Começar");
+    const nextLabel = await page.evaluate<string>('document.body.innerText.includes("Começar a usar") ? "Começar a usar" : "Continuar"');
+    await page.clickButton(nextLabel);
+  }
+  await page.waitFor('Boolean(document.querySelector(".shell") || document.body.innerText.includes("Importar fatura em CSV?"))');
+  const hasNubankOffer = await page.evaluate<boolean>('Boolean(!document.querySelector(".shell") && document.body.innerText.includes("Importar fatura em CSV?"))');
+  if (hasNubankOffer) {
+    await page.clickButton("Agora não");
   }
   await page.waitForSelector(".shell");
 }
@@ -1162,6 +1168,122 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
     } finally {
       await page.close();
       await server.close();
+    }
+  });
+
+  test("sugestão Nubank só aparece no onboarding para quem informa cartão Nubank, separada do guia de abas, e pode ser ocultada no cadastro de cartão", { timeout: 40_000 }, async () => {
+    // 1) Onboarding SEM cartão Nubank (Itaú): nenhuma sugestão de CSV Nubank nem na etapa de cartão nem após o guia de abas
+    const server1 = await startAppServer();
+    const page1 = await browser!.newPage(server1.baseUrl);
+    try {
+      await page1.goto("/");
+      await page1.waitForText("Criar conta");
+      await page1.fill("#cpf", "52998224725");
+      await page1.fill("#email", "sem-nubank@exemplo.com");
+      await page1.fill("#password", "segredo-forte-123");
+      await page1.fill("#confirmation", "segredo-forte-123");
+      await page1.click('button[type="submit"]');
+      await page1.waitForText("Qual período você quer planejar?");
+      await page1.clickButton("Continuar");
+      await page1.waitForText("Você usa cartão?");
+      await page1.clickButton("Tenho cartão");
+      await page1.fill("#card-name-0", "Itaú");
+      assert.equal(await page1.evaluate<boolean>('Boolean(document.querySelector(".nubank-tip"))'), false);
+      await page1.clickButton("Continuar");
+      await page1.waitForText("Qual é a renda mensal base?");
+      await page1.fill("#base-setup", "5000,00");
+      await page1.clickButton("Continuar");
+      await page1.waitForText("Como prefere ver o app?");
+      await page1.clickButton("Continuar");
+      await page1.waitForText("Cadastrar este dispositivo?");
+      await page1.clickButton("Agora não");
+
+      // Guia de abas não contém sugestão Nubank e vai direto para o app
+      await page1.waitForText("Cada aba tem um papel");
+      assert.equal(await page1.evaluate<boolean>('Boolean(document.querySelector(".nubank-tip"))'), false);
+      await page1.clickButton("Começar a usar");
+      await page1.waitForSelector(".shell");
+      assert.deepEqual(page1.errors, []);
+    } finally {
+      await page1.close();
+      await server1.close();
+    }
+
+    // 2) Onboarding COM cartão Nubank + opção "Não exibir mais" no cadastro de cartão
+    const server2 = await startAppServer();
+    const page2 = await browser!.newPage(server2.baseUrl);
+    try {
+      await page2.goto("/");
+      await page2.waitForText("Criar conta");
+      await page2.fill("#cpf", "52998224725");
+      await page2.fill("#email", "com-nubank@exemplo.com");
+      await page2.fill("#password", "segredo-forte-123");
+      await page2.fill("#confirmation", "segredo-forte-123");
+      await page2.click('button[type="submit"]');
+      await page2.waitForText("Qual período você quer planejar?");
+      await page2.clickButton("Continuar");
+      await page2.waitForText("Você usa cartão?");
+      await page2.clickButton("Tenho cartão");
+      await page2.fill("#card-name-0", "Nubank");
+      await page2.waitForSelector(".nubank-tip");
+      await page2.clickButton("Continuar");
+      await page2.waitForText("Qual é a renda mensal base?");
+      await page2.fill("#base-setup", "5000,00");
+      await page2.clickButton("Continuar");
+      await page2.waitForText("Como prefere ver o app?");
+      await page2.clickButton("Continuar");
+      await page2.waitForText("Cadastrar este dispositivo?");
+      await page2.clickButton("Agora não");
+
+      // Página que explica cada aba NÃO exibe a sugestão de CSV do Nubank
+      await page2.waitForText("Cada aba tem um papel");
+      assert.equal(await page2.evaluate<boolean>('Boolean(document.querySelector(".nubank-tip"))'), false);
+      await page2.clickButton("Continuar");
+
+      // Tela separada sugere importar CSV do Nubank somente para quem cadastrou Nubank
+      await page2.waitForText("Importar fatura em CSV?");
+      await page2.waitForSelector(".nubank-tip");
+      await page2.clickButton("Agora não");
+      await page2.waitForSelector(".shell");
+
+      // Na tela de cadastro de cartão, seleciona Nubank e clica em "Não exibir mais"
+      await page2.click('nav.nav button[data-key="cartoes"]');
+      await dismissTabIntroIfOpen(page2);
+      await page2.clickButton("Adicionar cartão");
+      await page2.waitForSelector(".card-presets");
+      await page2.clickButton("Nubank", ".card-presets");
+      await page2.waitForSelector(".nubank-tip .nubank-tip-dismiss");
+      await page2.clickButton("Não exibir mais", ".nubank-tip");
+
+      // Alerta informa que a importação continua disponível no menu do usuário
+      await page2.waitForSelector('.dialog[role="alertdialog"]');
+      const dialogText = await page2.evaluate<string>('document.querySelector(".dialog")?.innerText || ""');
+      assert.ok(dialogText.includes("menu do usuário"), `alerta deveria avisar sobre o menu do usuário: ${dialogText}`);
+      await page2.clickButton("Não exibir mais", ".dialog");
+      await page2.waitFor('!document.querySelector(".dialog")');
+      await page2.waitFor('!document.querySelector(".nubank-tip")');
+      await page2.waitForText("continua disponível no menu do usuário");
+
+      // Recarrega a página e reabre "Adicionar cartão" -> sugestão continua oculta, mas segue disponível no menu do usuário
+      await page2.goto("/");
+      await page2.waitForSelector('nav.nav button[data-key="cartoes"]');
+      await page2.click('nav.nav button[data-key="cartoes"]');
+      await dismissTabIntroIfOpen(page2);
+      await page2.clickButton("Adicionar cartão");
+      await page2.waitForSelector(".card-presets");
+      await page2.clickButton("Nubank", ".card-presets");
+      assert.equal(await page2.evaluate<boolean>('Boolean(document.querySelector(".nubank-tip"))'), false);
+      await page2.click(".sheet-close");
+      await page2.waitFor('!document.querySelector("form.sheet")');
+
+      await page2.click('header.top button[aria-label="Conta"]');
+      await page2.waitForSelector('.menu[role="menu"]');
+      await page2.waitForText("Importar fatura Nubank (CSV)");
+
+      assert.deepEqual(page2.errors, []);
+    } finally {
+      await page2.close();
+      await server2.close();
     }
   });
 });

@@ -4,6 +4,7 @@ import { executeRemoveShare, logout } from "../account.js";
 import { executeRemovePasskey } from "../auth.js";
 import { el } from "../dom.js";
 import { executeReset, settle } from "../setup.js";
+import { dismissNubankCardTip } from "../sheets/import-nubank.js";
 import { saveSheet } from "../sheets/save.js";
 import { render, state } from "../state.js";
 import { removeCard, undoCardPayment } from "../views/card-helpers.js";
@@ -152,6 +153,14 @@ function confirmCopy() {
       title: "Desfazer pagamento",
       body: `Desfazer o pagamento de “${name}”? O lançamento volta a ficar em aberto.`,
       action: "Desfazer",
+      cancel: "Cancelar",
+    };
+  }
+  if (state.confirm === "dismiss-nubank-card-tip") {
+    return {
+      title: "Não exibir mais esta sugestão?",
+      body: "A sugestão de importar CSV do Nubank não aparecerá mais no cadastro de cartão. Você ainda poderá usar essa importação sempre que precisar no menu do usuário (ícone de perfil no topo).",
+      action: "Não exibir mais",
       cancel: "Cancelar",
     };
   }
@@ -455,6 +464,12 @@ async function runConfirm() {
   if (kind === "undo-expense-paid") {
     if (target) await patchExpense(target, { paid: false });
     else render();
+    return;
+  }
+  if (kind === "dismiss-nubank-card-tip") {
+    dismissNubankCardTip();
+    state.notice = "Sugestão ocultada. A importação de CSV do Nubank continua disponível no menu do usuário.";
+    render();
     return;
   }
   if (kind === "settle") await settle("pay-remaining");
