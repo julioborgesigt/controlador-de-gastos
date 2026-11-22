@@ -29,6 +29,8 @@ export type Expense = {
   sortOrder: number;
   source: "sheet" | "user";
   createdAt?: string;
+  importBatchId?: string | null;
+  recentlyImported?: boolean;
   partials?: PartialPayment[];
 };
 

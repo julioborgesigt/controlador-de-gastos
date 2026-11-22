@@ -526,5 +526,101 @@ test("reimportar fatura deduplica automaticamente parcelas legadas gravadas com 
   assert.equal(upgraded?.import_key, "nb:p:nubank:2026-03:lite *vivoeasyanual:2000:10/12:1");
 });
 
+test("destaque de novos valores após sincronização de CSV persiste até chegarem novos valores na próxima sincronização", async () => {
+  const env = createTestEnv();
+  const user = createClient(env, "198.51.100.46");
+  assert.equal((await user.request("POST", "/api/register", {
+    cpf: "52998224725",
+    email: "csv-highlight@example.com",
+    password: "segredo-forte-123",
+    passwordConfirmation: "segredo-forte-123",
+  })).status, 201);
+  assert.equal((await user.request("POST", "/api/period", {
+    startMonthId: "2026-11",
+    endMonthId: "2027-02",
+  })).status, 200);
+  assert.equal((await user.request("POST", "/api/cards", { name: "Nubank", dueDay: 5, closingDay: 26 })).status, 201);
+
+  // Gasto manual nunca deve receber destaque de CSV
+  assert.equal((await user.request("POST", "/api/card-spend", {
+    classification: "planejado",
+    invoiceMonthId: "2026-11",
+    cardLabel: "Nubank",
+    name: "Gasto Manual",
+    amountCents: 3000,
+    purchaseDate: "2026-11-01",
+  })).status, 201);
+
+  // 1) Primeira sincronização CSV com 2 gastos (sendo 1 parcelado 1/2 projetando para dez/26)
+  const csv1 = [
+    "date,title,amount",
+    "2026-11-02,Cafeteria Antiga,18.50",
+    "2026-11-03,Loja Parcelada - Parcela 1/2,100.00",
+  ].join("\n");
+  const sync1 = await user.request("POST", "/api/import/nubank", {
+    csvText: csv1,
+    filename: "Nubank_2026-11-05.csv",
+    dueDate: "2026-11-05",
+    cardName: "Nubank",
+    classification: "imprevisto",
+  });
+  assert.equal(sync1.status, 200);
+  const nov1 = sync1.json.expenses as Array<{ name: string; recentlyImported?: boolean }>;
+  assert.equal(nov1.find((e) => e.name === "Gasto Manual")?.recentlyImported, false);
+  assert.equal(nov1.find((e) => e.name === "Cafeteria Antiga")?.recentlyImported, true);
+  assert.equal(nov1.find((e) => e.name === "Loja Parcelada")?.recentlyImported, true);
+
+  // Parcela futura projetada em dez/26 e /purchases também recebem destaque
+  const dec1 = await user.request("GET", "/api/months/2026-12");
+  const dec1Items = dec1.json.expenses as Array<{ name: string; recentlyImported?: boolean }>;
+  assert.equal(dec1Items.find((e) => e.name === "Loja Parcelada")?.recentlyImported, true);
+
+  const purchases1 = await user.request("GET", "/api/months/2026-11/purchases");
+  const p1Items = purchases1.json.items as Array<{ name: string; recentlyImported?: boolean }>;
+  assert.equal(p1Items.find((e) => e.name === "Cafeteria Antiga")?.recentlyImported, true);
+  assert.equal(p1Items.find((e) => e.name === "Gasto Manual")?.recentlyImported, false);
+
+  // 2) Re-sincronização com o MESMO CSV (sem novos valores) -> preserva o destaque anterior
+  const syncSame = await user.request("POST", "/api/import/nubank", {
+    csvText: csv1,
+    filename: "Nubank_2026-11-05.csv",
+    dueDate: "2026-11-05",
+    cardName: "Nubank",
+    classification: "imprevisto",
+  });
+  assert.equal(syncSame.status, 200);
+  assert.equal((syncSame.json.summary as Record<string, unknown>).insertedCurrent, 0);
+  const novSame = syncSame.json.expenses as Array<{ name: string; recentlyImported?: boolean }>;
+  assert.equal(novSame.find((e) => e.name === "Cafeteria Antiga")?.recentlyImported, true);
+  assert.equal(novSame.find((e) => e.name === "Loja Parcelada")?.recentlyImported, true);
+
+  // 3) Nova sincronização CSV trazendo 1 gasto novo -> destaque passa SOMENTE para o valor recém-chegado
+  const csv2 = [
+    "date,title,amount",
+    "2026-11-02,Cafeteria Antiga,18.50",
+    "2026-11-03,Loja Parcelada - Parcela 1/2,100.00",
+    "2026-11-04,Restaurante Novo,75.00",
+  ].join("\n");
+  const sync2 = await user.request("POST", "/api/import/nubank", {
+    csvText: csv2,
+    filename: "Nubank_2026-11-05.csv",
+    dueDate: "2026-11-05",
+    cardName: "Nubank",
+    classification: "imprevisto",
+  });
+  assert.equal(sync2.status, 200);
+  assert.equal((sync2.json.summary as Record<string, unknown>).insertedCurrent, 1);
+  const nov2 = sync2.json.expenses as Array<{ name: string; recentlyImported?: boolean }>;
+  assert.equal(nov2.find((e) => e.name === "Gasto Manual")?.recentlyImported, false);
+  assert.equal(nov2.find((e) => e.name === "Cafeteria Antiga")?.recentlyImported, false);
+  assert.equal(nov2.find((e) => e.name === "Loja Parcelada")?.recentlyImported, false);
+  assert.equal(nov2.find((e) => e.name === "Restaurante Novo")?.recentlyImported, true);
+
+  // Parcela antiga em dez/26 também perde o destaque após chegarem novos valores
+  const dec2 = await user.request("GET", "/api/months/2026-12");
+  const dec2Items = dec2.json.expenses as Array<{ name: string; recentlyImported?: boolean }>;
+  assert.equal(dec2Items.find((e) => e.name === "Loja Parcelada")?.recentlyImported, false);
+});
+
 
 

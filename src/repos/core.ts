@@ -58,6 +58,7 @@ export type ExpenseRow = {
   reference_month_id?: string | null;
   purchase_date?: string | null;
   finalized_zero?: number | null;
+  import_batch_id?: string | null;
 };
 
 export type ExpenseMetadata = {
@@ -137,14 +138,15 @@ export function prepareInsertExpense(
     source?: "user" | "sheet";
     createdAt: string;
     importKey?: string | null;
+    importBatchId?: string | null;
   },
 ): D1PreparedStatement {
   return db
     .prepare(
       `INSERT INTO expenses
         (id, owner_id, month_id, name, section, amount_cents, payment, on_card, card_label, paid, note, installment, sort_order, source, created_at,
-         series_id, origin_expense_id, partial_id, track, cost_kind, invoice_shift, invoice_month_id, reference_month_id, purchase_date, finalized_zero, import_key)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         series_id, origin_expense_id, partial_id, track, cost_kind, invoice_shift, invoice_month_id, reference_month_id, purchase_date, finalized_zero, import_key, import_batch_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .bind(
       input.id,
@@ -164,6 +166,7 @@ export function prepareInsertExpense(
       input.createdAt,
       ...expenseMetaParams(input.section, input.note),
       input.importKey ?? null,
+      input.importBatchId ?? null,
     );
 }
 
@@ -265,24 +268,35 @@ export function baseIncomeKey(ownerId: string): string {
   return `base_income_cents:${ownerId}`;
 }
 
-export async function getOwnerSettings(db: D1Database, ownerId: string): Promise<{ baseIncomeCents: number | null; theme: "light" | "dark" }> {
+export function lastCsvImportBatchKey(ownerId: string): string {
+  return `last_csv_import_batch:${ownerId}`;
+}
+
+export async function getOwnerSettings(
+  db: D1Database,
+  ownerId: string,
+): Promise<{ baseIncomeCents: number | null; theme: "light" | "dark"; lastCsvImportBatchId: string | null }> {
   const baseKey = baseIncomeKey(ownerId);
   const tKey = themeKey(ownerId);
+  const batchKey = lastCsvImportBatchKey(ownerId);
   const result = await db
-    .prepare("SELECT key, value FROM settings WHERE key IN (?, ?)")
-    .bind(baseKey, tKey)
+    .prepare("SELECT key, value FROM settings WHERE key IN (?, ?, ?)")
+    .bind(baseKey, tKey, batchKey)
     .all<{ key: string; value: string }>();
   let baseIncomeCents: number | null = null;
   let theme: "light" | "dark" = "light";
+  let lastCsvImportBatchId: string | null = null;
   for (const row of result.results ?? []) {
     if (row.key === baseKey) {
       const parsed = Number(row.value);
       baseIncomeCents = Number.isFinite(parsed) ? parsed : null;
     } else if (row.key === tKey && row.value === "dark") {
       theme = "dark";
+    } else if (row.key === batchKey && row.value) {
+      lastCsvImportBatchId = row.value;
     }
   }
-  return { baseIncomeCents, theme };
+  return { baseIncomeCents, theme, lastCsvImportBatchId };
 }
 
 export function mapExpense(row: ExpenseRow): Expense {
@@ -301,6 +315,7 @@ export function mapExpense(row: ExpenseRow): Expense {
     sortOrder: row.sort_order,
     source: row.source === "user" ? "user" : "sheet",
     createdAt: row.created_at,
+    importBatchId: row.import_batch_id ?? null,
   };
 }
 

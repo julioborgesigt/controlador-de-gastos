@@ -988,4 +988,80 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
       await server.close();
     }
   });
+
+  test("novos valores da sincronização CSV ficam destacados até a próxima sincronização com novos valores", { timeout: 35_000 }, async () => {
+    const server = await startAppServer();
+    const page = await browser!.newPage(server.baseUrl);
+    try {
+      await completeOnboarding(page);
+
+      const syncCsv = async (csvText: string) => {
+        await page.evaluate(`(async () => {
+          const res = await fetch("/api/import/nubank", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              csvText: ${JSON.stringify(csvText)},
+              filename: "Nubank_2026-11-05.csv",
+              dueDate: "2026-11-05",
+              cardName: "Nubank",
+              classification: "imprevisto",
+            }),
+          });
+          if (!res.ok) throw new Error("Falha ao importar CSV: " + await res.text());
+        })()`);
+      };
+
+      const openNubankInvoice = async () => {
+        await page.goto(server.baseUrl);
+        await page.waitForSelector('nav.nav button[data-key="cartoes"]');
+        await page.click('nav.nav button[data-key="cartoes"]');
+        await dismissTabIntroIfOpen(page);
+        const rowVisible = await page.evaluate<boolean>('Boolean(document.querySelector(".card-manage .item-main"))');
+        if (!rowVisible) {
+          await page.clickButton("Faturas a serem pagas");
+        }
+        await page.waitForSelector(".card-manage .item-main");
+        await page.click(".card-manage .item-main");
+        await page.waitForSelector(".list article.item");
+      };
+
+      const readHighlightedTitles = () => page.evaluate<string[]>(`(() =>
+        [...document.querySelectorAll('.list article.item.csv-new[data-csv-new="1"] strong')]
+          .map((el) => (el.textContent || "").trim())
+      )()`);
+
+      // 1) Primeira sincronização CSV com 2 compras novas
+      const csv1 = [
+        "date,title,amount",
+        "2026-11-02,Café Central,19.90",
+        "2026-11-03,Livraria Sol,89.00",
+      ].join("\n");
+      await syncCsv(csv1);
+      await openNubankInvoice();
+      assert.deepEqual(await readHighlightedTitles(), ["03/11 Livraria Sol", "02/11 Café Central"]);
+      await page.waitForText("Novo no CSV");
+
+      // 2) Sincronização repetida sem valores novos mantém o destaque
+      await syncCsv(csv1);
+      await openNubankInvoice();
+      assert.deepEqual(await readHighlightedTitles(), ["03/11 Livraria Sol", "02/11 Café Central"]);
+
+      // 3) Nova sincronização com 1 valor novo transfere o destaque somente para o novo valor
+      const csv2 = [
+        "date,title,amount",
+        "2026-11-02,Café Central,19.90",
+        "2026-11-03,Livraria Sol,89.00",
+        "2026-11-04,Mercado Expresso,145.50",
+      ].join("\n");
+      await syncCsv(csv2);
+      await openNubankInvoice();
+      assert.deepEqual(await readHighlightedTitles(), ["04/11 Mercado Expresso"]);
+
+      assert.deepEqual(page.errors, []);
+    } finally {
+      await page.close();
+      await server.close();
+    }
+  });
 });

@@ -291,6 +291,10 @@ export function expenseRow(expense, section, options = {}) {
     const sourceClass = source === "Planejado" ? "badge source-planned" : source === "Imprevisto" ? "badge source-extra" : "badge source-fixed";
     if (source) badges.unshift(el("span", { class: sourceClass }, source));
   }
+  const recentlyImported = Boolean(expense.recentlyImported);
+  if (recentlyImported) {
+    badges.unshift(el("span", { class: "badge csv-new" }, "Novo no CSV"));
+  }
   const finalizedLiving = section === "fixed" && expense.paid && !onInvoice;
   const shownAmount = finalizedLiving ? livingBalance(expense).spent : expense.amountCents;
   const canSelect = editable();
@@ -298,8 +302,9 @@ export function expenseRow(expense, section, options = {}) {
   const selected = selecting && state.selectedExpenses.has(expense.id);
   if (canSelect) state.selectableIds.push(expense.id);
   const front = el("article", {
-    class: `item${tone}${selecting ? " selectable" : ""}${selected ? " selected" : ""}`,
+    class: `item${tone}${recentlyImported ? " csv-new" : ""}${selecting ? " selectable" : ""}${selected ? " selected" : ""}`,
     "data-expense-id": expense.id,
+    "data-csv-new": recentlyImported ? "1" : undefined,
     "data-patch-replace": selecting ? "1" : undefined,
   }, [
     selecting ? selectCheck(selected) : "",
