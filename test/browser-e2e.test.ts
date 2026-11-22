@@ -1171,6 +1171,96 @@ describe("E2E navegador real (Chromium)", { skip: !CHROME }, () => {
     }
   });
 
+  test("fundo fica borrado durante loading (inclusive sobre formulários abertos) e ao abrir o menu do usuário", { timeout: 35_000 }, async () => {
+    const server = await startAppServer();
+    const page = await browser!.newPage(server.baseUrl);
+    try {
+      await completeOnboarding(page);
+
+      // 1) Menu do usuário borra o fundo em mobile e eleva header.top acima dos controles da página
+      await page.click('header.top button[aria-label="Conta"]');
+      await page.waitForSelector('.menu[role="menu"]');
+      const mobileMenuBlur = await page.evaluate<{
+        backdropBlur: string;
+        backdropBg: string;
+        topZ: number;
+        backdropZ: number;
+        menuZ: number;
+      }>(`(() => {
+        const top = document.querySelector("header.top");
+        const backdrop = document.querySelector(".menu-backdrop");
+        const menu = document.querySelector('.menu[role="menu"]');
+        const bStyle = getComputedStyle(backdrop);
+        return {
+          backdropBlur: bStyle.backdropFilter || bStyle.webkitBackdropFilter || "",
+          backdropBg: bStyle.backgroundColor || "",
+          topZ: Number(getComputedStyle(top).zIndex || 0),
+          backdropZ: Number(bStyle.zIndex || 0),
+          menuZ: Number(getComputedStyle(menu).zIndex || 0),
+        };
+      })()`);
+      assert.ok(mobileMenuBlur.backdropBlur.includes("blur("), `esperava blur no menu-backdrop (mobile), recebeu: ${mobileMenuBlur.backdropBlur}`);
+      assert.notEqual(mobileMenuBlur.backdropBg, "rgba(0, 0, 0, 0)");
+      assert.ok(mobileMenuBlur.topZ > 4, `header.top aberto deve ficar acima de .select-bar (4), ficou em ${mobileMenuBlur.topZ}`);
+      assert.ok(mobileMenuBlur.menuZ > mobileMenuBlur.backdropZ, "menu deve ficar acima do backdrop borrado");
+
+      // Confirma também em viewport desktop (1280x800)
+      await page.setViewport(1280, 800, false);
+      const desktopMenuTopZ = await page.evaluate<number>('Number(getComputedStyle(document.querySelector("header.top")).zIndex || 0)');
+      assert.ok(desktopMenuTopZ > 4, `header.top aberto no desktop deve ficar acima de z-index 4, ficou em ${desktopMenuTopZ}`);
+
+      // Fecha menu clicando no backdrop borrado
+      await page.click(".menu-backdrop");
+      await page.waitFor('!document.querySelector(".menu-backdrop")');
+      await page.setViewport(390, 844, true);
+
+      // 2) Abre um formulário (.sheet dentro de .overlay) e ativa o loading (#working)
+      await page.click('nav.nav button[data-key="cartoes"]');
+      await dismissTabIntroIfOpen(page);
+      await page.clickButton("+ Gasto no crédito");
+      await page.waitForSelector("form.sheet");
+
+      const workingBlur = await page.evaluate<{
+        hasBackdrop: boolean;
+        blur: string;
+        overlayZ: number;
+        backdropZ: number;
+        workingZ: number;
+      }>(`(async () => {
+        const mod = await import("/js/state.js");
+        mod.setWorking(true, "Salvando...");
+        const overlay = document.querySelector(".overlay");
+        const backdrop = document.querySelector("#working-backdrop");
+        const working = document.querySelector("#working");
+        const bStyle = backdrop ? getComputedStyle(backdrop) : null;
+        return {
+          hasBackdrop: Boolean(backdrop && working),
+          blur: bStyle ? (bStyle.backdropFilter || bStyle.webkitBackdropFilter || "") : "",
+          overlayZ: Number(overlay ? getComputedStyle(overlay).zIndex : 0),
+          backdropZ: Number(bStyle ? bStyle.zIndex : 0),
+          workingZ: Number(working ? getComputedStyle(working).zIndex : 0),
+        };
+      })()`);
+      assert.equal(workingBlur.hasBackdrop, true, "#working-backdrop e #working devem existir durante loading");
+      assert.ok(workingBlur.blur.includes("blur("), `esperava blur no #working-backdrop, recebeu: ${workingBlur.blur}`);
+      assert.ok(workingBlur.backdropZ > workingBlur.overlayZ, "#working-backdrop deve ficar acima do formulário (.overlay)");
+      assert.ok(workingBlur.workingZ > workingBlur.backdropZ, "#working deve ficar nítido acima do #working-backdrop");
+
+      // Desativa loading e confirma limpeza completa do backdrop
+      const cleaned = await page.evaluate<boolean>(`(async () => {
+        const mod = await import("/js/state.js");
+        mod.setWorking(false);
+        return !document.querySelector("#working") && !document.querySelector("#working-backdrop");
+      })()`);
+      assert.equal(cleaned, true, "desativar loading deve remover #working e #working-backdrop");
+
+      assert.deepEqual(page.errors, []);
+    } finally {
+      await page.close();
+      await server.close();
+    }
+  });
+
   test("sugestão Nubank só aparece no onboarding para quem informa cartão Nubank, separada do guia de abas, e pode ser ocultada no cadastro de cartão", { timeout: 40_000 }, async () => {
     // 1) Onboarding SEM cartão Nubank (Itaú): nenhuma sugestão de CSV Nubank nem na etapa de cartão nem após o guia de abas
     const server1 = await startAppServer();

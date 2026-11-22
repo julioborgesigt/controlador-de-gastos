@@ -208,7 +208,7 @@ function shell() {
   const body = viewBody(data);
   const bar = selectionBar();
   return el("div", { class: `shell${bar ? " selecting" : ""}`, "data-key": "shell" }, [
-    el("header", { class: "top", "data-key": "top" }, [
+    el("header", { class: `top${state.accountMenu ? " menu-open" : ""}`, "data-key": "top" }, [
       el("div", { class: "top-row" }, [
         el("div", { class: "brand-block" }, [
           el("p", { class: "brand" }, viewingOther ? data.access.label : "Gastos"),
