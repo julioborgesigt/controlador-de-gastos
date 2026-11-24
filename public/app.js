@@ -146,7 +146,7 @@ function renderApp() {
     syncOverlayHistory(0);
     return;
   }
-  if (state.needsPeriod || state.setupGuide) {
+  if (state.needsPeriod || state.setupGuide || state.setupNubankOffer) {
     patchChildren(root, [periodGate()]);
     state.viewKey = viewKey;
     if (document.body.classList.contains("sheet-open")) unlockPage(0);

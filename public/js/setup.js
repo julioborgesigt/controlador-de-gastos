@@ -105,6 +105,7 @@ function setupInput(id, label, value, oninput, placeholder, mode) {
 
 export function periodGate() {
   if (state.setupGuide) return setupGuide();
+  if (state.setupNubankOffer) return setupNubankOffer();
   const draft = ensureSetup();
   const titles = [
     "Qual período você quer planejar?",
@@ -262,6 +263,7 @@ async function saveSetup(draft) {
     rememberMonth(state.data);
     state.setup = null;
     state.setupGuide = true;
+    state.setupNubankOffer = (state.data?.cards || []).some((card) => isNubankName(card.name));
   } catch (error) {
     state.error = messageOf(error);
   } finally {
@@ -281,17 +283,11 @@ function setupGuide() {
     ["Outros gastos", "Consulta dos imprevistos e planejados. O gasto novo entra por Cartões de crédito ou À vista."],
     ["Receita mensal", "A renda base e os extras do mês, como décimo terceiro ou um valor avulso."],
   ];
-  const nubankCard = (state.data?.cards || []).find((card) => isNubankName(card.name));
+  const hasNextNubankOffer = Boolean(state.setupNubankOffer);
   return el("main", { class: "screen auth" }, [
     el("p", { class: "eyebrow" }, "Como usar"),
     el("h1", {}, "Cada aba tem um papel"),
     el("p", { class: "lede" }, "O período, os cartões e a aparência continuam disponíveis no perfil e na aba Cartões de crédito."),
-    nubankSuggestionBanner({
-      onImport: () => {
-        state.setupGuide = false;
-        openNubankImport(nubankCard?.name || "Nubank");
-      },
-    }),
     el("div", { class: "list" }, guides.map(([title, text]) => el("article", { class: "item" }, [
       el("div", { class: "item-copy" }, [
         el("strong", {}, title),
@@ -303,10 +299,40 @@ function setupGuide() {
       type: "button",
       onclick: () => {
         state.setupGuide = false;
-        state.notice = "Configuração pronta.";
+        if (!hasNextNubankOffer) state.notice = "Configuração pronta.";
         render();
       },
-    }, "Começar a usar"),
+    }, hasNextNubankOffer ? "Continuar" : "Começar a usar"),
+  ]);
+}
+
+function setupNubankOffer() {
+  const nubankCard = (state.data?.cards || []).find((card) => isNubankName(card.name));
+  return el("main", { class: "screen auth" }, [
+    el("p", { class: "eyebrow" }, "Cartão Nubank"),
+    el("h1", {}, "Importar fatura em CSV?"),
+    el("p", { class: "lede" }, "Como você informou que usa cartão Nubank, já pode importar sua fatura em CSV agora para lançar compras e projetar parcelas automaticamente."),
+    nubankSuggestionBanner(),
+    el("p", { class: "muted" }, "Se preferir fazer isso depois, a importação continua disponível no menu do usuário."),
+    el("div", { class: "actions" }, [
+      el("button", {
+        class: "secondary",
+        type: "button",
+        onclick: () => {
+          state.setupNubankOffer = false;
+          state.notice = "Configuração pronta.";
+          render();
+        },
+      }, "Agora não"),
+      el("button", {
+        class: "primary",
+        type: "button",
+        onclick: () => {
+          state.setupNubankOffer = false;
+          openNubankImport(nubankCard?.name || "Nubank");
+        },
+      }, "Importar CSV do Nubank"),
+    ]),
   ]);
 }
 
@@ -413,6 +439,7 @@ export async function executeReset() {
       state.confirmReset = null;
       state.setup = null;
       state.setupGuide = false;
+      state.setupNubankOffer = false;
       state.devicePrompt = false;
       state.monthId = "";
       sessionStorage.removeItem("monthId");

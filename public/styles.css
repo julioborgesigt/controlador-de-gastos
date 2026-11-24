@@ -2302,6 +2302,18 @@ html[data-theme="dark"] .menu-item-danger:focus-visible { background: #361c20; }
 .nubank-tip strong { font-size: 14px; }
 .nubank-tip p { margin: 0; font-size: 13px; }
 .nubank-tip button { margin-top: 4px; width: fit-content; }
+.nubank-tip-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  margin-top: 4px;
+}
+.nubank-tip-actions button { margin-top: 0; }
+.nubank-tip-dismiss {
+  font-size: 13px;
+  color: var(--muted);
+}
 
 .file-pick input[type="file"] {
   padding: 10px;

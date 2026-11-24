@@ -1,4 +1,5 @@
 import { isNubankName } from "../../shared/nubank-csv.js";
+import { askConfirm } from "../dialogs/confirm.js";
 import { amountLabel, el, on } from "../dom.js";
 import { render, state } from "../state.js";
 import { attachSheetDrag, isIgnoringSwipeClick } from "../swipe.js";
@@ -16,7 +17,12 @@ import {
   recurringSpan,
   segmented,
 } from "./fields.js";
-import { cardPresetsBlock, nubankSuggestionBanner, openNubankImport } from "./import-nubank.js";
+import {
+  cardPresetsBlock,
+  isNubankCardTipDismissed,
+  nubankSuggestionBanner,
+  openNubankImport,
+} from "./import-nubank.js";
 import { cardSpendFields, closeSheet } from "./openers.js";
 import { renderAccountSheet } from "./render-account.js";
 import { renderPaymentSheet } from "./render-payments.js";
@@ -54,8 +60,9 @@ export function sheet() {
             render();
           }) : "",
           field("Apelido", "name", draft.name, "text", "Nubank, Itaú, Inter..."),
-          isNubank ? nubankSuggestionBanner({
+          isNubank && !isNubankCardTipDismissed() ? nubankSuggestionBanner({
             onImport: () => openNubankImport(draft.name.trim() || "Nubank"),
+            onDismiss: () => askConfirm("dismiss-nubank-card-tip"),
           }) : "",
         ], "card-identity"),
         formSection("Ciclo da fatura", [
